@@ -41,6 +41,7 @@ native_reels_player/
 - `NativeReelsPlayerPlugin`
   - receives method channel commands and owns event channel sinks.
   - creates per-controller IDs and delegates to platform manager.
+  - owns platform view registration and view/controller attachment.
 - `ExoPlayerManager` / `AVPlayerManager`
   - owns real single-controller native playback lifecycle.
   - emits playback state and periodic position updates to Flutter.
@@ -60,6 +61,6 @@ native_reels_player/
 ## Next Implementation Priorities
 
 1. Replace raw channels with Pigeon-generated API contracts.
-2. Register platform views for rendering in Flutter widgets.
-3. Expand from single-controller flow to pool/window eviction policy.
-4. Harden pre-buffering behavior and cancellation across fast flings.
+2. Expand from single-controller flow to pool/window eviction policy tuning.
+3. Harden pre-buffering behavior and cancellation across fast flings.
+4. Add production metrics and benchmark automation for scroll smoothness.

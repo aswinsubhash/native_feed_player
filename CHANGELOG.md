@@ -17,4 +17,8 @@
 * Started milestone 4 memory/pooling support:
   * index-aware player pooling and eviction by visible window
   * low-memory callbacks on Android and iOS
+* Implemented milestone 5 platform-view rendering:
+  * Android `TextureView` platform view factory
+  * iOS `UIView`/`AVPlayerLayer` platform view factory
+  * Dart `NativeVideoView` widget with attach/detach lifecycle wiring
 * Added architecture and implementation backlog docs.

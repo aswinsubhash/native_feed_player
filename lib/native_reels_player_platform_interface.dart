@@ -52,5 +52,9 @@ abstract class NativeReelsPlayerPlatform extends PlatformInterface {
 
   Future<void> setVisibleIndex(int index);
 
+  Future<void> attachView({required int controllerId, required int viewId});
+
+  Future<void> detachView({required int controllerId});
+
   Future<void> dispose();
 }

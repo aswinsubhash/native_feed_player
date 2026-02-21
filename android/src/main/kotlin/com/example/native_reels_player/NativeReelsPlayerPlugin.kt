@@ -12,6 +12,10 @@ import io.flutter.plugin.common.MethodChannel.Result
 
 /** NativeReelsPlayerPlugin */
 class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallbacks2 {
+    private companion object {
+        private const val VIDEO_VIEW_TYPE = "native_reels_player/video_view"
+    }
+
     private lateinit var methodChannel: MethodChannel
     private lateinit var stateChannel: EventChannel
     private lateinit var positionChannel: EventChannel
@@ -20,6 +24,8 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
     private var stateSink: EventChannel.EventSink? = null
     private var positionSink: EventChannel.EventSink? = null
     private var exoPlayerManager: ExoPlayerManager? = null
+    private val videoViews = mutableMapOf<Int, NativeVideoPlatformView>()
+    private val attachedControllerByViewId = mutableMapOf<Int, Int>()
     private var nextControllerId = 1
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
@@ -29,6 +35,18 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
         methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, "native_reels_player")
         stateChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/state")
         positionChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/position")
+
+        flutterPluginBinding.platformViewRegistry.registerViewFactory(
+            VIDEO_VIEW_TYPE,
+            NativeVideoViewFactory(
+                onCreate = { viewId, view ->
+                    videoViews[viewId] = view
+                },
+                onDispose = { viewId ->
+                    handleVideoViewDisposed(viewId)
+                }
+            )
+        )
 
         stateChannel.setStreamHandler(
             object : EventChannel.StreamHandler {
@@ -173,8 +191,47 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
                 result.success(null)
             }
 
+            "attachView" -> {
+                val args = call.args()
+                val controllerId = args.intValue("controllerId", -1)
+                val viewId = args.intValue("viewId", -1)
+                if (controllerId <= 0 || viewId < 0) {
+                    result.error("invalid_attach", "attachView requires valid controllerId and viewId.", null)
+                    return
+                }
+                val view = videoViews[viewId]
+                if (view == null) {
+                    result.error("view_not_found", "No video view found for id=$viewId.", null)
+                    return
+                }
+
+                val previousController = attachedControllerByViewId[viewId]
+                if (previousController != null && previousController != controllerId) {
+                    manager.detachControllerFromView(previousController)
+                }
+                attachedControllerByViewId[viewId] = controllerId
+                manager.attachControllerToView(controllerId, view.textureView)
+                result.success(null)
+            }
+
+            "detachView" -> {
+                val controllerId = call.args().intValue("controllerId", -1)
+                if (controllerId > 0) {
+                    manager.detachControllerFromView(controllerId)
+                    val staleViewIds = attachedControllerByViewId
+                        .filterValues { it == controllerId }
+                        .keys
+                        .toList()
+                    for (viewId in staleViewIds) {
+                        attachedControllerByViewId.remove(viewId)
+                    }
+                }
+                result.success(null)
+            }
+
             "disposeAll" -> {
                 manager.disposeAll()
+                attachedControllerByViewId.clear()
                 result.success(null)
             }
 
@@ -189,6 +246,8 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
         appContext = null
         exoPlayerManager?.disposeAll()
         exoPlayerManager = null
+        videoViews.clear()
+        attachedControllerByViewId.clear()
         nextControllerId = 1
         stateSink = null
         positionSink = null
@@ -223,5 +282,13 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
 
     private fun Map<*, *>.booleanValue(key: String, defaultValue: Boolean): Boolean {
         return this[key] as? Boolean ?: defaultValue
+    }
+
+    private fun handleVideoViewDisposed(viewId: Int) {
+        val controllerId = attachedControllerByViewId.remove(viewId)
+        if (controllerId != null) {
+            exoPlayerManager?.detachControllerFromView(controllerId)
+        }
+        videoViews.remove(viewId)
     }
 }
