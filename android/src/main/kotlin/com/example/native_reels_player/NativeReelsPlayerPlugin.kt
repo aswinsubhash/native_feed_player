@@ -3,6 +3,7 @@ package com.example.native_reels_player
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
+import android.view.TextureView
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 
@@ -21,6 +22,7 @@ class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsP
     private var positionSink: EventChannel.EventSink? = null
     private var metricsSink: EventChannel.EventSink? = null
     private var exoPlayerManager: ExoPlayerManager? = null
+    private val textureViewPool = TextureViewPool(maxPoolSize = 8)
     private val videoViews = mutableMapOf<Int, NativeVideoPlatformView>()
     private val attachedControllerByViewId = mutableMapOf<Int, Int>()
     private var nextControllerId = 1
@@ -36,11 +38,12 @@ class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsP
         flutterPluginBinding.platformViewRegistry.registerViewFactory(
             VIDEO_VIEW_TYPE,
             NativeVideoViewFactory(
+                textureViewPool = textureViewPool,
                 onCreate = { viewId, view ->
                     videoViews[viewId] = view
                 },
-                onDispose = { viewId ->
-                    handleVideoViewDisposed(viewId)
+                onDispose = { viewId, textureView ->
+                    handleVideoViewDisposed(viewId, textureView)
                 }
             )
         )
@@ -117,6 +120,7 @@ class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsP
         exoPlayerManager = null
         videoViews.clear()
         attachedControllerByViewId.clear()
+        textureViewPool.clear()
         nextControllerId = 1
         stateSink = null
         positionSink = null
@@ -268,11 +272,15 @@ class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsP
             )
     }
 
-    private fun handleVideoViewDisposed(viewId: Int) {
+    private fun handleVideoViewDisposed(
+        viewId: Int,
+        textureView: TextureView
+    ) {
         val controllerId = attachedControllerByViewId.remove(viewId)
         if (controllerId != null) {
             exoPlayerManager?.detachControllerFromView(controllerId)
         }
         videoViews.remove(viewId)
+        textureViewPool.release(textureView)
     }
 }

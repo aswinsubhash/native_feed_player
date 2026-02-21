@@ -20,11 +20,13 @@ native_reels_player/
 ├── android/src/main/kotlin/com/example/native_reels_player/
 │   ├── Messages.g.kt
 │   ├── NativeReelsPlayerPlugin.kt
+│   ├── TextureViewPool.kt
 │   ├── ExoPlayerManager.kt
 │   └── VideoPool.kt
 └── ios/Classes/
     ├── Messages.g.swift
     ├── NativeReelsPlayerPlugin.swift
+    ├── RenderViewPool.swift
     ├── AVPlayerManager.swift
     └── VideoPool.swift
 ```
@@ -46,6 +48,7 @@ native_reels_player/
 
 - `NativeReelsPlayerPlugin`
   - implements generated Pigeon host API and owns event channel sinks.
+  - reuses pooled platform render targets for view lifecycle churn.
   - creates per-controller IDs and delegates to platform manager.
   - owns platform view registration and view/controller attachment.
 - `ExoPlayerManager` / `AVPlayerManager`
@@ -56,6 +59,8 @@ native_reels_player/
   - reuses pooled native players and reacts to low-memory signals.
 - `VideoPool`
   - still a placeholder for advanced pooling milestones.
+- `TextureViewPool` / `RenderViewPool`
+  - recycles platform rendering targets across Flutter platform view rebuilds.
 
 ## Control Flow
 
