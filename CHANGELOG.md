@@ -30,4 +30,7 @@
     * pause/resume lifecycle path
     * network loss/recovery path
   * Added release checklist and README tuning/limitations guidance
+* Completed pending Milestone 1 contract migration:
+  * Added Pigeon schema and generated Dart/Kotlin/Swift bindings
+  * Migrated command RPC from raw `MethodChannel.invokeMethod` strings to typed Pigeon host API calls
 * Added architecture and implementation backlog docs.

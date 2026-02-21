@@ -4,21 +4,26 @@
 
 ```
 native_reels_player/
+├── pigeons/
+│   └── native_reels_player_messages.dart
 ├── lib/
 │   ├── native_reels_player.dart
 │   ├── native_reels_player_method_channel.dart
 │   ├── native_reels_player_platform_interface.dart
 │   └── src/
+│       ├── messages.g.dart
 │       ├── native_reels_player_api.dart
 │       ├── video_controller.dart
 │       ├── video_metrics.dart
 │       ├── video_models.dart
 │       └── video_playback_state.dart
 ├── android/src/main/kotlin/com/example/native_reels_player/
+│   ├── Messages.g.kt
 │   ├── NativeReelsPlayerPlugin.kt
 │   ├── ExoPlayerManager.kt
 │   └── VideoPool.kt
 └── ios/Classes/
+    ├── Messages.g.swift
     ├── NativeReelsPlayerPlugin.swift
     ├── AVPlayerManager.swift
     └── VideoPool.swift
@@ -35,12 +40,12 @@ native_reels_player/
 - `NativeReelsPlayerPlatform`
   - contract for platform implementations.
 - `MethodChannelNativeReelsPlayer`
-  - method channel commands + shared event stream fan-out per controller.
+  - Pigeon-generated host API commands + shared event stream fan-out per controller.
 
 ## Native Layer (Current)
 
 - `NativeReelsPlayerPlugin`
-  - receives method channel commands and owns event channel sinks.
+  - implements generated Pigeon host API and owns event channel sinks.
   - creates per-controller IDs and delegates to platform manager.
   - owns platform view registration and view/controller attachment.
 - `ExoPlayerManager` / `AVPlayerManager`
@@ -62,7 +67,6 @@ native_reels_player/
 
 ## Next Implementation Priorities
 
-1. Replace raw channels with Pigeon-generated API contracts.
-2. Expand from single-controller flow to pool/window eviction policy tuning.
-3. Harden pre-buffering behavior and cancellation across fast flings.
-4. Automate benchmark runs and reporting for scroll smoothness metrics.
+1. Expand from single-controller flow to pool/window eviction policy tuning.
+2. Harden pre-buffering behavior and cancellation across fast flings.
+3. Automate benchmark runs and reporting for scroll smoothness metrics.

@@ -17,6 +17,7 @@ Current state:
   - first-frame latency
   - rebuffer count
   - dropped-frame estimate
+- Command transport now uses generated Pigeon contracts for typed platform RPC.
 
 See `docs/IMPLEMENTATION_BACKLOG.md` for the full roadmap.
 
@@ -72,6 +73,24 @@ Rendering widget:
 - `VideoPool` placeholders reserved for broader pooling milestones.
 
 Detailed architecture: `docs/ARCHITECTURE.md`
+
+## Pigeon Contracts
+
+- Source schema: `pigeons/native_reels_player_messages.dart`
+- Generated outputs:
+  - Dart: `lib/src/messages.g.dart`
+  - Android: `android/src/main/kotlin/com/example/native_reels_player/Messages.g.kt`
+  - iOS: `ios/Classes/Messages.g.swift`
+- Regenerate after schema edits:
+
+```bash
+dart run pigeon \
+  --input pigeons/native_reels_player_messages.dart \
+  --dart_out lib/src/messages.g.dart \
+  --kotlin_out android/src/main/kotlin/com/example/native_reels_player/Messages.g.kt \
+  --kotlin_package com.example.native_reels_player \
+  --swift_out ios/Classes/Messages.g.swift
+```
 
 ## Tuning Guidance
 

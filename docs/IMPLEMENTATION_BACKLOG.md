@@ -9,7 +9,7 @@
   - controller creation/lifecycle
   - playback commands
 - [x] Add native method stubs so API calls do not return `notImplemented`.
-- [ ] Add Pigeon contract generation to replace raw method strings.
+- [x] Add Pigeon contract generation to replace raw method strings.
 
 **Acceptance criteria**
 - Package builds in Flutter.

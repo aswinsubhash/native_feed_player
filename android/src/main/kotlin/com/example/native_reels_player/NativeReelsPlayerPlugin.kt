@@ -5,18 +5,13 @@ import android.content.Context
 import android.content.res.Configuration
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.MethodCall
-import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import io.flutter.plugin.common.MethodChannel.Result
 
 /** NativeReelsPlayerPlugin */
-class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallbacks2 {
+class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsPlayerHostApi {
     private companion object {
         private const val VIDEO_VIEW_TYPE = "native_reels_player/video_view"
     }
 
-    private lateinit var methodChannel: MethodChannel
     private lateinit var stateChannel: EventChannel
     private lateinit var positionChannel: EventChannel
     private lateinit var metricsChannel: EventChannel
@@ -34,7 +29,6 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
         appContext = flutterPluginBinding.applicationContext
         appContext?.registerComponentCallbacks(this)
 
-        methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, "native_reels_player")
         stateChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/state")
         positionChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/position")
         metricsChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/metrics")
@@ -110,153 +104,10 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
             }
         )
 
-        methodChannel.setMethodCallHandler(this)
-    }
-
-    override fun onMethodCall(call: MethodCall, result: Result) {
-        val manager = exoPlayerManager
-        if (manager == null) {
-            result.error(
-                "not_attached",
-                "NativeReelsPlayerPlugin is not attached to a Flutter engine.",
-                null
-            )
-            return
-        }
-
-        when (call.method) {
-            "initialize" -> {
-                val args = call.args()
-                val maxCachedPlayers = args.intValue("maxCachedPlayers", 5)
-                val preloadCount = args.intValue("preloadCount", 2)
-                manager.initialize(maxCachedPlayers = maxCachedPlayers, preloadCount = preloadCount)
-                result.success(null)
-            }
-
-            "preload" -> {
-                val args = call.args()
-                val rawSources = args["sources"] as? List<*> ?: emptyList<Any?>()
-                val sources = rawSources.mapNotNull { item -> item as? Map<*, *> }
-                manager.preload(sources)
-                result.success(null)
-            }
-
-            "createController" -> {
-                val args = call.args()
-                val url = args["url"] as? String
-                if (url.isNullOrBlank()) {
-                    result.error("invalid_url", "createController requires a non-empty URL.", null)
-                    return
-                }
-                val autoPlay = args.booleanValue("autoPlay", false)
-                val looping = args.booleanValue("looping", true)
-                val index = args.intValue("index", -1)
-
-                val controllerId = nextControllerId++
-                manager.createController(
-                    controllerId = controllerId,
-                    url = url,
-                    index = index,
-                    autoPlay = autoPlay,
-                    looping = looping
-                )
-                result.success(controllerId)
-            }
-
-            "disposeController" -> {
-                val args = call.args()
-                val controllerId = args.intValue("controllerId", -1)
-                if (controllerId > 0) {
-                    manager.disposeController(controllerId)
-                }
-                result.success(null)
-            }
-
-            "play" -> {
-                val controllerId = call.args().intValue("controllerId", -1)
-                if (controllerId > 0) {
-                    manager.play(controllerId)
-                }
-                result.success(null)
-            }
-
-            "pause" -> {
-                val controllerId = call.args().intValue("controllerId", -1)
-                if (controllerId > 0) {
-                    manager.pause(controllerId)
-                }
-                result.success(null)
-            }
-
-            "seekTo" -> {
-                val args = call.args()
-                val controllerId = args.intValue("controllerId", -1)
-                val positionMs = args.longValue("positionMs", 0L)
-                if (controllerId > 0) {
-                    manager.seekTo(controllerId, positionMs)
-                }
-                result.success(null)
-            }
-
-            "setVisibleIndex" -> {
-                val index = call.args().intValue("index", 0)
-                manager.setVisibleIndex(index)
-                result.success(null)
-            }
-
-            "clearCache" -> {
-                manager.clearCache()
-                result.success(null)
-            }
-
-            "attachView" -> {
-                val args = call.args()
-                val controllerId = args.intValue("controllerId", -1)
-                val viewId = args.intValue("viewId", -1)
-                if (controllerId <= 0 || viewId < 0) {
-                    result.error("invalid_attach", "attachView requires valid controllerId and viewId.", null)
-                    return
-                }
-                val view = videoViews[viewId]
-                if (view == null) {
-                    result.error("view_not_found", "No video view found for id=$viewId.", null)
-                    return
-                }
-
-                val previousController = attachedControllerByViewId[viewId]
-                if (previousController != null && previousController != controllerId) {
-                    manager.detachControllerFromView(previousController)
-                }
-                attachedControllerByViewId[viewId] = controllerId
-                manager.attachControllerToView(controllerId, view.textureView)
-                result.success(null)
-            }
-
-            "detachView" -> {
-                val controllerId = call.args().intValue("controllerId", -1)
-                if (controllerId > 0) {
-                    manager.detachControllerFromView(controllerId)
-                    val staleViewIds = attachedControllerByViewId
-                        .filterValues { it == controllerId }
-                        .keys
-                        .toList()
-                    for (viewId in staleViewIds) {
-                        attachedControllerByViewId.remove(viewId)
-                    }
-                }
-                result.success(null)
-            }
-
-            "disposeAll" -> {
-                manager.disposeAll()
-                attachedControllerByViewId.clear()
-                result.success(null)
-            }
-
-            else -> {
-                result.notImplemented()
-            }
-        }
+        NativeReelsPlayerHostApi.setUp(
+            binaryMessenger = flutterPluginBinding.binaryMessenger,
+            api = this
+        )
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -270,10 +121,130 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
         stateSink = null
         positionSink = null
         metricsSink = null
-        methodChannel.setMethodCallHandler(null)
+        NativeReelsPlayerHostApi.setUp(
+            binaryMessenger = binding.binaryMessenger,
+            api = null
+        )
         stateChannel.setStreamHandler(null)
         positionChannel.setStreamHandler(null)
         metricsChannel.setStreamHandler(null)
+    }
+
+    override fun initialize(request: InitializeRequest) {
+        managerOrThrow().initialize(
+            maxCachedPlayers = request.maxCachedPlayers.toInt(),
+            preloadCount = request.preloadCount.toInt()
+        )
+    }
+
+    override fun preload(request: PreloadRequest) {
+        val sources = request.sources.map { source ->
+            mapOf(
+                "index" to source.index.toInt(),
+                "url" to source.url
+            )
+        }
+        managerOrThrow().preload(sources)
+    }
+
+    override fun createController(request: CreateControllerRequest): Long {
+        val url = request.url
+        if (url.isBlank()) {
+            throw FlutterError(
+                "invalid_url",
+                "createController requires a non-empty URL.",
+                null
+            )
+        }
+
+        val controllerId = nextControllerId++
+        managerOrThrow().createController(
+            controllerId = controllerId,
+            url = url,
+            index = request.index.toInt(),
+            autoPlay = request.autoPlay,
+            looping = request.looping
+        )
+        return controllerId.toLong()
+    }
+
+    override fun disposeController(request: ControllerRequest) {
+        val controllerId = request.controllerId.toInt()
+        if (controllerId > 0) {
+            managerOrThrow().disposeController(controllerId)
+        }
+    }
+
+    override fun play(request: ControllerRequest) {
+        val controllerId = request.controllerId.toInt()
+        if (controllerId > 0) {
+            managerOrThrow().play(controllerId)
+        }
+    }
+
+    override fun pause(request: ControllerRequest) {
+        val controllerId = request.controllerId.toInt()
+        if (controllerId > 0) {
+            managerOrThrow().pause(controllerId)
+        }
+    }
+
+    override fun seekTo(request: SeekRequest) {
+        val controllerId = request.controllerId.toInt()
+        if (controllerId > 0) {
+            managerOrThrow().seekTo(controllerId, request.positionMs)
+        }
+    }
+
+    override fun setVisibleIndex(request: VisibleIndexRequest) {
+        managerOrThrow().setVisibleIndex(request.index.toInt())
+    }
+
+    override fun clearCache() {
+        managerOrThrow().clearCache()
+    }
+
+    override fun attachView(request: AttachViewRequest) {
+        val controllerId = request.controllerId.toInt()
+        val viewId = request.viewId.toInt()
+        if (controllerId <= 0 || viewId < 0) {
+            throw FlutterError(
+                "invalid_attach",
+                "attachView requires valid controllerId and viewId.",
+                null
+            )
+        }
+
+        val view = videoViews[viewId]
+            ?: throw FlutterError("view_not_found", "No video view found for id=$viewId.", null)
+
+        val manager = managerOrThrow()
+        val previousController = attachedControllerByViewId[viewId]
+        if (previousController != null && previousController != controllerId) {
+            manager.detachControllerFromView(previousController)
+        }
+        attachedControllerByViewId[viewId] = controllerId
+        manager.attachControllerToView(controllerId, view.textureView)
+    }
+
+    override fun detachView(request: ControllerRequest) {
+        val controllerId = request.controllerId.toInt()
+        if (controllerId > 0) {
+            val manager = managerOrThrow()
+            manager.detachControllerFromView(controllerId)
+            val staleViewIds = attachedControllerByViewId
+                .filterValues { it == controllerId }
+                .keys
+                .toList()
+            for (viewId in staleViewIds) {
+                attachedControllerByViewId.remove(viewId)
+            }
+        }
+    }
+
+    override fun disposeAll() {
+        managerOrThrow().disposeAll()
+        attachedControllerByViewId.clear()
     }
 
     override fun onTrimMemory(level: Int) {
@@ -288,20 +259,13 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
         // No-op: handled by Flutter engine and ExoPlayer internally.
     }
 
-    private fun MethodCall.args(): Map<*, *> {
-        return this.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
-    }
-
-    private fun Map<*, *>.intValue(key: String, defaultValue: Int): Int {
-        return (this[key] as? Number)?.toInt() ?: defaultValue
-    }
-
-    private fun Map<*, *>.longValue(key: String, defaultValue: Long): Long {
-        return (this[key] as? Number)?.toLong() ?: defaultValue
-    }
-
-    private fun Map<*, *>.booleanValue(key: String, defaultValue: Boolean): Boolean {
-        return this[key] as? Boolean ?: defaultValue
+    private fun managerOrThrow(): ExoPlayerManager {
+        return exoPlayerManager
+            ?: throw FlutterError(
+                "not_attached",
+                "NativeReelsPlayerPlugin is not attached to a Flutter engine.",
+                null
+            )
     }
 
     private fun handleVideoViewDisposed(viewId: Int) {
