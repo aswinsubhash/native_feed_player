@@ -26,6 +26,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReels
   private var nextControllerId: Int = 1
   private var manager: AVPlayerManager?
   private var memoryWarningObserver: NSObjectProtocol?
+  private let renderViewPool = RenderViewPool(maxPoolSize: 8)
   private var videoViews: [Int64: NativeVideoPlatformView] = [:]
   private var attachedControllerByViewId: [Int64: Int] = [:]
   private var binaryMessenger: FlutterBinaryMessenger?
@@ -52,11 +53,12 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReels
       metricsChannel: metricsChannel
     )
     let viewFactory = NativeVideoViewFactory(
+      renderViewPool: instance.renderViewPool,
       onCreate: { [weak instance] viewId, view in
         instance?.videoViews[viewId] = view
       },
-      onDispose: { [weak instance] viewId in
-        instance?.handleVideoViewDisposed(viewId: viewId)
+      onDispose: { [weak instance] viewId, renderView in
+        instance?.handleVideoViewDisposed(viewId: viewId, renderView: renderView)
       }
     )
     registrar.register(viewFactory, withId: videoViewType)
@@ -73,6 +75,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReels
     }
     videoViews.removeAll()
     attachedControllerByViewId.removeAll()
+    renderViewPool.clear()
     manager?.disposeAll()
   }
 
@@ -278,12 +281,16 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReels
     }
   }
 
-  private func handleVideoViewDisposed(viewId: Int64) {
+  private func handleVideoViewDisposed(
+    viewId: Int64,
+    renderView: NativeVideoRenderView
+  ) {
     let controllerId = attachedControllerByViewId.removeValue(forKey: viewId)
     if let controllerId {
       manager?.detach(controllerId: controllerId)
     }
     videoViews.removeValue(forKey: viewId)
+    renderViewPool.release(renderView)
   }
 
   private func managerOrThrow() throws -> AVPlayerManager {

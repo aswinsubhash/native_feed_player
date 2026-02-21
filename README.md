@@ -13,6 +13,7 @@ Current state:
 - Native pre-buffering now uses visible-index windowing and stale-request cancellation.
 - Native memory handling now includes index-aware player pooling and low-memory hooks.
 - Native rendering uses `NativeVideoView` backed by platform views.
+- Platform rendering targets (`TextureView`/`AVPlayerLayer` views) are recycled to reduce churn during fast scrolling.
 - Native instrumentation now exposes:
   - first-frame latency
   - rebuffer count

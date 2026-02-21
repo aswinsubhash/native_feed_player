@@ -33,4 +33,8 @@
 * Completed pending Milestone 1 contract migration:
   * Added Pigeon schema and generated Dart/Kotlin/Swift bindings
   * Migrated command RPC from raw `MethodChannel.invokeMethod` strings to typed Pigeon host API calls
+* Completed pending Milestone 4 render-target recycling:
+  * Added Android `TextureViewPool` for platform-view reuse
+  * Added iOS `RenderViewPool` for `AVPlayerLayer` view reuse
+  * Updated platform view factories to acquire/release pooled render views
 * Added architecture and implementation backlog docs.
