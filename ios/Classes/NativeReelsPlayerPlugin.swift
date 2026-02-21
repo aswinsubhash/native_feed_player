@@ -16,7 +16,7 @@ private final class EventSinkStreamHandler: NSObject, FlutterStreamHandler {
   }
 }
 
-public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
+public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReelsPlayerHostApi {
   private static let videoViewType = "native_reels_player/video_view"
 
   private let stateStreamHandler = EventSinkStreamHandler()
@@ -28,12 +28,9 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
   private var memoryWarningObserver: NSObjectProtocol?
   private var videoViews: [Int64: NativeVideoPlatformView] = [:]
   private var attachedControllerByViewId: [Int64: Int] = [:]
+  private var binaryMessenger: FlutterBinaryMessenger?
 
   public static func register(with registrar: FlutterPluginRegistrar) {
-    let methodChannel = FlutterMethodChannel(
-      name: "native_reels_player",
-      binaryMessenger: registrar.messenger()
-    )
     let stateChannel = FlutterEventChannel(
       name: "native_reels_player/state",
       binaryMessenger: registrar.messenger()
@@ -48,6 +45,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
     )
 
     let instance = NativeReelsPlayerPlugin()
+    instance.binaryMessenger = registrar.messenger()
     instance.configureChannels(
       stateChannel: stateChannel,
       positionChannel: positionChannel,
@@ -62,7 +60,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
       }
     )
     registrar.register(viewFactory, withId: videoViewType)
-    registrar.addMethodCallDelegate(instance, channel: methodChannel)
+    NativeReelsPlayerHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: instance)
   }
 
   deinit {
@@ -70,166 +68,142 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
       NotificationCenter.default.removeObserver(observer)
       memoryWarningObserver = nil
     }
+    if let binaryMessenger {
+      NativeReelsPlayerHostApiSetup.setUp(binaryMessenger: binaryMessenger, api: nil)
+    }
     videoViews.removeAll()
     attachedControllerByViewId.removeAll()
     manager?.disposeAll()
   }
 
-  public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    guard let manager else {
-      result(
-        FlutterError(
-          code: "not_attached",
-          message: "NativeReelsPlayerPlugin is not attached to a Flutter engine.",
-          details: nil
-        )
+  func initialize(request: InitializeRequest) throws {
+    try managerOrThrow().initialize(
+      maxCachedPlayers: Int(request.maxCachedPlayers),
+      preloadCount: Int(request.preloadCount)
+    )
+  }
+
+  func preload(request: PreloadRequest) throws {
+    let sources: [[String: Any]] = request.sources.map { source in
+      [
+        "index": Int(source.index),
+        "url": source.url,
+      ]
+    }
+    try managerOrThrow().preload(sources: sources)
+  }
+
+  func createController(request: CreateControllerRequest) throws -> Int64 {
+    let url = request.url
+    if url.isEmpty {
+      throw PigeonError(
+        code: "invalid_url",
+        message: "createController requires a non-empty URL.",
+        details: nil
       )
-      return
     }
 
-    switch call.method {
-    case "initialize":
-      let args = call.args()
-      manager.initialize(
-        maxCachedPlayers: args.intValue("maxCachedPlayers", defaultValue: 5),
-        preloadCount: args.intValue("preloadCount", defaultValue: 2)
+    let controllerId = nextControllerId
+    nextControllerId += 1
+
+    do {
+      try managerOrThrow().createController(
+        controllerId: controllerId,
+        url: url,
+        index: Int(request.index),
+        autoPlay: request.autoPlay,
+        looping: request.looping
       )
-      result(nil)
-
-    case "preload":
-      let args = call.args()
-      let rawSources = args["sources"] as? [[String: Any]] ?? []
-      manager.preload(sources: rawSources)
-      result(nil)
-
-    case "createController":
-      let args = call.args()
-      let url = args["url"] as? String ?? ""
-      if url.isEmpty {
-        result(
-          FlutterError(
-            code: "invalid_url",
-            message: "createController requires a non-empty URL.",
-            details: nil
-          )
-        )
-        return
-      }
-
-      let controllerId = nextControllerId
-      nextControllerId += 1
-
-      do {
-        try manager.createController(
-          controllerId: controllerId,
-          url: url,
-          index: args.intValue("index", defaultValue: -1),
-          autoPlay: args.boolValue("autoPlay", defaultValue: false),
-          looping: args.boolValue("looping", defaultValue: true)
-        )
-        result(controllerId)
-      } catch {
-        result(
-          FlutterError(
-            code: "create_failed",
-            message: error.localizedDescription,
-            details: nil
-          )
-        )
-      }
-
-    case "disposeController":
-      let controllerId = call.args().intValue("controllerId", defaultValue: -1)
-      if controllerId > 0 {
-        manager.disposeController(controllerId: controllerId)
-      }
-      result(nil)
-
-    case "play":
-      let controllerId = call.args().intValue("controllerId", defaultValue: -1)
-      if controllerId > 0 {
-        manager.play(controllerId: controllerId)
-      }
-      result(nil)
-
-    case "pause":
-      let controllerId = call.args().intValue("controllerId", defaultValue: -1)
-      if controllerId > 0 {
-        manager.pause(controllerId: controllerId)
-      }
-      result(nil)
-
-    case "seekTo":
-      let args = call.args()
-      let controllerId = args.intValue("controllerId", defaultValue: -1)
-      let positionMs = args.int64Value("positionMs", defaultValue: 0)
-      if controllerId > 0 {
-        manager.seekTo(controllerId: controllerId, positionMs: positionMs)
-      }
-      result(nil)
-
-    case "setVisibleIndex":
-      let index = call.args().intValue("index", defaultValue: 0)
-      manager.setVisibleIndex(index: index)
-      result(nil)
-
-    case "clearCache":
-      manager.clearCache()
-      result(nil)
-
-    case "attachView":
-      let args = call.args()
-      let controllerId = args.intValue("controllerId", defaultValue: -1)
-      let viewId = Int64(args.intValue("viewId", defaultValue: -1))
-      guard controllerId > 0, viewId >= 0 else {
-        result(
-          FlutterError(
-            code: "invalid_attach",
-            message: "attachView requires valid controllerId and viewId.",
-            details: nil
-          )
-        )
-        return
-      }
-      guard let platformView = videoViews[viewId] else {
-        result(
-          FlutterError(
-            code: "view_not_found",
-            message: "No video view found for id=\(viewId).",
-            details: nil
-          )
-        )
-        return
-      }
-
-      if let previousController = attachedControllerByViewId[viewId], previousController != controllerId {
-        manager.detach(controllerId: previousController)
-      }
-      attachedControllerByViewId[viewId] = controllerId
-      manager.attach(controllerId: controllerId, renderView: platformView.renderView)
-      result(nil)
-
-    case "detachView":
-      let controllerId = call.args().intValue("controllerId", defaultValue: -1)
-      if controllerId > 0 {
-        manager.detach(controllerId: controllerId)
-        let staleViews = attachedControllerByViewId
-          .filter { $0.value == controllerId }
-          .map { $0.key }
-        for viewId in staleViews {
-          attachedControllerByViewId.removeValue(forKey: viewId)
-        }
-      }
-      result(nil)
-
-    case "disposeAll":
-      manager.disposeAll()
-      attachedControllerByViewId.removeAll()
-      result(nil)
-
-    default:
-      result(FlutterMethodNotImplemented)
+    } catch {
+      throw PigeonError(
+        code: "create_failed",
+        message: error.localizedDescription,
+        details: nil
+      )
     }
+
+    return Int64(controllerId)
+  }
+
+  func disposeController(request: ControllerRequest) throws {
+    let controllerId = Int(request.controllerId)
+    if controllerId > 0 {
+      try managerOrThrow().disposeController(controllerId: controllerId)
+    }
+  }
+
+  func play(request: ControllerRequest) throws {
+    let controllerId = Int(request.controllerId)
+    if controllerId > 0 {
+      try managerOrThrow().play(controllerId: controllerId)
+    }
+  }
+
+  func pause(request: ControllerRequest) throws {
+    let controllerId = Int(request.controllerId)
+    if controllerId > 0 {
+      try managerOrThrow().pause(controllerId: controllerId)
+    }
+  }
+
+  func seekTo(request: SeekRequest) throws {
+    let controllerId = Int(request.controllerId)
+    if controllerId > 0 {
+      try managerOrThrow().seekTo(controllerId: controllerId, positionMs: request.positionMs)
+    }
+  }
+
+  func setVisibleIndex(request: VisibleIndexRequest) throws {
+    try managerOrThrow().setVisibleIndex(index: Int(request.index))
+  }
+
+  func clearCache() throws {
+    try managerOrThrow().clearCache()
+  }
+
+  func attachView(request: AttachViewRequest) throws {
+    let controllerId = Int(request.controllerId)
+    let viewId = Int64(request.viewId)
+    guard controllerId > 0, viewId >= 0 else {
+      throw PigeonError(
+        code: "invalid_attach",
+        message: "attachView requires valid controllerId and viewId.",
+        details: nil
+      )
+    }
+    guard let platformView = videoViews[viewId] else {
+      throw PigeonError(
+        code: "view_not_found",
+        message: "No video view found for id=\(viewId).",
+        details: nil
+      )
+    }
+
+    let manager = try managerOrThrow()
+    if let previousController = attachedControllerByViewId[viewId], previousController != controllerId {
+      manager.detach(controllerId: previousController)
+    }
+    attachedControllerByViewId[viewId] = controllerId
+    manager.attach(controllerId: controllerId, renderView: platformView.renderView)
+  }
+
+  func detachView(request: ControllerRequest) throws {
+    let controllerId = Int(request.controllerId)
+    if controllerId > 0 {
+      let manager = try managerOrThrow()
+      manager.detach(controllerId: controllerId)
+      let staleViews = attachedControllerByViewId
+        .filter { $0.value == controllerId }
+        .map { $0.key }
+      for viewId in staleViews {
+        attachedControllerByViewId.removeValue(forKey: viewId)
+      }
+    }
+  }
+
+  func disposeAll() throws {
+    try managerOrThrow().disposeAll()
+    attachedControllerByViewId.removeAll()
   }
 
   private func configureChannels(
@@ -311,42 +285,15 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
     }
     videoViews.removeValue(forKey: viewId)
   }
-}
 
-private extension FlutterMethodCall {
-  func args() -> [String: Any] {
-    arguments as? [String: Any] ?? [:]
-  }
-}
-
-private extension Dictionary where Key == String, Value == Any {
-  func intValue(_ key: String, defaultValue: Int) -> Int {
-    if let value = self[key] as? Int {
-      return value
+  private func managerOrThrow() throws -> AVPlayerManager {
+    guard let manager else {
+      throw PigeonError(
+        code: "not_attached",
+        message: "NativeReelsPlayerPlugin is not attached to a Flutter engine.",
+        details: nil
+      )
     }
-    if let value = self[key] as? NSNumber {
-      return value.intValue
-    }
-    return defaultValue
-  }
-
-  func int64Value(_ key: String, defaultValue: Int64) -> Int64 {
-    if let value = self[key] as? Int64 {
-      return value
-    }
-    if let value = self[key] as? NSNumber {
-      return value.int64Value
-    }
-    return defaultValue
-  }
-
-  func boolValue(_ key: String, defaultValue: Bool) -> Bool {
-    if let value = self[key] as? Bool {
-      return value
-    }
-    if let value = self[key] as? NSNumber {
-      return value.boolValue
-    }
-    return defaultValue
+    return manager
   }
 }

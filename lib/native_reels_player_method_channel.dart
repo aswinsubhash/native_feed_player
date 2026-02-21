@@ -2,15 +2,18 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'native_reels_player_platform_interface.dart';
+import 'src/messages.g.dart';
 import 'src/video_metrics.dart';
 import 'src/video_models.dart';
 import 'src/video_playback_state.dart';
 
-/// An implementation of [NativeReelsPlayerPlatform] that uses method channels.
+/// An implementation of [NativeReelsPlayerPlatform] that uses Pigeon host APIs.
 class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
-  /// The method channel used to interact with the native platform.
   @visibleForTesting
-  final methodChannel = const MethodChannel('native_reels_player');
+  final NativeReelsPlayerHostApi hostApi;
+
+  MethodChannelNativeReelsPlayer({NativeReelsPlayerHostApi? hostApi})
+    : hostApi = hostApi ?? NativeReelsPlayerHostApi();
 
   @visibleForTesting
   final stateEventChannel = const EventChannel('native_reels_player/state');
@@ -51,16 +54,26 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
 
   @override
   Future<void> initialize({required NativeReelsConfig config}) async {
-    await methodChannel.invokeMethod<void>('initialize', config.toMap());
+    await hostApi.initialize(
+      InitializeRequest(
+        maxCachedPlayers: config.maxCachedPlayers,
+        preloadCount: config.preloadCount,
+      ),
+    );
   }
 
   @override
   Future<void> preload(List<NativeVideoSource> sources) async {
-    await methodChannel.invokeMethod<void>('preload', <String, Object?>{
-      'sources': sources
-          .map((NativeVideoSource source) => source.toMap())
-          .toList(),
-    });
+    await hostApi.preload(
+      PreloadRequest(
+        sources: sources
+            .map(
+              (NativeVideoSource source) =>
+                  VideoSourceMessage(url: source.url, index: source.index),
+            )
+            .toList(),
+      ),
+    );
   }
 
   @override
@@ -70,26 +83,20 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
     required bool autoPlay,
     required bool looping,
   }) async {
-    final int? id = await methodChannel.invokeMethod<int>(
-      'createController',
-      <String, Object?>{
-        'url': url,
-        'index': index,
-        'autoPlay': autoPlay,
-        'looping': looping,
-      },
+    return hostApi.createController(
+      CreateControllerRequest(
+        url: url,
+        index: index,
+        autoPlay: autoPlay,
+        looping: looping,
+      ),
     );
-    if (id == null) {
-      throw StateError('Native createController returned null id.');
-    }
-    return id;
   }
 
   @override
   Future<void> disposeController(int controllerId) async {
-    await methodChannel.invokeMethod<void>(
-      'disposeController',
-      <String, Object?>{'controllerId': controllerId},
+    await hostApi.disposeController(
+      ControllerRequest(controllerId: controllerId),
     );
     _stateStreams.remove(controllerId);
     _positionStreams.remove(controllerId);
@@ -98,24 +105,22 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
 
   @override
   Future<void> play(int controllerId) async {
-    await methodChannel.invokeMethod<void>('play', <String, Object?>{
-      'controllerId': controllerId,
-    });
+    await hostApi.play(ControllerRequest(controllerId: controllerId));
   }
 
   @override
   Future<void> pause(int controllerId) async {
-    await methodChannel.invokeMethod<void>('pause', <String, Object?>{
-      'controllerId': controllerId,
-    });
+    await hostApi.pause(ControllerRequest(controllerId: controllerId));
   }
 
   @override
   Future<void> seekTo(int controllerId, Duration position) async {
-    await methodChannel.invokeMethod<void>('seekTo', <String, Object?>{
-      'controllerId': controllerId,
-      'positionMs': position.inMilliseconds,
-    });
+    await hostApi.seekTo(
+      SeekRequest(
+        controllerId: controllerId,
+        positionMs: position.inMilliseconds,
+      ),
+    );
   }
 
   @override
@@ -162,14 +167,12 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
 
   @override
   Future<void> clearCache() async {
-    await methodChannel.invokeMethod<void>('clearCache');
+    await hostApi.clearCache();
   }
 
   @override
   Future<void> setVisibleIndex(int index) async {
-    await methodChannel.invokeMethod<void>('setVisibleIndex', <String, Object?>{
-      'index': index,
-    });
+    await hostApi.setVisibleIndex(VisibleIndexRequest(index: index));
   }
 
   @override
@@ -177,22 +180,19 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
     required int controllerId,
     required int viewId,
   }) async {
-    await methodChannel.invokeMethod<void>('attachView', <String, Object?>{
-      'controllerId': controllerId,
-      'viewId': viewId,
-    });
+    await hostApi.attachView(
+      AttachViewRequest(controllerId: controllerId, viewId: viewId),
+    );
   }
 
   @override
   Future<void> detachView({required int controllerId}) async {
-    await methodChannel.invokeMethod<void>('detachView', <String, Object?>{
-      'controllerId': controllerId,
-    });
+    await hostApi.detachView(ControllerRequest(controllerId: controllerId));
   }
 
   @override
   Future<void> dispose() async {
-    await methodChannel.invokeMethod<void>('disposeAll');
+    await hostApi.disposeAll();
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();

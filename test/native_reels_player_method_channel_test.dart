@@ -1,44 +1,75 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_reels_player/native_reels_player_method_channel.dart';
-import 'package:native_reels_player/src/video_models.dart';
+import 'package:native_reels_player/src/messages.g.dart';
 import 'package:native_reels_player/src/video_metrics.dart';
+import 'package:native_reels_player/src/video_models.dart';
+
+class FakeNativeReelsPlayerHostApi extends NativeReelsPlayerHostApi {
+  int nextControllerId = 7;
+  InitializeRequest? initializeRequest;
+  PreloadRequest? preloadRequest;
+  CreateControllerRequest? createRequest;
+
+  @override
+  Future<void> attachView(AttachViewRequest request) async {}
+
+  @override
+  Future<void> clearCache() async {}
+
+  @override
+  Future<int> createController(CreateControllerRequest request) async {
+    createRequest = request;
+    return nextControllerId;
+  }
+
+  @override
+  Future<void> detachView(ControllerRequest request) async {}
+
+  @override
+  Future<void> disposeAll() async {}
+
+  @override
+  Future<void> disposeController(ControllerRequest request) async {}
+
+  @override
+  Future<void> initialize(InitializeRequest request) async {
+    initializeRequest = request;
+  }
+
+  @override
+  Future<void> pause(ControllerRequest request) async {}
+
+  @override
+  Future<void> play(ControllerRequest request) async {}
+
+  @override
+  Future<void> preload(PreloadRequest request) async {
+    preloadRequest = request;
+  }
+
+  @override
+  Future<void> seekTo(SeekRequest request) async {}
+
+  @override
+  Future<void> setVisibleIndex(VisibleIndexRequest request) async {}
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  final MethodChannelNativeReelsPlayer platform =
-      MethodChannelNativeReelsPlayer();
-  const MethodChannel channel = MethodChannel('native_reels_player');
-  const MethodChannel stateChannel = MethodChannel('native_reels_player/state');
-  const MethodChannel positionChannel = MethodChannel(
-    'native_reels_player/position',
-  );
   const MethodChannel metricsChannel = MethodChannel(
     'native_reels_player/metrics',
   );
   const StandardMethodCodec codec = StandardMethodCodec();
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  late FakeNativeReelsPlayerHostApi fakeHostApi;
+  late MethodChannelNativeReelsPlayer platform;
 
   setUp(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
-          if (methodCall.method == 'createController') {
-            return 7;
-          }
-          return null;
-        });
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(stateChannel, (MethodCall methodCall) async {
-          return null;
-        });
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(positionChannel, (
-          MethodCall methodCall,
-        ) async {
-          return null;
-        });
+    fakeHostApi = FakeNativeReelsPlayerHostApi();
+    platform = MethodChannelNativeReelsPlayer(hostApi: fakeHostApi);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(metricsChannel, (
           MethodCall methodCall,
@@ -49,17 +80,15 @@ void main() {
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, null);
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(stateChannel, null);
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(positionChannel, null);
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(metricsChannel, null);
   });
 
   test('initialize', () async {
     await platform.initialize(config: const NativeReelsConfig());
+
+    expect(fakeHostApi.initializeRequest, isNotNull);
+    expect(fakeHostApi.initializeRequest!.maxCachedPlayers, 5);
+    expect(fakeHostApi.initializeRequest!.preloadCount, 2);
   });
 
   test('createController returns id', () async {
@@ -69,7 +98,13 @@ void main() {
       autoPlay: false,
       looping: true,
     );
+
     expect(id, 7);
+    expect(fakeHostApi.createRequest, isNotNull);
+    expect(fakeHostApi.createRequest!.url, 'u');
+    expect(fakeHostApi.createRequest!.index, 0);
+    expect(fakeHostApi.createRequest!.autoPlay, isFalse);
+    expect(fakeHostApi.createRequest!.looping, isTrue);
   });
 
   test('metrics stream maps native payload', () async {
