@@ -41,16 +41,17 @@
 
 ## Milestone 4: Memory and Pooling
 
-- [ ] Add index-aware player pool with configurable max size.
-- [ ] Auto-evict controllers outside active window.
+- [x] Add index-aware player pool with configurable max size.
+- [x] Auto-evict controllers outside active window.
 - [ ] Recycle rendering targets to avoid frequent surface/layer recreation.
-- [ ] Add low-memory handling hooks:
+- [x] Add low-memory handling hooks:
   - iOS memory warnings
   - Android trim memory callbacks
 
 **Acceptance criteria**
 - No steady memory growth during 10+ minute continuous scroll test.
 - No crashes on low-end device profile test matrix.
+- Surface/layer recycling remains pending until Milestone 5 platform views.
 
 ## Milestone 5: Platform View Rendering
 

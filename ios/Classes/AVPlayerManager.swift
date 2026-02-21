@@ -14,15 +14,17 @@ final class AVPlayerManager {
   private final class ManagedController {
     let id: Int
     let url: String
+    let index: Int
     let player: AVPlayer
     let looping: Bool
     var itemStatusObservation: NSKeyValueObservation?
     var timeControlObservation: NSKeyValueObservation?
     var endObserver: NSObjectProtocol?
 
-    init(id: Int, url: String, player: AVPlayer, looping: Bool) {
+    init(id: Int, url: String, index: Int, player: AVPlayer, looping: Bool) {
       self.id = id
       self.url = url
+      self.index = index
       self.player = player
       self.looping = looping
     }
@@ -35,8 +37,11 @@ final class AVPlayerManager {
   private var creationOrder: [Int] = []
   private var sourcesByIndex: [Int: String] = [:]
   private var preloadedAssets: [Int: PreloadedAsset] = [:]
+  private var pooledPlayers: [AVPlayer] = []
   private var maxCachedPlayers: Int = 5
+  private var maxPooledPlayers: Int = 5
   private var preloadCount: Int = 2
+  private var activeWindowRadius: Int = 2
   private var visibleIndex: Int = 0
   private var preloadGeneration: Int = 0
   private var positionTimer: Timer?
@@ -52,7 +57,13 @@ final class AVPlayerManager {
 
   func initialize(maxCachedPlayers: Int, preloadCount: Int) {
     self.maxCachedPlayers = max(1, maxCachedPlayers)
+    self.maxPooledPlayers = max(1, self.maxCachedPlayers)
     self.preloadCount = max(0, preloadCount)
+    self.activeWindowRadius = max(1, self.preloadCount)
+    preloadGeneration += 1
+    preloadedAssets.removeAll()
+    drainPooledPlayers(keep: maxPooledPlayers)
+    enforceVisibleWindowEviction()
     schedulePreloadWindow()
   }
 
@@ -72,6 +83,7 @@ final class AVPlayerManager {
       visibleIndex = sourcesByIndex.keys.min() ?? 0
     }
 
+    enforceVisibleWindowEviction()
     schedulePreloadWindow()
   }
 
@@ -101,9 +113,17 @@ final class AVPlayerManager {
       item = AVPlayerItem(url: sourceURL)
     }
 
-    let player = AVPlayer(playerItem: item)
+    let player = obtainReusablePlayer()
+    player.replaceCurrentItem(with: item)
+    player.actionAtItemEnd = .pause
     player.automaticallyWaitsToMinimizeStalling = true
-    let managed = ManagedController(id: controllerId, url: url, player: player, looping: looping)
+    let managed = ManagedController(
+      id: controllerId,
+      url: url,
+      index: index,
+      player: player,
+      looping: looping
+    )
     attachObservers(to: managed, playerItem: item)
 
     controllers[controllerId] = managed
@@ -115,6 +135,7 @@ final class AVPlayerManager {
       player.play()
     }
 
+    enforceVisibleWindowEviction()
     schedulePreloadWindow()
   }
 
@@ -136,21 +157,7 @@ final class AVPlayerManager {
   }
 
   func disposeController(controllerId: Int) {
-    guard let managed = controllers.removeValue(forKey: controllerId) else {
-      return
-    }
-
-    creationOrder.removeAll(where: { $0 == controllerId })
-    if let endObserver = managed.endObserver {
-      NotificationCenter.default.removeObserver(endObserver)
-    }
-    managed.itemStatusObservation?.invalidate()
-    managed.timeControlObservation?.invalidate()
-    managed.player.pause()
-    managed.player.replaceCurrentItem(with: nil)
-    onState(controllerId, "disposed")
-    stopPositionTimerIfNeeded()
-    schedulePreloadWindow()
+    disposeControllerInternal(controllerId: controllerId, emitDisposed: true, shouldReschedule: true)
   }
 
   func clearCache() {
@@ -161,20 +168,54 @@ final class AVPlayerManager {
 
   func setVisibleIndex(index: Int) {
     visibleIndex = index
+    enforceVisibleWindowEviction()
     schedulePreloadWindow()
+  }
+
+  func onMemoryWarning() {
+    preloadGeneration += 1
+    preloadedAssets.removeAll()
+    drainPooledPlayers(keep: 0)
+    enforceVisibleWindowEviction(forceAggressive: true)
   }
 
   func disposeAll() {
     preloadGeneration += 1
     let ids = Array(controllers.keys)
     for controllerId in ids {
-      disposeController(controllerId: controllerId)
+      disposeControllerInternal(controllerId: controllerId, emitDisposed: true, shouldReschedule: false)
     }
     sourcesByIndex.removeAll()
     preloadedAssets.removeAll()
     creationOrder.removeAll()
+    drainPooledPlayers(keep: 0)
     positionTimer?.invalidate()
     positionTimer = nil
+  }
+
+  private func disposeControllerInternal(
+    controllerId: Int,
+    emitDisposed: Bool,
+    shouldReschedule: Bool
+  ) {
+    guard let managed = controllers.removeValue(forKey: controllerId) else {
+      return
+    }
+
+    creationOrder.removeAll(where: { $0 == controllerId })
+    if let endObserver = managed.endObserver {
+      NotificationCenter.default.removeObserver(endObserver)
+    }
+    managed.itemStatusObservation?.invalidate()
+    managed.timeControlObservation?.invalidate()
+    recycleOrReleasePlayer(managed.player)
+    if emitDisposed {
+      onState(controllerId, "disposed")
+    }
+    stopPositionTimerIfNeeded()
+    if shouldReschedule {
+      schedulePreloadWindow()
+    }
   }
 
   private func schedulePreloadWindow() {
@@ -247,13 +288,50 @@ final class AVPlayerManager {
     return Set(start...end)
   }
 
+  private func enforceVisibleWindowEviction(forceAggressive: Bool = false) {
+    guard !controllers.isEmpty else {
+      return
+    }
+
+    let radius = forceAggressive ? 0 : activeWindowRadius
+    let start = visibleIndex - radius
+    let end = visibleIndex + radius
+    let toEvict = controllers
+      .filter { (_, managed) in
+        managed.index >= 0 && (managed.index < start || managed.index > end)
+      }
+      .keys
+
+    for controllerId in toEvict {
+      disposeControllerInternal(
+        controllerId: controllerId,
+        emitDisposed: true,
+        shouldReschedule: false
+      )
+    }
+  }
+
   private func evictToPoolSizeIfNeeded() {
     while controllers.count >= maxCachedPlayers {
-      guard let oldest = creationOrder.first else {
+      guard let candidate = evictionCandidateId() else {
         break
       }
-      disposeController(controllerId: oldest)
+      disposeControllerInternal(controllerId: candidate, emitDisposed: true, shouldReschedule: false)
     }
+  }
+
+  private func evictionCandidateId() -> Int? {
+    if let outsideWindowId = creationOrder.first(where: { id in
+      guard let managed = controllers[id], managed.index >= 0 else {
+        return false
+      }
+      let distance = abs(managed.index - visibleIndex)
+      return distance > activeWindowRadius
+    }) {
+      return outsideWindowId
+    }
+
+    return creationOrder.first
   }
 
   private func attachObservers(to managed: ManagedController, playerItem: AVPlayerItem) {
@@ -341,6 +419,28 @@ final class AVPlayerManager {
         continue
       }
       onPosition(controllerId, Int64(seconds * 1000))
+    }
+  }
+
+  private func obtainReusablePlayer() -> AVPlayer {
+    if let player = pooledPlayers.popLast() {
+      return player
+    }
+    return AVPlayer()
+  }
+
+  private func recycleOrReleasePlayer(_ player: AVPlayer) {
+    player.pause()
+    player.replaceCurrentItem(with: nil)
+    player.actionAtItemEnd = .pause
+    if pooledPlayers.count < maxPooledPlayers {
+      pooledPlayers.append(player)
+    }
+  }
+
+  private func drainPooledPlayers(keep: Int) {
+    while pooledPlayers.count > keep {
+      _ = pooledPlayers.popLast()
     }
   }
 }
