@@ -1,0 +1,79 @@
+# Native Reels Player Backlog
+
+## Milestone 1: Baseline Plugin and API
+
+- [x] Scaffold Flutter plugin (`android` + `ios`) and example app.
+- [x] Define Dart API for:
+  - initialization
+  - preload scheduling
+  - controller creation/lifecycle
+  - playback commands
+- [x] Add native method stubs so API calls do not return `notImplemented`.
+- [ ] Add Pigeon contract generation to replace raw method strings.
+
+**Acceptance criteria**
+- Package builds in Flutter.
+- Example app runs and can call initialize/preload/controller methods without native exceptions.
+
+## Milestone 2: Native Playback MVP
+
+- [x] iOS: Implement `AVPlayer` playback for a single controller.
+- [x] Android: Implement Media3 `ExoPlayer` playback for a single controller.
+- [x] Wire playback state events (`ready`, `playing`, `paused`, `buffering`, `error`).
+- [x] Wire position events with throttled updates (e.g. 200ms).
+
+**Acceptance criteria**
+- Start/pause/seek work on both platforms for one video.
+- Dart `stateStream` and `positionStream` receive updates.
+- Note: video rendering surface/widget is still tracked in Milestone 5.
+
+## Milestone 3: Pre-buffering
+
+- [ ] iOS: preload `AVAsset` keys (`playable`, `duration`) in background.
+- [ ] Android: preload media with `prepare()` and tuned `LoadControl`.
+- [ ] Add configurable preload window around current index.
+- [ ] Implement cancellation for stale preload requests during fast flings.
+
+**Acceptance criteria**
+- Adjacent video starts in <150ms after scroll settle (Wi-Fi baseline).
+- Spinner rate is significantly lower than `video_player` baseline.
+
+## Milestone 4: Memory and Pooling
+
+- [ ] Add index-aware player pool with configurable max size.
+- [ ] Auto-evict controllers outside active window.
+- [ ] Recycle rendering targets to avoid frequent surface/layer recreation.
+- [ ] Add low-memory handling hooks:
+  - iOS memory warnings
+  - Android trim memory callbacks
+
+**Acceptance criteria**
+- No steady memory growth during 10+ minute continuous scroll test.
+- No crashes on low-end device profile test matrix.
+
+## Milestone 5: Platform View Rendering
+
+- [ ] iOS: `UIView` + `AVPlayerLayer` factory registration.
+- [ ] Android: `PlatformView` with `SurfaceView` or `TextureView`.
+- [ ] Dart `NativeVideoView` widget binding.
+- [ ] Attach/detach player on list item lifecycle changes.
+
+**Acceptance criteria**
+- Video renders inside Flutter list/grid cells.
+- Scroll remains smooth when rapidly changing visible index.
+
+## Milestone 6: Production Hardening
+
+- [ ] Add instrumentation:
+  - first-frame latency
+  - rebuffer count
+  - dropped frame estimates
+- [ ] Add integration tests for:
+  - fast fling
+  - pause/resume app
+  - network loss/recovery
+- [ ] Prepare public docs and publish checklist.
+
+**Acceptance criteria**
+- Release candidate passes CI + device matrix smoke tests.
+- README includes clear limitations and tuning guidance.
