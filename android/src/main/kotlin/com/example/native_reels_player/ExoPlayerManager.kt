@@ -12,7 +12,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import java.util.ArrayDeque
 import kotlin.math.abs
@@ -60,7 +59,6 @@ internal class ExoPlayerManager(
     private var visibleIndex = 0
     private var preloadGeneration = 0
     private var tickerRunning = false
-    private var loadControl: LoadControl = createLoadControl()
 
     private val positionTicker = object : Runnable {
         override fun run() {
@@ -78,7 +76,6 @@ internal class ExoPlayerManager(
         this.maxPooledPlayers = maxOf(1, this.maxCachedPlayers)
         this.preloadCount = maxOf(0, preloadCount)
         this.activeWindowRadius = maxOf(1, this.preloadCount)
-        this.loadControl = createLoadControl()
         releaseAllPreloadedPlayers()
         releaseAllPooledPlayers()
         enforceVisibleWindowEviction()
@@ -476,11 +473,11 @@ internal class ExoPlayerManager(
 
     private fun createConfiguredPlayer(): ExoPlayer {
         return ExoPlayer.Builder(appContext)
-            .setLoadControl(loadControl)
+            .setLoadControl(createLoadControl())
             .build()
     }
 
-    private fun createLoadControl(): LoadControl {
+    private fun createLoadControl(): DefaultLoadControl {
         return DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ 2000,
