@@ -37,4 +37,8 @@
   * Added Android `TextureViewPool` for platform-view reuse
   * Added iOS `RenderViewPool` for `AVPlayerLayer` view reuse
   * Updated platform view factories to acquire/release pooled render views
+* Added release benchmark workflow assets:
+  * Integration tests now emit structured `NRP_BENCHMARK_SUMMARY` lines
+  * Added `tool/benchmark_report.dart` for log-to-markdown summaries
+  * Added device matrix report template and benchmark runbook docs
 * Added architecture and implementation backlog docs.

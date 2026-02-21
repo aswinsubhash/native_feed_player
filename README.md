@@ -113,3 +113,4 @@ dart run pigeon \
 ## Release Process
 
 - Milestone hardening and publish steps: `docs/RELEASE_CHECKLIST.md`
+- Device benchmark runbook: `docs/BENCHMARK_WORKFLOW.md`

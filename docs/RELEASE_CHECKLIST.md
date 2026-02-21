@@ -10,6 +10,10 @@
   - fast fling churn
   - app pause/resume
   - network loss/recovery
+- [ ] Generate benchmark summaries from device logs using:
+  - `tool/benchmark_report.dart`
+  - `docs/BENCHMARK_WORKFLOW.md`
+  - `docs/DEVICE_MATRIX_REPORT_TEMPLATE.md`
 
 ## Playback Quality Gates
 
