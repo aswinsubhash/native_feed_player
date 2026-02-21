@@ -45,6 +45,7 @@ native_reels_player/
   - owns real single-controller native playback lifecycle.
   - emits playback state and periodic position updates to Flutter.
   - manages visible-index preload windows and stale-preload cancellation.
+  - reuses pooled native players and reacts to low-memory signals.
 - `VideoPool`
   - still a placeholder for advanced pooling milestones.
 

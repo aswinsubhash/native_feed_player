@@ -1,5 +1,6 @@
 import Flutter
 import Foundation
+import UIKit
 
 private final class EventSinkStreamHandler: NSObject, FlutterStreamHandler {
   var sink: FlutterEventSink?
@@ -21,6 +22,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
 
   private var nextControllerId: Int = 1
   private var manager: AVPlayerManager?
+  private var memoryWarningObserver: NSObjectProtocol?
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let methodChannel = FlutterMethodChannel(
@@ -42,6 +44,10 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
   }
 
   deinit {
+    if let observer = memoryWarningObserver {
+      NotificationCenter.default.removeObserver(observer)
+      memoryWarningObserver = nil
+    }
     manager?.disposeAll()
   }
 
@@ -171,6 +177,18 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
 
     stateChannel.setStreamHandler(stateStreamHandler)
     positionChannel.setStreamHandler(positionStreamHandler)
+
+    if let observer = memoryWarningObserver {
+      NotificationCenter.default.removeObserver(observer)
+      memoryWarningObserver = nil
+    }
+    memoryWarningObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didReceiveMemoryWarningNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.manager?.onMemoryWarning()
+    }
   }
 
   private func emitState(controllerId: Int, state: String) {

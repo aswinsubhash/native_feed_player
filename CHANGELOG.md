@@ -14,4 +14,7 @@
   * index-window preload around visible item
   * tuned Android `LoadControl` prewarm prepare
   * stale preload cancellation using generation checks
+* Started milestone 4 memory/pooling support:
+  * index-aware player pooling and eviction by visible window
+  * low-memory callbacks on Android and iOS
 * Added architecture and implementation backlog docs.

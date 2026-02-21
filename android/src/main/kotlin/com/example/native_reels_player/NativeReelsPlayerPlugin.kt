@@ -1,5 +1,8 @@
 package com.example.native_reels_player
 
+import android.content.ComponentCallbacks2
+import android.content.Context
+import android.content.res.Configuration
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -8,17 +11,21 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 
 /** NativeReelsPlayerPlugin */
-class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler {
+class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallbacks2 {
     private lateinit var methodChannel: MethodChannel
     private lateinit var stateChannel: EventChannel
     private lateinit var positionChannel: EventChannel
 
+    private var appContext: Context? = null
     private var stateSink: EventChannel.EventSink? = null
     private var positionSink: EventChannel.EventSink? = null
     private var exoPlayerManager: ExoPlayerManager? = null
     private var nextControllerId = 1
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
+        appContext = flutterPluginBinding.applicationContext
+        appContext?.registerComponentCallbacks(this)
+
         methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, "native_reels_player")
         stateChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/state")
         positionChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/position")
@@ -178,6 +185,8 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler {
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        appContext?.unregisterComponentCallbacks(this)
+        appContext = null
         exoPlayerManager?.disposeAll()
         exoPlayerManager = null
         nextControllerId = 1
@@ -186,6 +195,18 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler {
         methodChannel.setMethodCallHandler(null)
         stateChannel.setStreamHandler(null)
         positionChannel.setStreamHandler(null)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        exoPlayerManager?.onTrimMemory(level)
+    }
+
+    override fun onLowMemory() {
+        exoPlayerManager?.onLowMemory()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        // No-op: handled by Flutter engine and ExoPlayer internally.
     }
 
     private fun MethodCall.args(): Map<*, *> {
