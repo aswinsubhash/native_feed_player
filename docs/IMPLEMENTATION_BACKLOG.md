@@ -67,16 +67,17 @@
 
 ## Milestone 6: Production Hardening
 
-- [ ] Add instrumentation:
+- [x] Add instrumentation:
   - first-frame latency
   - rebuffer count
   - dropped frame estimates
-- [ ] Add integration tests for:
+- [x] Add integration tests for:
   - fast fling
   - pause/resume app
   - network loss/recovery
-- [ ] Prepare public docs and publish checklist.
+- [x] Prepare public docs and publish checklist.
 
 **Acceptance criteria**
-- Release candidate passes CI + device matrix smoke tests.
+- CI checks pass for package + example build smoke tests.
 - README includes clear limitations and tuning guidance.
+- Physical device-matrix smoke runs remain a release gate.

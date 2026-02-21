@@ -21,4 +21,13 @@
   * Android `TextureView` platform view factory
   * iOS `UIView`/`AVPlayerLayer` platform view factory
   * Dart `NativeVideoView` widget with attach/detach lifecycle wiring
+* Implemented milestone 6 production hardening:
+  * Added `metricsStream` to `VideoController`
+  * Added native metrics channel (`native_reels_player/metrics`) on Android/iOS
+  * Added first-frame latency, rebuffer count, and dropped-frame estimate payloads
+  * Added integration test scenarios for:
+    * fast fling index churn
+    * pause/resume lifecycle path
+    * network loss/recovery path
+  * Added release checklist and README tuning/limitations guidance
 * Added architecture and implementation backlog docs.

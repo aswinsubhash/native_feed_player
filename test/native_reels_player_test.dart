@@ -50,6 +50,9 @@ class MockNativeReelsPlayerPlatform
       const Stream.empty();
 
   @override
+  Stream<VideoMetrics> metricsStream(int controllerId) => const Stream.empty();
+
+  @override
   Future<void> clearCache() async {}
 
   @override

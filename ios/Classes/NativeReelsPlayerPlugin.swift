@@ -21,6 +21,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
 
   private let stateStreamHandler = EventSinkStreamHandler()
   private let positionStreamHandler = EventSinkStreamHandler()
+  private let metricsStreamHandler = EventSinkStreamHandler()
 
   private var nextControllerId: Int = 1
   private var manager: AVPlayerManager?
@@ -41,9 +42,17 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
       name: "native_reels_player/position",
       binaryMessenger: registrar.messenger()
     )
+    let metricsChannel = FlutterEventChannel(
+      name: "native_reels_player/metrics",
+      binaryMessenger: registrar.messenger()
+    )
 
     let instance = NativeReelsPlayerPlugin()
-    instance.configureChannels(stateChannel: stateChannel, positionChannel: positionChannel)
+    instance.configureChannels(
+      stateChannel: stateChannel,
+      positionChannel: positionChannel,
+      metricsChannel: metricsChannel
+    )
     let viewFactory = NativeVideoViewFactory(
       onCreate: { [weak instance] viewId, view in
         instance?.videoViews[viewId] = view
@@ -225,7 +234,8 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
 
   private func configureChannels(
     stateChannel: FlutterEventChannel,
-    positionChannel: FlutterEventChannel
+    positionChannel: FlutterEventChannel,
+    metricsChannel: FlutterEventChannel
   ) {
     manager = AVPlayerManager(
       onState: { [weak self] controllerId, state in
@@ -233,11 +243,15 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
       },
       onPosition: { [weak self] controllerId, positionMs in
         self?.emitPosition(controllerId: controllerId, positionMs: positionMs)
+      },
+      onMetrics: { [weak self] _, payload in
+        self?.emitMetrics(payload: payload)
       }
     )
 
     stateChannel.setStreamHandler(stateStreamHandler)
     positionChannel.setStreamHandler(positionStreamHandler)
+    metricsChannel.setStreamHandler(metricsStreamHandler)
 
     if let observer = memoryWarningObserver {
       NotificationCenter.default.removeObserver(observer)
@@ -276,6 +290,16 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
     } else {
       DispatchQueue.main.async { [weak self] in
         self?.positionStreamHandler.sink?(payload)
+      }
+    }
+  }
+
+  private func emitMetrics(payload: [String: Any]) {
+    if Thread.isMainThread {
+      metricsStreamHandler.sink?(payload)
+    } else {
+      DispatchQueue.main.async { [weak self] in
+        self?.metricsStreamHandler.sink?(payload)
       }
     }
   }

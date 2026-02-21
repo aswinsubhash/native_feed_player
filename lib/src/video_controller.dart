@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../native_reels_player_platform_interface.dart';
+import 'video_metrics.dart';
 import 'video_playback_state.dart';
 
 /// Handle for controlling a single native video instance.
@@ -22,6 +23,9 @@ class VideoController {
 
   Stream<VideoPlaybackState> get stateStream =>
       _platform.stateStream(controllerId);
+
+  Stream<VideoMetrics> get metricsStream =>
+      _platform.metricsStream(controllerId);
 
   Future<void> play() => _platform.play(controllerId);
 

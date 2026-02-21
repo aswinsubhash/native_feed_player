@@ -19,10 +19,12 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
     private lateinit var methodChannel: MethodChannel
     private lateinit var stateChannel: EventChannel
     private lateinit var positionChannel: EventChannel
+    private lateinit var metricsChannel: EventChannel
 
     private var appContext: Context? = null
     private var stateSink: EventChannel.EventSink? = null
     private var positionSink: EventChannel.EventSink? = null
+    private var metricsSink: EventChannel.EventSink? = null
     private var exoPlayerManager: ExoPlayerManager? = null
     private val videoViews = mutableMapOf<Int, NativeVideoPlatformView>()
     private val attachedControllerByViewId = mutableMapOf<Int, Int>()
@@ -35,6 +37,7 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
         methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, "native_reels_player")
         stateChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/state")
         positionChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/position")
+        metricsChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/metrics")
 
         flutterPluginBinding.platformViewRegistry.registerViewFactory(
             VIDEO_VIEW_TYPE,
@@ -72,6 +75,18 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
             }
         )
 
+        metricsChannel.setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    metricsSink = events
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    metricsSink = null
+                }
+            }
+        )
+
         exoPlayerManager = ExoPlayerManager(
             context = flutterPluginBinding.applicationContext,
             onState = { controllerId, state ->
@@ -89,6 +104,9 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
                         "positionMs" to positionMs
                     )
                 )
+            },
+            onMetrics = { _, metrics ->
+                metricsSink?.success(metrics)
             }
         )
 
@@ -251,9 +269,11 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler, ComponentCallb
         nextControllerId = 1
         stateSink = null
         positionSink = null
+        metricsSink = null
         methodChannel.setMethodCallHandler(null)
         stateChannel.setStreamHandler(null)
         positionChannel.setStreamHandler(null)
+        metricsChannel.setStreamHandler(null)
     }
 
     override fun onTrimMemory(level: Int) {

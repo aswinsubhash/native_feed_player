@@ -11,6 +11,7 @@ native_reels_player/
 │   └── src/
 │       ├── native_reels_player_api.dart
 │       ├── video_controller.dart
+│       ├── video_metrics.dart
 │       ├── video_models.dart
 │       └── video_playback_state.dart
 ├── android/src/main/kotlin/com/example/native_reels_player/
@@ -30,7 +31,7 @@ native_reels_player/
   - caches `VideoController` by `(index, url)` key.
 - `VideoController`
   - control object for play/pause/seek/dispose.
-  - exposes `stateStream` and `positionStream`.
+  - exposes `stateStream`, `positionStream`, and `metricsStream`.
 - `NativeReelsPlayerPlatform`
   - contract for platform implementations.
 - `MethodChannelNativeReelsPlayer`
@@ -45,6 +46,7 @@ native_reels_player/
 - `ExoPlayerManager` / `AVPlayerManager`
   - owns real single-controller native playback lifecycle.
   - emits playback state and periodic position updates to Flutter.
+  - emits playback metrics (first frame latency, rebuffers, dropped frames).
   - manages visible-index preload windows and stale-preload cancellation.
   - reuses pooled native players and reacts to low-memory signals.
 - `VideoPool`
@@ -56,11 +58,11 @@ native_reels_player/
 2. Flutter calls `preload(urls)` as feed data becomes available.
 3. Flutter requests `getController(url, index)` for visible or near-visible items.
 4. User actions call `play/pause/seekTo` on each controller.
-5. Native side emits state/position events back to Flutter.
+5. Native side emits state/position/metrics events back to Flutter.
 
 ## Next Implementation Priorities
 
 1. Replace raw channels with Pigeon-generated API contracts.
 2. Expand from single-controller flow to pool/window eviction policy tuning.
 3. Harden pre-buffering behavior and cancellation across fast flings.
-4. Add production metrics and benchmark automation for scroll smoothness.
+4. Automate benchmark runs and reporting for scroll smoothness metrics.

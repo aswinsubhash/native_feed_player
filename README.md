@@ -13,6 +13,10 @@ Current state:
 - Native pre-buffering now uses visible-index windowing and stale-request cancellation.
 - Native memory handling now includes index-aware player pooling and low-memory hooks.
 - Native rendering uses `NativeVideoView` backed by platform views.
+- Native instrumentation now exposes:
+  - first-frame latency
+  - rebuffer count
+  - dropped-frame estimate
 
 See `docs/IMPLEMENTATION_BACKLOG.md` for the full roadmap.
 
@@ -53,6 +57,7 @@ await controller.play();
 - `seekTo(Duration)`
 - `positionStream`
 - `stateStream`
+- `metricsStream`
 - `dispose()`
 
 Rendering widget:
@@ -67,3 +72,24 @@ Rendering widget:
 - `VideoPool` placeholders reserved for broader pooling milestones.
 
 Detailed architecture: `docs/ARCHITECTURE.md`
+
+## Tuning Guidance
+
+- `maxCachedPlayers`:
+  - Start at `5` for mid/high devices.
+  - Reduce to `3` for low-memory devices.
+- `preloadCount`:
+  - Start at `2` for reels feed.
+  - Increase to `3` only after measuring memory and startup latency impact.
+- Use `setVisibleIndex(...)` on scroll settle (or throttled scroll updates) so native eviction/preload policy can stay in sync with the feed.
+
+## Limitations
+
+- Event channels currently use raw `MethodChannel`/`EventChannel` contracts (Pigeon migration is still pending).
+- Rendering path is platform-view based; texture-only rendering is not implemented yet.
+- DRM, subtitles/closed captions, and adaptive track-selection APIs are not exposed in Dart yet.
+- Device-matrix performance benchmarking is still a release gate for production rollout.
+
+## Release Process
+
+- Milestone hardening and publish steps: `docs/RELEASE_CHECKLIST.md`
