@@ -12,7 +12,7 @@ Current state:
 - Native `state` and `position` events are emitted and mapped to Dart streams.
 - Native pre-buffering now uses visible-index windowing and stale-request cancellation.
 - Native memory handling now includes index-aware player pooling and low-memory hooks.
-- Platform view rendering (`NativeVideoView`) is not implemented yet.
+- Native rendering uses `NativeVideoView` backed by platform views.
 
 See `docs/IMPLEMENTATION_BACKLOG.md` for the full roadmap.
 
@@ -54,6 +54,10 @@ await controller.play();
 - `positionStream`
 - `stateStream`
 - `dispose()`
+
+Rendering widget:
+
+- `NativeVideoView(controller: controller)`
 
 ## Architecture
 

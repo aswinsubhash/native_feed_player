@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.TextureView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -36,6 +37,7 @@ internal class ExoPlayerManager(
     private val preloadedPlayers = mutableMapOf<Int, PreloadedPlayer>()
     private val recycledPlayers = ArrayDeque<ExoPlayer>()
     private val sourcesByIndex = mutableMapOf<Int, String>()
+    private val attachedTextureByController = mutableMapOf<Int, TextureView>()
     private val handler = Handler(Looper.getMainLooper())
 
     private var maxCachedPlayers = 5
@@ -113,6 +115,9 @@ internal class ExoPlayerManager(
             index = index
         )
         creationOrder.addLast(controllerId)
+        attachedTextureByController[controllerId]?.let { texture ->
+            player.setVideoTextureView(texture)
+        }
 
         if (player.playbackState == Player.STATE_IDLE) {
             onState(controllerId, "preparing")
@@ -159,6 +164,19 @@ internal class ExoPlayerManager(
         schedulePreloadWindow()
     }
 
+    fun attachControllerToView(
+        controllerId: Int,
+        textureView: TextureView
+    ) {
+        attachedTextureByController[controllerId] = textureView
+        managedPlayers[controllerId]?.player?.setVideoTextureView(textureView)
+    }
+
+    fun detachControllerFromView(controllerId: Int) {
+        val textureView = attachedTextureByController.remove(controllerId) ?: return
+        managedPlayers[controllerId]?.player?.clearVideoTextureView(textureView)
+    }
+
     fun onTrimMemory(level: Int) {
         when {
             level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE ||
@@ -183,6 +201,7 @@ internal class ExoPlayerManager(
         for (id in ids) {
             releaseController(controllerId = id, emitDisposed = true)
         }
+        attachedTextureByController.clear()
         releaseAllPreloadedPlayers()
         releaseAllPooledPlayers()
         sourcesByIndex.clear()
@@ -410,6 +429,9 @@ internal class ExoPlayerManager(
         val managedPlayer = managedPlayers.remove(controllerId) ?: return
         creationOrder.remove(controllerId)
         managedPlayer.player.removeListener(managedPlayer.listener)
+        attachedTextureByController.remove(controllerId)?.let { texture ->
+            managedPlayer.player.clearVideoTextureView(texture)
+        }
         recycleOrReleasePlayer(managedPlayer.player)
         if (emitDisposed) {
             onState(controllerId, "disposed")

@@ -56,6 +56,15 @@ class MockNativeReelsPlayerPlatform
   Future<void> setVisibleIndex(int index) async {}
 
   @override
+  Future<void> attachView({
+    required int controllerId,
+    required int viewId,
+  }) async {}
+
+  @override
+  Future<void> detachView({required int controllerId}) async {}
+
+  @override
   Future<void> dispose() async {}
 }
 

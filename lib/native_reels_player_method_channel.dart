@@ -147,6 +147,24 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
   }
 
   @override
+  Future<void> attachView({
+    required int controllerId,
+    required int viewId,
+  }) async {
+    await methodChannel.invokeMethod<void>('attachView', <String, Object?>{
+      'controllerId': controllerId,
+      'viewId': viewId,
+    });
+  }
+
+  @override
+  Future<void> detachView({required int controllerId}) async {
+    await methodChannel.invokeMethod<void>('detachView', <String, Object?>{
+      'controllerId': controllerId,
+    });
+  }
+
+  @override
   Future<void> dispose() async {
     await methodChannel.invokeMethod<void>('disposeAll');
     _stateStreams.clear();

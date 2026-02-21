@@ -92,6 +92,23 @@ class _MyAppState extends State<MyApp> {
               Text('Status: $_status'),
               Text('Position: ${_position.inMilliseconds} ms'),
               const SizedBox(height: 16),
+              SizedBox(
+                height: 240,
+                width: double.infinity,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: _controller == null
+                      ? const Center(child: CircularProgressIndicator())
+                      : ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: NativeVideoView(controller: _controller!),
+                        ),
+                ),
+              ),
+              const SizedBox(height: 16),
               FilledButton(
                 onPressed: _controller == null ? null : _play,
                 child: const Text('Play'),
@@ -103,8 +120,7 @@ class _MyAppState extends State<MyApp> {
               ),
               const SizedBox(height: 16),
               const Text(
-                'Milestone 2 note: playback, state, and position events are native. '
-                'Video rendering widget is still pending.',
+                'Milestone 5 note: this uses native platform views for rendering.',
               ),
             ],
           ),

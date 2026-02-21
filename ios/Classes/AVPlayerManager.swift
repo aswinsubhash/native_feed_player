@@ -38,6 +38,7 @@ final class AVPlayerManager {
   private var sourcesByIndex: [Int: String] = [:]
   private var preloadedAssets: [Int: PreloadedAsset] = [:]
   private var pooledPlayers: [AVPlayer] = []
+  private var attachedRenderViews: [Int: NativeVideoRenderView] = [:]
   private var maxCachedPlayers: Int = 5
   private var maxPooledPlayers: Int = 5
   private var preloadCount: Int = 2
@@ -128,6 +129,7 @@ final class AVPlayerManager {
 
     controllers[controllerId] = managed
     creationOrder.append(controllerId)
+    attachedRenderViews[controllerId]?.setPlayer(player)
     onState(controllerId, "preparing")
     startPositionTimerIfNeeded()
 
@@ -172,6 +174,22 @@ final class AVPlayerManager {
     schedulePreloadWindow()
   }
 
+  func attach(controllerId: Int, renderView: NativeVideoRenderView) {
+    attachedRenderViews[controllerId] = renderView
+    if let player = controllers[controllerId]?.player {
+      renderView.setPlayer(player)
+    } else {
+      renderView.setPlayer(nil)
+    }
+  }
+
+  func detach(controllerId: Int) {
+    guard let renderView = attachedRenderViews.removeValue(forKey: controllerId) else {
+      return
+    }
+    renderView.setPlayer(nil)
+  }
+
   func onMemoryWarning() {
     preloadGeneration += 1
     preloadedAssets.removeAll()
@@ -185,6 +203,10 @@ final class AVPlayerManager {
     for controllerId in ids {
       disposeControllerInternal(controllerId: controllerId, emitDisposed: true, shouldReschedule: false)
     }
+    for (_, renderView) in attachedRenderViews {
+      renderView.setPlayer(nil)
+    }
+    attachedRenderViews.removeAll()
     sourcesByIndex.removeAll()
     preloadedAssets.removeAll()
     creationOrder.removeAll()
@@ -208,6 +230,7 @@ final class AVPlayerManager {
     }
     managed.itemStatusObservation?.invalidate()
     managed.timeControlObservation?.invalidate()
+    attachedRenderViews.removeValue(forKey: controllerId)?.setPlayer(nil)
     recycleOrReleasePlayer(managed.player)
     if emitDisposed {
       onState(controllerId, "disposed")

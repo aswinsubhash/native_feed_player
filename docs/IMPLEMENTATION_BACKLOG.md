@@ -55,14 +55,15 @@
 
 ## Milestone 5: Platform View Rendering
 
-- [ ] iOS: `UIView` + `AVPlayerLayer` factory registration.
-- [ ] Android: `PlatformView` with `SurfaceView` or `TextureView`.
-- [ ] Dart `NativeVideoView` widget binding.
-- [ ] Attach/detach player on list item lifecycle changes.
+- [x] iOS: `UIView` + `AVPlayerLayer` factory registration.
+- [x] Android: `PlatformView` with `SurfaceView` or `TextureView`.
+- [x] Dart `NativeVideoView` widget binding.
+- [x] Attach/detach player on list item lifecycle changes.
 
 **Acceptance criteria**
 - Video renders inside Flutter list/grid cells.
 - Scroll remains smooth when rapidly changing visible index.
+- Full feed-level smoothness benchmarking still pending.
 
 ## Milestone 6: Production Hardening
 

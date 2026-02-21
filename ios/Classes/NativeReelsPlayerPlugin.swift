@@ -17,12 +17,16 @@ private final class EventSinkStreamHandler: NSObject, FlutterStreamHandler {
 }
 
 public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
+  private static let videoViewType = "native_reels_player/video_view"
+
   private let stateStreamHandler = EventSinkStreamHandler()
   private let positionStreamHandler = EventSinkStreamHandler()
 
   private var nextControllerId: Int = 1
   private var manager: AVPlayerManager?
   private var memoryWarningObserver: NSObjectProtocol?
+  private var videoViews: [Int64: NativeVideoPlatformView] = [:]
+  private var attachedControllerByViewId: [Int64: Int] = [:]
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let methodChannel = FlutterMethodChannel(
@@ -40,6 +44,15 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
 
     let instance = NativeReelsPlayerPlugin()
     instance.configureChannels(stateChannel: stateChannel, positionChannel: positionChannel)
+    let viewFactory = NativeVideoViewFactory(
+      onCreate: { [weak instance] viewId, view in
+        instance?.videoViews[viewId] = view
+      },
+      onDispose: { [weak instance] viewId in
+        instance?.handleVideoViewDisposed(viewId: viewId)
+      }
+    )
+    registrar.register(viewFactory, withId: videoViewType)
     registrar.addMethodCallDelegate(instance, channel: methodChannel)
   }
 
@@ -48,6 +61,8 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
       NotificationCenter.default.removeObserver(observer)
       memoryWarningObserver = nil
     }
+    videoViews.removeAll()
+    attachedControllerByViewId.removeAll()
     manager?.disposeAll()
   }
 
@@ -153,8 +168,54 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
       manager.clearCache()
       result(nil)
 
+    case "attachView":
+      let args = call.args()
+      let controllerId = args.intValue("controllerId", defaultValue: -1)
+      let viewId = Int64(args.intValue("viewId", defaultValue: -1))
+      guard controllerId > 0, viewId >= 0 else {
+        result(
+          FlutterError(
+            code: "invalid_attach",
+            message: "attachView requires valid controllerId and viewId.",
+            details: nil
+          )
+        )
+        return
+      }
+      guard let platformView = videoViews[viewId] else {
+        result(
+          FlutterError(
+            code: "view_not_found",
+            message: "No video view found for id=\(viewId).",
+            details: nil
+          )
+        )
+        return
+      }
+
+      if let previousController = attachedControllerByViewId[viewId], previousController != controllerId {
+        manager.detach(controllerId: previousController)
+      }
+      attachedControllerByViewId[viewId] = controllerId
+      manager.attach(controllerId: controllerId, renderView: platformView.renderView)
+      result(nil)
+
+    case "detachView":
+      let controllerId = call.args().intValue("controllerId", defaultValue: -1)
+      if controllerId > 0 {
+        manager.detach(controllerId: controllerId)
+        let staleViews = attachedControllerByViewId
+          .filter { $0.value == controllerId }
+          .map { $0.key }
+        for viewId in staleViews {
+          attachedControllerByViewId.removeValue(forKey: viewId)
+        }
+      }
+      result(nil)
+
     case "disposeAll":
       manager.disposeAll()
+      attachedControllerByViewId.removeAll()
       result(nil)
 
     default:
@@ -217,6 +278,14 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
         self?.positionStreamHandler.sink?(payload)
       }
     }
+  }
+
+  private func handleVideoViewDisposed(viewId: Int64) {
+    let controllerId = attachedControllerByViewId.removeValue(forKey: viewId)
+    if let controllerId {
+      manager?.detach(controllerId: controllerId)
+    }
+    videoViews.removeValue(forKey: viewId)
   }
 }
 
