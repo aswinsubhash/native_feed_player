@@ -10,4 +10,8 @@
   * iOS: `AVPlayer`
   * Android: Media3 `ExoPlayer`
 * Added native event channels for playback state and position updates.
+* Added milestone 3 pre-buffering primitives:
+  * index-window preload around visible item
+  * tuned Android `LoadControl` prewarm prepare
+  * stale preload cancellation using generation checks
 * Added architecture and implementation backlog docs.

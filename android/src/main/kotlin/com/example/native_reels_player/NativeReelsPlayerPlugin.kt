@@ -107,11 +107,13 @@ class NativeReelsPlayerPlugin : FlutterPlugin, MethodCallHandler {
                 }
                 val autoPlay = args.booleanValue("autoPlay", false)
                 val looping = args.booleanValue("looping", true)
+                val index = args.intValue("index", -1)
 
                 val controllerId = nextControllerId++
                 manager.createController(
                     controllerId = controllerId,
                     url = url,
+                    index = index,
                     autoPlay = autoPlay,
                     looping = looping
                 )

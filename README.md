@@ -10,6 +10,7 @@ Current state:
 - Dart API is implemented (`initialize`, `preload`, controllers, playback methods).
 - iOS/Android native playback managers are implemented for a single controller.
 - Native `state` and `position` events are emitted and mapped to Dart streams.
+- Native pre-buffering now uses visible-index windowing and stale-request cancellation.
 - Platform view rendering (`NativeVideoView`) is not implemented yet.
 
 See `docs/IMPLEMENTATION_BACKLOG.md` for the full roadmap.
