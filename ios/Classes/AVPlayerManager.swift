@@ -1,10 +1,15 @@
 import AVFoundation
 import Foundation
 
-/// AVPlayer lifecycle and event orchestration for a single-process player map.
+/// AVPlayer lifecycle and event orchestration for native reels playback.
 final class AVPlayerManager {
   typealias StateCallback = (_ controllerId: Int, _ state: String) -> Void
   typealias PositionCallback = (_ controllerId: Int, _ positionMs: Int64) -> Void
+
+  private struct PreloadedAsset {
+    let url: String
+    let asset: AVURLAsset
+  }
 
   private final class ManagedController {
     let id: Int
@@ -28,9 +33,12 @@ final class AVPlayerManager {
 
   private var controllers: [Int: ManagedController] = [:]
   private var creationOrder: [Int] = []
-  private var preloadedAssets: [String: AVURLAsset] = [:]
+  private var sourcesByIndex: [Int: String] = [:]
+  private var preloadedAssets: [Int: PreloadedAsset] = [:]
   private var maxCachedPlayers: Int = 5
   private var preloadCount: Int = 2
+  private var visibleIndex: Int = 0
+  private var preloadGeneration: Int = 0
   private var positionTimer: Timer?
 
   init(onState: @escaping StateCallback, onPosition: @escaping PositionCallback) {
@@ -45,35 +53,32 @@ final class AVPlayerManager {
   func initialize(maxCachedPlayers: Int, preloadCount: Int) {
     self.maxCachedPlayers = max(1, maxCachedPlayers)
     self.preloadCount = max(0, preloadCount)
+    schedulePreloadWindow()
   }
 
   func preload(sources: [[String: Any]]) {
-    preloadedAssets.removeAll()
-    guard preloadCount > 0 else {
-      return
+    sourcesByIndex.removeAll()
+    for source in sources {
+      guard let index = source["index"] as? Int else {
+        continue
+      }
+      guard let url = source["url"] as? String, !url.isEmpty else {
+        continue
+      }
+      sourcesByIndex[index] = url
     }
 
-    var loaded = 0
-    for source in sources {
-      if loaded >= preloadCount {
-        break
-      }
-      guard let urlString = source["url"] as? String else {
-        continue
-      }
-      guard let url = URL(string: urlString) else {
-        continue
-      }
-      let asset = AVURLAsset(url: url)
-      preloadedAssets[urlString] = asset
-      asset.loadValuesAsynchronously(forKeys: ["playable", "duration"])
-      loaded += 1
+    if !sourcesByIndex.isEmpty, sourcesByIndex[visibleIndex] == nil {
+      visibleIndex = sourcesByIndex.keys.min() ?? 0
     }
+
+    schedulePreloadWindow()
   }
 
   func createController(
     controllerId: Int,
     url: String,
+    index: Int,
     autoPlay: Bool,
     looping: Bool
   ) throws {
@@ -88,9 +93,11 @@ final class AVPlayerManager {
     evictToPoolSizeIfNeeded()
 
     let item: AVPlayerItem
-    if let preloadedAsset = preloadedAssets[url] {
-      item = AVPlayerItem(asset: preloadedAsset)
+    if let preloaded = preloadedAssets[index], preloaded.url == url {
+      item = AVPlayerItem(asset: preloaded.asset)
+      preloadedAssets.removeValue(forKey: index)
     } else {
+      preloadedAssets.removeValue(forKey: index)
       item = AVPlayerItem(url: sourceURL)
     }
 
@@ -107,6 +114,8 @@ final class AVPlayerManager {
     if autoPlay {
       player.play()
     }
+
+    schedulePreloadWindow()
   }
 
   func play(controllerId: Int) {
@@ -141,25 +150,101 @@ final class AVPlayerManager {
     managed.player.replaceCurrentItem(with: nil)
     onState(controllerId, "disposed")
     stopPositionTimerIfNeeded()
+    schedulePreloadWindow()
   }
 
   func clearCache() {
+    preloadGeneration += 1
+    sourcesByIndex.removeAll()
     preloadedAssets.removeAll()
   }
 
   func setVisibleIndex(index: Int) {
-    // Intentionally no-op for milestone 2.
+    visibleIndex = index
+    schedulePreloadWindow()
   }
 
   func disposeAll() {
+    preloadGeneration += 1
     let ids = Array(controllers.keys)
     for controllerId in ids {
       disposeController(controllerId: controllerId)
     }
+    sourcesByIndex.removeAll()
     preloadedAssets.removeAll()
     creationOrder.removeAll()
     positionTimer?.invalidate()
     positionTimer = nil
+  }
+
+  private func schedulePreloadWindow() {
+    preloadGeneration += 1
+    let generation = preloadGeneration
+    let targetIndices = preloadWindowIndices()
+
+    let stale = preloadedAssets.keys.filter { !targetIndices.contains($0) }
+    for index in stale {
+      preloadedAssets.removeValue(forKey: index)
+    }
+
+    for index in targetIndices.sorted() {
+      guard let urlString = sourcesByIndex[index], let url = URL(string: urlString) else {
+        continue
+      }
+
+      if let existing = preloadedAssets[index], existing.url == urlString {
+        continue
+      }
+
+      let asset = AVURLAsset(url: url)
+      let keys = ["playable", "duration"]
+
+      asset.loadValuesAsynchronously(forKeys: keys) { [weak self] in
+        DispatchQueue.main.async {
+          guard let self else {
+            return
+          }
+          guard generation == self.preloadGeneration else {
+            return
+          }
+          guard self.sourcesByIndex[index] == urlString else {
+            self.preloadedAssets.removeValue(forKey: index)
+            return
+          }
+
+          var playableError: NSError?
+          let playableStatus = asset.statusOfValue(
+            forKey: "playable",
+            error: &playableError
+          )
+
+          if playableStatus == .loaded || playableStatus == .unknown {
+            self.preloadedAssets[index] = PreloadedAsset(url: urlString, asset: asset)
+          } else {
+            self.preloadedAssets.removeValue(forKey: index)
+          }
+        }
+      }
+    }
+  }
+
+  private func preloadWindowIndices() -> Set<Int> {
+    guard preloadCount > 0, !sourcesByIndex.isEmpty else {
+      return []
+    }
+
+    guard let minIndex = sourcesByIndex.keys.min(),
+      let maxIndex = sourcesByIndex.keys.max()
+    else {
+      return []
+    }
+
+    let start = max(minIndex, visibleIndex - preloadCount)
+    let end = min(maxIndex, visibleIndex + preloadCount)
+    if start > end {
+      return []
+    }
+    return Set(start...end)
   }
 
   private func evictToPoolSizeIfNeeded() {

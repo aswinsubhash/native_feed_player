@@ -29,14 +29,15 @@
 
 ## Milestone 3: Pre-buffering
 
-- [ ] iOS: preload `AVAsset` keys (`playable`, `duration`) in background.
-- [ ] Android: preload media with `prepare()` and tuned `LoadControl`.
-- [ ] Add configurable preload window around current index.
-- [ ] Implement cancellation for stale preload requests during fast flings.
+- [x] iOS: preload `AVAsset` keys (`playable`, `duration`) in background.
+- [x] Android: preload media with `prepare()` and tuned `LoadControl`.
+- [x] Add configurable preload window around current index.
+- [x] Implement cancellation for stale preload requests during fast flings.
 
 **Acceptance criteria**
 - Adjacent video starts in <150ms after scroll settle (Wi-Fi baseline).
 - Spinner rate is significantly lower than `video_player` baseline.
+- Benchmark validation still pending on physical device matrix.
 
 ## Milestone 4: Memory and Pooling
 

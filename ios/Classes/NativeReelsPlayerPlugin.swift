@@ -93,6 +93,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin {
         try manager.createController(
           controllerId: controllerId,
           url: url,
+          index: args.intValue("index", defaultValue: -1),
           autoPlay: args.boolValue("autoPlay", defaultValue: false),
           looping: args.boolValue("looping", defaultValue: true)
         )

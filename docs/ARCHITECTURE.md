@@ -44,6 +44,7 @@ native_reels_player/
 - `ExoPlayerManager` / `AVPlayerManager`
   - owns real single-controller native playback lifecycle.
   - emits playback state and periodic position updates to Flutter.
+  - manages visible-index preload windows and stale-preload cancellation.
 - `VideoPool`
   - still a placeholder for advanced pooling milestones.
 

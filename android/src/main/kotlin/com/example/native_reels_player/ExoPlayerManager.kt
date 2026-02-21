@@ -7,7 +7,9 @@ import android.os.Looper
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
 import java.util.ArrayDeque
 
 internal class ExoPlayerManager(
@@ -20,15 +22,24 @@ internal class ExoPlayerManager(
         val listener: Player.Listener
     )
 
+    private data class PreloadedPlayer(
+        val url: String,
+        val player: ExoPlayer
+    )
+
     private val appContext = context.applicationContext
     private val managedPlayers = mutableMapOf<Int, ManagedPlayer>()
     private val creationOrder = ArrayDeque<Int>()
-    private val preloadedMediaItems = mutableMapOf<String, MediaItem>()
+    private val preloadedPlayers = mutableMapOf<Int, PreloadedPlayer>()
+    private val sourcesByIndex = mutableMapOf<Int, String>()
     private val handler = Handler(Looper.getMainLooper())
 
     private var maxCachedPlayers = 5
     private var preloadCount = 2
+    private var visibleIndex = 0
+    private var preloadGeneration = 0
     private var tickerRunning = false
+    private var loadControl: LoadControl = createLoadControl()
 
     private val positionTicker = object : Runnable {
         override fun run() {
@@ -44,35 +55,48 @@ internal class ExoPlayerManager(
     fun initialize(maxCachedPlayers: Int, preloadCount: Int) {
         this.maxCachedPlayers = maxOf(1, maxCachedPlayers)
         this.preloadCount = maxOf(0, preloadCount)
+        this.loadControl = createLoadControl()
+        schedulePreloadWindow()
     }
 
     fun preload(sources: List<Map<*, *>>) {
-        preloadedMediaItems.clear()
-        if (preloadCount == 0) {
-            return
+        sourcesByIndex.clear()
+        for (source in sources) {
+            val index = (source["index"] as? Number)?.toInt() ?: continue
+            val url = source["url"] as? String ?: continue
+            if (url.isBlank()) {
+                continue
+            }
+            sourcesByIndex[index] = url
         }
 
-        var loaded = 0
-        for (source in sources) {
-            if (loaded >= preloadCount) {
-                break
-            }
-            val url = source["url"] as? String ?: continue
-            val uri = Uri.parse(url)
-            preloadedMediaItems[url] = MediaItem.fromUri(uri)
-            loaded += 1
+        if (sourcesByIndex.isNotEmpty() && visibleIndex !in sourcesByIndex.keys) {
+            visibleIndex = sourcesByIndex.keys.minOrNull() ?: 0
         }
+
+        schedulePreloadWindow()
     }
 
     fun createController(
         controllerId: Int,
         url: String,
+        index: Int,
         autoPlay: Boolean,
         looping: Boolean
     ) {
         evictToPoolSizeIfNeeded()
 
-        val player = ExoPlayer.Builder(appContext).build()
+        val preloaded = preloadedPlayers.remove(index)
+        val player = if (preloaded != null && preloaded.url == url) {
+            preloaded.player
+        } else {
+            preloaded?.player?.release()
+            createConfiguredPlayer().apply {
+                setMediaItem(MediaItem.fromUri(Uri.parse(url)))
+                prepare()
+            }
+        }
+
         val listener = playerListener(controllerId, player)
         player.addListener(listener)
         player.repeatMode = if (looping) {
@@ -81,17 +105,22 @@ internal class ExoPlayerManager(
             Player.REPEAT_MODE_OFF
         }
 
-        val mediaItem = preloadedMediaItems[url] ?: MediaItem.fromUri(Uri.parse(url))
-        player.setMediaItem(mediaItem)
-        onState(controllerId, "preparing")
-        player.prepare()
+        managedPlayers[controllerId] = ManagedPlayer(player = player, listener = listener)
+        creationOrder.addLast(controllerId)
+
+        if (player.playbackState == Player.STATE_IDLE) {
+            onState(controllerId, "preparing")
+            player.prepare()
+        } else {
+            emitCurrentPlaybackState(controllerId, player)
+        }
+
         if (autoPlay) {
             player.playWhenReady = true
         }
 
-        managedPlayers[controllerId] = ManagedPlayer(player = player, listener = listener)
-        creationOrder.addLast(controllerId)
         startTickerIfNeeded()
+        schedulePreloadWindow()
     }
 
     fun play(controllerId: Int) {
@@ -108,25 +137,94 @@ internal class ExoPlayerManager(
 
     fun disposeController(controllerId: Int) {
         releaseController(controllerId = controllerId, emitDisposed = true)
+        schedulePreloadWindow()
     }
 
     fun clearCache() {
-        preloadedMediaItems.clear()
+        preloadGeneration += 1
+        sourcesByIndex.clear()
+        releaseAllPreloadedPlayers()
     }
 
     fun setVisibleIndex(index: Int) {
-        // Intentionally no-op for milestone 2.
+        visibleIndex = index
+        schedulePreloadWindow()
     }
 
     fun disposeAll() {
+        preloadGeneration += 1
         val ids = managedPlayers.keys.toList()
         for (id in ids) {
             releaseController(controllerId = id, emitDisposed = true)
         }
-        preloadedMediaItems.clear()
+        releaseAllPreloadedPlayers()
+        sourcesByIndex.clear()
         creationOrder.clear()
         handler.removeCallbacks(positionTicker)
         tickerRunning = false
+    }
+
+    private fun schedulePreloadWindow() {
+        preloadGeneration += 1
+        val generation = preloadGeneration
+        val targetWindow = preloadWindowIndices()
+
+        val staleIndices = preloadedPlayers.keys.filter { it !in targetWindow }.toList()
+        for (index in staleIndices) {
+            releasePreloadedPlayer(index)
+        }
+
+        for (index in targetWindow.sorted()) {
+            val url = sourcesByIndex[index] ?: continue
+            val existing = preloadedPlayers[index]
+            if (existing != null && existing.url == url) {
+                continue
+            }
+            if (existing != null) {
+                releasePreloadedPlayer(index)
+            }
+
+            handler.post {
+                if (generation != preloadGeneration) {
+                    return@post
+                }
+                val freshUrl = sourcesByIndex[index] ?: return@post
+                if (preloadedPlayers.containsKey(index)) {
+                    return@post
+                }
+
+                val player = createConfiguredPlayer()
+                player.repeatMode = Player.REPEAT_MODE_OFF
+                player.playWhenReady = false
+                player.setMediaItem(MediaItem.fromUri(Uri.parse(freshUrl)))
+                player.prepare()
+                preloadedPlayers[index] = PreloadedPlayer(url = freshUrl, player = player)
+            }
+        }
+    }
+
+    private fun preloadWindowIndices(): Set<Int> {
+        if (preloadCount <= 0 || sourcesByIndex.isEmpty()) {
+            return emptySet()
+        }
+
+        val minIndex = sourcesByIndex.keys.minOrNull() ?: return emptySet()
+        val maxIndex = sourcesByIndex.keys.maxOrNull() ?: return emptySet()
+        val start = maxOf(minIndex, visibleIndex - preloadCount)
+        val end = minOf(maxIndex, visibleIndex + preloadCount)
+        if (start > end) {
+            return emptySet()
+        }
+        return (start..end).toSet()
+    }
+
+    private fun emitCurrentPlaybackState(controllerId: Int, player: ExoPlayer) {
+        when (player.playbackState) {
+            Player.STATE_IDLE -> onState(controllerId, "idle")
+            Player.STATE_BUFFERING -> onState(controllerId, "buffering")
+            Player.STATE_READY -> onState(controllerId, if (player.isPlaying) "playing" else "ready")
+            Player.STATE_ENDED -> onState(controllerId, "completed")
+        }
     }
 
     private fun evictToPoolSizeIfNeeded() {
@@ -182,6 +280,23 @@ internal class ExoPlayerManager(
         handler.post(positionTicker)
     }
 
+    private fun createConfiguredPlayer(): ExoPlayer {
+        return ExoPlayer.Builder(appContext)
+            .setLoadControl(loadControl)
+            .build()
+    }
+
+    private fun createLoadControl(): LoadControl {
+        return DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 2000,
+                /* maxBufferMs = */ 10000,
+                /* bufferForPlaybackMs = */ 1000,
+                /* bufferForPlaybackAfterRebufferMs = */ 2000
+            )
+            .build()
+    }
+
     private fun releaseController(
         controllerId: Int,
         emitDisposed: Boolean
@@ -193,6 +308,19 @@ internal class ExoPlayerManager(
         managedPlayer.player.release()
         if (emitDisposed) {
             onState(controllerId, "disposed")
+        }
+    }
+
+    private fun releasePreloadedPlayer(index: Int) {
+        val preloaded = preloadedPlayers.remove(index) ?: return
+        preloaded.player.stop()
+        preloaded.player.release()
+    }
+
+    private fun releaseAllPreloadedPlayers() {
+        val indices = preloadedPlayers.keys.toList()
+        for (index in indices) {
+            releasePreloadedPlayer(index)
         }
     }
 
