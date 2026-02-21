@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'native_reels_player_platform_interface.dart';
+import 'src/video_metrics.dart';
 import 'src/video_models.dart';
 import 'src/video_playback_state.dart';
 
@@ -19,6 +20,9 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
     'native_reels_player/position',
   );
 
+  @visibleForTesting
+  final metricsEventChannel = const EventChannel('native_reels_player/metrics');
+
   late final Stream<Map<dynamic, dynamic>> _rawStateEvents = stateEventChannel
       .receiveBroadcastStream()
       .where((Object? event) => event is Map<dynamic, dynamic>)
@@ -32,9 +36,18 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
           .cast<Map<dynamic, dynamic>>()
           .asBroadcastStream();
 
+  late final Stream<Map<dynamic, dynamic>> _rawMetricsEvents =
+      metricsEventChannel
+          .receiveBroadcastStream()
+          .where((Object? event) => event is Map<dynamic, dynamic>)
+          .cast<Map<dynamic, dynamic>>()
+          .asBroadcastStream();
+
   final Map<int, Stream<VideoPlaybackState>> _stateStreams =
       <int, Stream<VideoPlaybackState>>{};
   final Map<int, Stream<Duration>> _positionStreams = <int, Stream<Duration>>{};
+  final Map<int, Stream<VideoMetrics>> _metricsStreams =
+      <int, Stream<VideoMetrics>>{};
 
   @override
   Future<void> initialize({required NativeReelsConfig config}) async {
@@ -80,6 +93,7 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
     );
     _stateStreams.remove(controllerId);
     _positionStreams.remove(controllerId);
+    _metricsStreams.remove(controllerId);
   }
 
   @override
@@ -135,6 +149,18 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
   }
 
   @override
+  Stream<VideoMetrics> metricsStream(int controllerId) {
+    return _metricsStreams.putIfAbsent(controllerId, () {
+      return _rawMetricsEvents
+          .where(
+            (Map<dynamic, dynamic> event) =>
+                event['controllerId'] == controllerId,
+          )
+          .map(VideoMetrics.fromEventMap);
+    });
+  }
+
+  @override
   Future<void> clearCache() async {
     await methodChannel.invokeMethod<void>('clearCache');
   }
@@ -169,6 +195,7 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
     await methodChannel.invokeMethod<void>('disposeAll');
     _stateStreams.clear();
     _positionStreams.clear();
+    _metricsStreams.clear();
   }
 
   int _asInt(Object? value) {

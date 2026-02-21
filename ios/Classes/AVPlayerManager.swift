@@ -5,10 +5,19 @@ import Foundation
 final class AVPlayerManager {
   typealias StateCallback = (_ controllerId: Int, _ state: String) -> Void
   typealias PositionCallback = (_ controllerId: Int, _ positionMs: Int64) -> Void
+  typealias MetricsCallback = (_ controllerId: Int, _ metrics: [String: Any]) -> Void
 
   private struct PreloadedAsset {
     let url: String
     let asset: AVURLAsset
+  }
+
+  private struct PlaybackMetrics {
+    let createdAtMs: Int64 = AVPlayerManager.currentUptimeMs()
+    var firstFrameLatencyMs: Int64?
+    var rebufferCount: Int = 0
+    var droppedFramesEstimate: Int = 0
+    var hasReady: Bool = false
   }
 
   private final class ManagedController {
@@ -32,11 +41,13 @@ final class AVPlayerManager {
 
   private let onState: StateCallback
   private let onPosition: PositionCallback
+  private let onMetrics: MetricsCallback
 
   private var controllers: [Int: ManagedController] = [:]
   private var creationOrder: [Int] = []
   private var sourcesByIndex: [Int: String] = [:]
   private var preloadedAssets: [Int: PreloadedAsset] = [:]
+  private var metricsByController: [Int: PlaybackMetrics] = [:]
   private var pooledPlayers: [AVPlayer] = []
   private var attachedRenderViews: [Int: NativeVideoRenderView] = [:]
   private var maxCachedPlayers: Int = 5
@@ -47,9 +58,14 @@ final class AVPlayerManager {
   private var preloadGeneration: Int = 0
   private var positionTimer: Timer?
 
-  init(onState: @escaping StateCallback, onPosition: @escaping PositionCallback) {
+  init(
+    onState: @escaping StateCallback,
+    onPosition: @escaping PositionCallback,
+    onMetrics: @escaping MetricsCallback
+  ) {
     self.onState = onState
     self.onPosition = onPosition
+    self.onMetrics = onMetrics
   }
 
   deinit {
@@ -129,6 +145,8 @@ final class AVPlayerManager {
 
     controllers[controllerId] = managed
     creationOrder.append(controllerId)
+    metricsByController[controllerId] = PlaybackMetrics()
+    emitMetrics(controllerId)
     attachedRenderViews[controllerId]?.setPlayer(player)
     onState(controllerId, "preparing")
     startPositionTimerIfNeeded()
@@ -209,6 +227,7 @@ final class AVPlayerManager {
     attachedRenderViews.removeAll()
     sourcesByIndex.removeAll()
     preloadedAssets.removeAll()
+    metricsByController.removeAll()
     creationOrder.removeAll()
     drainPooledPlayers(keep: 0)
     positionTimer?.invalidate()
@@ -231,6 +250,7 @@ final class AVPlayerManager {
     managed.itemStatusObservation?.invalidate()
     managed.timeControlObservation?.invalidate()
     attachedRenderViews.removeValue(forKey: controllerId)?.setPlayer(nil)
+    metricsByController.removeValue(forKey: controllerId)
     recycleOrReleasePlayer(managed.player)
     if emitDisposed {
       onState(controllerId, "disposed")
@@ -367,6 +387,11 @@ final class AVPlayerManager {
       }
       switch item.status {
       case .readyToPlay:
+        if var metrics = self.metricsByController[managed.id] {
+          metrics.hasReady = true
+          self.metricsByController[managed.id] = metrics
+          self.emitMetrics(managed.id)
+        }
         self.onState(managed.id, "ready")
       case .failed:
         self.onState(managed.id, "error")
@@ -389,8 +414,22 @@ final class AVPlayerManager {
         let state = player.currentItem?.status == .readyToPlay ? "paused" : "idle"
         self.onState(managed.id, state)
       case .waitingToPlayAtSpecifiedRate:
+        if var metrics = self.metricsByController[managed.id], metrics.hasReady {
+          metrics.rebufferCount += 1
+          self.metricsByController[managed.id] = metrics
+          self.emitMetrics(managed.id)
+        }
         self.onState(managed.id, "buffering")
       case .playing:
+        if var metrics = self.metricsByController[managed.id] {
+          metrics.hasReady = true
+          if metrics.firstFrameLatencyMs == nil {
+            let latency = max(0, AVPlayerManager.currentUptimeMs() - metrics.createdAtMs)
+            metrics.firstFrameLatencyMs = latency
+          }
+          self.metricsByController[managed.id] = metrics
+          self.emitMetrics(managed.id)
+        }
         self.onState(managed.id, "playing")
       @unknown default:
         self.onState(managed.id, "error")
@@ -437,11 +476,47 @@ final class AVPlayerManager {
 
   private func emitPositions() {
     for (controllerId, managed) in controllers {
+      updateAccessLogMetrics(controllerId: controllerId, item: managed.player.currentItem)
       let seconds = managed.player.currentTime().seconds
       guard seconds.isFinite, seconds >= 0 else {
         continue
       }
       onPosition(controllerId, Int64(seconds * 1000))
+    }
+  }
+
+  private func emitMetrics(_ controllerId: Int) {
+    guard let metrics = metricsByController[controllerId] else {
+      return
+    }
+    let payload: [String: Any] = [
+      "controllerId": controllerId,
+      "rebufferCount": metrics.rebufferCount,
+      "droppedFramesEstimate": metrics.droppedFramesEstimate,
+      "firstFrameLatencyMs": metrics.firstFrameLatencyMs as Any,
+      "timestampMs": Int64(Date().timeIntervalSince1970 * 1000),
+    ]
+    onMetrics(controllerId, payload)
+  }
+
+  private func updateAccessLogMetrics(controllerId: Int, item: AVPlayerItem?) {
+    guard let item,
+      var metrics = metricsByController[controllerId],
+      let events = item.accessLog()?.events,
+      !events.isEmpty
+    else {
+      return
+    }
+
+    var droppedTotal = 0
+    for event in events {
+      droppedTotal += max(0, Int(event.numberOfDroppedVideoFrames))
+    }
+
+    if droppedTotal != metrics.droppedFramesEstimate {
+      metrics.droppedFramesEstimate = droppedTotal
+      metricsByController[controllerId] = metrics
+      emitMetrics(controllerId)
     }
   }
 
@@ -465,5 +540,9 @@ final class AVPlayerManager {
     while pooledPlayers.count > keep {
       _ = pooledPlayers.popLast()
     }
+  }
+
+  private static func currentUptimeMs() -> Int64 {
+    Int64(DispatchTime.now().uptimeNanoseconds / 1_000_000)
   }
 }

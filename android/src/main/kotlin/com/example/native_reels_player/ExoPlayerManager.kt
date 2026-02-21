@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.TextureView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -12,23 +13,34 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import java.util.ArrayDeque
 import kotlin.math.abs
 
 internal class ExoPlayerManager(
     context: Context,
     private val onState: (controllerId: Int, state: String) -> Unit,
-    private val onPosition: (controllerId: Int, positionMs: Long) -> Unit
+    private val onPosition: (controllerId: Int, positionMs: Long) -> Unit,
+    private val onMetrics: (controllerId: Int, metrics: Map<String, Any?>) -> Unit
 ) {
     private data class ManagedPlayer(
         val player: ExoPlayer,
         val listener: Player.Listener,
+        val analyticsListener: AnalyticsListener,
         val index: Int
     )
 
     private data class PreloadedPlayer(
         val url: String,
         val player: ExoPlayer
+    )
+
+    private data class PlaybackMetrics(
+        val createdAtMs: Long = SystemClock.elapsedRealtime(),
+        var firstFrameLatencyMs: Long? = null,
+        var rebufferCount: Int = 0,
+        var droppedFramesEstimate: Int = 0,
+        var hasReady: Boolean = false
     )
 
     private val appContext = context.applicationContext
@@ -38,6 +50,7 @@ internal class ExoPlayerManager(
     private val recycledPlayers = ArrayDeque<ExoPlayer>()
     private val sourcesByIndex = mutableMapOf<Int, String>()
     private val attachedTextureByController = mutableMapOf<Int, TextureView>()
+    private val metricsByController = mutableMapOf<Int, PlaybackMetrics>()
     private val handler = Handler(Looper.getMainLooper())
 
     private var maxCachedPlayers = 5
@@ -101,8 +114,12 @@ internal class ExoPlayerManager(
         evictToPoolSizeIfNeeded()
 
         val player = obtainPlayerFor(url = url, index = index)
+        val metrics = PlaybackMetrics()
+        metricsByController[controllerId] = metrics
         val listener = playerListener(controllerId, player)
+        val analyticsListener = analyticsListener(controllerId)
         player.addListener(listener)
+        player.addAnalyticsListener(analyticsListener)
         player.repeatMode = if (looping) {
             Player.REPEAT_MODE_ONE
         } else {
@@ -112,6 +129,7 @@ internal class ExoPlayerManager(
         managedPlayers[controllerId] = ManagedPlayer(
             player = player,
             listener = listener,
+            analyticsListener = analyticsListener,
             index = index
         )
         creationOrder.addLast(controllerId)
@@ -130,6 +148,7 @@ internal class ExoPlayerManager(
             player.playWhenReady = true
         }
 
+        emitMetrics(controllerId)
         startTickerIfNeeded()
         enforceVisibleWindowEviction()
         schedulePreloadWindow()
@@ -202,6 +221,7 @@ internal class ExoPlayerManager(
             releaseController(controllerId = id, emitDisposed = true)
         }
         attachedTextureByController.clear()
+        metricsByController.clear()
         releaseAllPreloadedPlayers()
         releaseAllPooledPlayers()
         sourcesByIndex.clear()
@@ -365,10 +385,19 @@ internal class ExoPlayerManager(
     private fun playerListener(controllerId: Int, player: ExoPlayer): Player.Listener {
         return object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
+                val metrics = metricsByController[controllerId]
                 when (playbackState) {
                     Player.STATE_IDLE -> onState(controllerId, "idle")
-                    Player.STATE_BUFFERING -> onState(controllerId, "buffering")
+                    Player.STATE_BUFFERING -> {
+                        if (metrics?.hasReady == true) {
+                            metrics.rebufferCount += 1
+                            emitMetrics(controllerId)
+                        }
+                        onState(controllerId, "buffering")
+                    }
                     Player.STATE_READY -> {
+                        metrics?.hasReady = true
+                        emitMetrics(controllerId)
                         val state = if (player.isPlaying) "playing" else "ready"
                         onState(controllerId, state)
                     }
@@ -384,7 +413,47 @@ internal class ExoPlayerManager(
             override fun onPlayerError(error: PlaybackException) {
                 onState(controllerId, "error")
             }
+
+            override fun onRenderedFirstFrame() {
+                val metrics = metricsByController[controllerId] ?: return
+                if (metrics.firstFrameLatencyMs == null) {
+                    val now = SystemClock.elapsedRealtime()
+                    metrics.firstFrameLatencyMs = (now - metrics.createdAtMs).coerceAtLeast(0L)
+                    emitMetrics(controllerId)
+                }
+            }
         }
+    }
+
+    private fun analyticsListener(controllerId: Int): AnalyticsListener {
+        return object : AnalyticsListener {
+            override fun onDroppedVideoFrames(
+                eventTime: AnalyticsListener.EventTime,
+                droppedFrames: Int,
+                elapsedMs: Long
+            ) {
+                if (droppedFrames <= 0) {
+                    return
+                }
+                val metrics = metricsByController[controllerId] ?: return
+                metrics.droppedFramesEstimate += droppedFrames
+                emitMetrics(controllerId)
+            }
+        }
+    }
+
+    private fun emitMetrics(controllerId: Int) {
+        val metrics = metricsByController[controllerId] ?: return
+        onMetrics(
+            controllerId,
+            mapOf(
+                "controllerId" to controllerId,
+                "rebufferCount" to metrics.rebufferCount,
+                "droppedFramesEstimate" to metrics.droppedFramesEstimate,
+                "firstFrameLatencyMs" to metrics.firstFrameLatencyMs,
+                "timestampMs" to System.currentTimeMillis()
+            )
+        )
     }
 
     private fun emitPositions() {
@@ -429,9 +498,11 @@ internal class ExoPlayerManager(
         val managedPlayer = managedPlayers.remove(controllerId) ?: return
         creationOrder.remove(controllerId)
         managedPlayer.player.removeListener(managedPlayer.listener)
+        managedPlayer.player.removeAnalyticsListener(managedPlayer.analyticsListener)
         attachedTextureByController.remove(controllerId)?.let { texture ->
             managedPlayer.player.clearVideoTextureView(texture)
         }
+        metricsByController.remove(controllerId)
         recycleOrReleasePlayer(managedPlayer.player)
         if (emitDisposed) {
             onState(controllerId, "disposed")

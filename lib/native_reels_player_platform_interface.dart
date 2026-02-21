@@ -1,6 +1,7 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'native_reels_player_method_channel.dart';
+import 'src/video_metrics.dart';
 import 'src/video_models.dart';
 import 'src/video_playback_state.dart';
 
@@ -47,6 +48,8 @@ abstract class NativeReelsPlayerPlatform extends PlatformInterface {
   Stream<Duration> positionStream(int controllerId);
 
   Stream<VideoPlaybackState> stateStream(int controllerId);
+
+  Stream<VideoMetrics> metricsStream(int controllerId);
 
   Future<void> clearCache();
 
