@@ -174,25 +174,17 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     }
 
     override fun evictCachedMedia(request: SourceIdsRequest) {
-        // Wired to the disk cache in a later phase; preload state is dropped so
-        // the next request re-fetches.
-        managerOrThrow().removeSources(emptyList())
+        managerOrThrow().evictCachedMedia(request.sourceIds)
     }
 
     override fun clearMediaCache() {
-        // No persistent cache yet; see docs/ARCHITECTURE.md for the roadmap.
+        managerOrThrow().clearMediaCache()
     }
 
-    override fun cacheStatus(request: VisibleSourceRequest): CacheStatusMessage {
-        return CacheStatusMessage(
-            sourceId = request.sourceId,
-            cachedBytes = 0,
-            totalBytes = 0,
-            isComplete = false
-        )
-    }
+    override fun cacheStatus(request: VisibleSourceRequest): CacheStatusMessage =
+        managerOrThrow().cacheStatus(request.sourceId)
 
-    override fun cacheUsageBytes(): Long = 0
+    override fun cacheUsageBytes(): Long = managerOrThrow().cacheUsageBytes()
 
     override fun attachView(request: AttachViewRequest) {
         val controllerId = request.controllerId.toInt()

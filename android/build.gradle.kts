@@ -1,6 +1,8 @@
 group = "com.example.native_feed_player"
 version = "1.0-SNAPSHOT"
 
+val media3Version = "1.11.0"
+
 buildscript {
     val kotlinVersion = "2.2.20"
     repositories {
@@ -71,7 +73,12 @@ android {
 }
 
 dependencies {
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    // 1.11.0 brings DefaultPreloadManager, which preloads at the MediaSource
+    // level instead of requiring a whole ExoPlayer per upcoming item.
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-datasource:$media3Version")
+    implementation("androidx.media3:media3-database:$media3Version")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")
