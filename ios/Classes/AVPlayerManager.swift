@@ -544,24 +544,21 @@ final class AVPlayerManager {
           uri: fresh.uri,
           item: item
         )
-        if distance <= 1 {
-          self.prerollImmediateNeighbour(item)
-        }
       }
     }
   }
 
-  /// Warms the render pipeline for the item most likely to be shown next.
+  /// Primes the decode pipeline so `play()` starts without a visible hitch.
   ///
-  /// Preparing an item only loads media; `preroll` also primes decoding, which
-  /// is what removes the visible hitch on the first frame after a swipe. It
-  /// needs a player, so a throwaway muted one is used and discarded.
-  private func prerollImmediateNeighbour(_ item: AVPlayerItem) {
-    let warmupPlayer = AVQueuePlayer(items: [item])
-    warmupPlayer.volume = 0
-    warmupPlayer.preroll(atRate: 1.0) { [weak warmupPlayer] _ in
-      warmupPlayer?.removeAllItems()
+  /// `preroll(atRate:)` raises an Objective-C exception unless the player is
+  /// already `.readyToPlay`, which Swift cannot catch, so the status is checked
+  /// first. It also has to run on the player that will actually present the
+  /// item: prerolling a throwaway player warms state that is then discarded.
+  private func prerollIfReady(_ player: AVPlayer) {
+    guard player.status == .readyToPlay else {
+      return
     }
+    player.preroll(atRate: 1.0, completionHandler: nil)
   }
 
   private func takePreparedItem(for source: RegisteredSource) -> AVPlayerItem? {
@@ -845,6 +842,7 @@ final class AVPlayerManager {
           self.metricsByController[managed.id] = metrics
           self.emitMetrics(managed.id)
         }
+        self.prerollIfReady(managed.player)
         self.onState(managed.id, .ready, nil)
       case .failed:
         self.onState(

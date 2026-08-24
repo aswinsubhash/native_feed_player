@@ -84,12 +84,6 @@
 
 ## Known Issues
 
-- [ ] **iOS unit-test host crashes at teardown.** Every `RunnerTests` case
-  passes, but the Flutter Runner test host exits with
-  `Early unexpected exit ... Crash: Runner at <external symbol>` after the
-  final case in a suite, so `xcodebuild test` reports failure regardless of
-  results. The CI step is marked `continue-on-error` until this is fixed, and
-  must be made blocking afterwards.
 - [ ] **Rendering default is unmeasured.** `RenderMode.platformView` is the
   default because it is the exercised path, not because it won a benchmark.
   `doc/RENDERING_BENCHMARK.md` holds the procedure and the table to fill from

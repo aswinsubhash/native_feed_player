@@ -115,12 +115,6 @@ jobs:
 
       - name: Plugin unit tests
         working-directory: example/ios
-        # Every test currently passes, but the Flutter Runner test host crashes
-        # during suite teardown ("Early unexpected exit ... Crash: Runner"),
-        # which xcodebuild reports as a run failure regardless of results. The
-        # step stays visible instead of being deleted, and must be made blocking
-        # once the host teardown is fixed. See doc/IMPLEMENTATION_BACKLOG.md.
-        continue-on-error: true
         run: |
           xcodebuild test \
             -workspace Runner.xcworkspace \
