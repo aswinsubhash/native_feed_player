@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:label="native_reels_player_example"
+        android:label="native_feed_player_example"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

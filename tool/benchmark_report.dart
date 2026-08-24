@@ -58,7 +58,7 @@ void main(List<String> args) {
   if (summaries.isEmpty) {
     stderr.writeln(
       'No benchmark summary lines found. Expected lines prefixed with '
-      '`NRP_BENCHMARK_SUMMARY `.',
+      '`NFP_BENCHMARK_SUMMARY `.',
     );
     exitCode = 65;
     return;
@@ -88,7 +88,7 @@ void main(List<String> args) {
 }
 
 List<Map<String, dynamic>> _extractSummaries(File logFile) {
-  const String prefix = 'NRP_BENCHMARK_SUMMARY ';
+  const String prefix = 'NFP_BENCHMARK_SUMMARY ';
   final List<Map<String, dynamic>> summaries = <Map<String, dynamic>>[];
 
   for (final String line in logFile.readAsLinesSync()) {

@@ -1,46 +1,157 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
-import '../native_reels_player_platform_interface.dart';
+import '../native_feed_player_platform_interface.dart';
+import 'controller_release.dart';
+import 'feed_player_exception.dart';
 import 'video_metrics.dart';
 import 'video_playback_state.dart';
+import 'video_size.dart';
 
-/// Handle for controlling a single native video instance.
-class VideoController {
-  VideoController({
+/// Handle for controlling the native player bound to one [FeedSource].
+///
+/// A controller stays usable only while its native player is alive. The native
+/// scheduler may reclaim a player at any time (window eviction, memory
+/// pressure), so commands issued afterwards throw [ControllerReleasedError]
+/// instead of silently doing nothing.
+class FeedController {
+  FeedController({
     required this.controllerId,
-    required this.url,
-    required this.index,
-    required NativeReelsPlayerPlatform platform,
-  }) : _platform = platform;
+    required this.sourceId,
+    required FeedPlayerPlatform platform,
+    void Function(FeedController controller)? onReleasedCallback,
+  }) : _platform = platform,
+       _onReleasedCallback = onReleasedCallback;
 
   final int controllerId;
-  final String url;
-  final int index;
 
-  final NativeReelsPlayerPlatform _platform;
+  /// Identifier of the [FeedSource] this controller plays.
+  final String sourceId;
 
-  Stream<Duration> get positionStream => _platform.positionStream(controllerId);
+  final FeedPlayerPlatform _platform;
+  final void Function(FeedController controller)? _onReleasedCallback;
+  final Completer<ControllerReleaseReason> _released =
+      Completer<ControllerReleaseReason>();
 
-  Stream<VideoPlaybackState> get stateStream =>
+  ControllerReleaseReason? _releaseReason;
+
+  /// Whether the native player backing this controller is gone.
+  bool get isReleased => _releaseReason != null;
+
+  /// Why the controller was released, or `null` while it is still alive.
+  ControllerReleaseReason? get releaseReason => _releaseReason;
+
+  /// Completes when the native player is released, for any reason.
+  Future<ControllerReleaseReason> get onReleased => _released.future;
+
+  Stream<PlaybackPosition> get positionStream =>
+      _platform.positionStream(controllerId);
+
+  Stream<PlaybackStatusUpdate> get stateStream =>
       _platform.stateStream(controllerId);
 
   Stream<VideoMetrics> get metricsStream =>
       _platform.metricsStream(controllerId);
 
-  Future<void> play() => _platform.play(controllerId);
-
-  Future<void> pause() => _platform.pause(controllerId);
-
-  Future<void> seekTo(Duration position) =>
-      _platform.seekTo(controllerId, position);
-
-  Future<void> dispose() => _platform.disposeController(controllerId);
-
-  @override
-  String toString() {
-    return 'VideoController(id: $controllerId, index: $index, url: $url)';
+  Future<void> play() {
+    _ensureAlive();
+    return _platform.play(controllerId);
   }
 
-  @visibleForTesting
-  NativeReelsPlayerPlatform get platform => _platform;
+  Future<void> pause() {
+    _ensureAlive();
+    return _platform.pause(controllerId);
+  }
+
+  Future<void> seekTo(Duration position) {
+    _ensureAlive();
+    return _platform.seekTo(controllerId, position);
+  }
+
+  /// Sets output level in the range 0..1. Ignored while muted.
+  Future<void> setVolume(double volume) {
+    _ensureAlive();
+    return _platform.setVolume(controllerId, volume.clamp(0.0, 1.0));
+  }
+
+  Future<void> setMuted(bool muted) {
+    _ensureAlive();
+    return _platform.setMuted(controllerId, muted);
+  }
+
+  /// Playback rate, clamped natively to 0.25..4.
+  Future<void> setPlaybackSpeed(double speed) {
+    _ensureAlive();
+    return _platform.setPlaybackSpeed(controllerId, speed);
+  }
+
+  Future<void> setLooping(bool looping) {
+    _ensureAlive();
+    return _platform.setLooping(controllerId, looping);
+  }
+
+  /// Emits whenever the decoded video dimensions become known or change.
+  Stream<VideoSize> get videoSizeStream =>
+      _platform.videoSizeStream(controllerId);
+
+  /// Completes once the first frame has actually been rendered.
+  ///
+  /// Useful for dismissing a poster at the exact moment video appears rather
+  /// than when playback merely starts.
+  Future<Duration> get firstFrameRendered {
+    return metricsStream
+        .map((VideoMetrics metrics) => metrics.firstFrameLatency)
+        .where((Duration? latency) => latency != null)
+        .cast<Duration>()
+        .first;
+  }
+
+  /// Releases the native player. Safe to call more than once.
+  Future<void> dispose() async {
+    if (isReleased) {
+      return;
+    }
+    markReleased(ControllerReleaseReason.disposed);
+    await _platform.disposeController(controllerId);
+  }
+
+  /// Marks this controller dead without issuing a native dispose call.
+  ///
+  /// Called by the owning player when native code reports that it reclaimed
+  /// the player on its own.
+  @internal
+  void markReleased(ControllerReleaseReason reason) {
+    if (isReleased) {
+      return;
+    }
+    _releaseReason = reason;
+    if (!_released.isCompleted) {
+      _released.complete(reason);
+    }
+    _onReleasedCallback?.call(this);
+  }
+
+  void _ensureAlive() {
+    final ControllerReleaseReason? reason = _releaseReason;
+    if (reason != null) {
+      throw ControllerReleasedError(controllerId: controllerId, reason: reason);
+    }
+  }
+
+  /// Platform implementation backing this controller.
+  ///
+  /// Exposed so widgets in this package bind to the same (possibly injected)
+  /// platform as the controller rather than the global singleton.
+  @internal
+  FeedPlayerPlatform get platform => _platform;
+
+  @override
+  String toString() =>
+      'FeedController(id: $controllerId, source: $sourceId, '
+      'released: $isReleased)';
 }
+
+/// Former name of [FeedController].
+@Deprecated('Renamed to FeedController. Will be removed in 0.2.0.')
+typedef VideoController = FeedController;

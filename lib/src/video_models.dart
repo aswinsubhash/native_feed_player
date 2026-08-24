@@ -1,5 +1,5 @@
-class NativeReelsConfig {
-  const NativeReelsConfig({this.maxCachedPlayers = 5, this.preloadCount = 2});
+class NativeFeedConfig {
+  const NativeFeedConfig({this.maxCachedPlayers = 5, this.preloadCount = 2});
 
   final int maxCachedPlayers;
   final int preloadCount;

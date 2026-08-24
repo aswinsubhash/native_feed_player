@@ -128,29 +128,79 @@ func deepHashMessages(value: Any?, hasher: inout Hasher) {
 
     
 
+/// How a source should be treated by the native loader.
+enum FeedMediaKindMessage: Int {
+  case auto = 0
+  case progressive = 1
+  case hls = 2
+}
+
+/// Native playback status for a single controller.
+enum PlaybackStatusMessage: Int {
+  case idle = 0
+  case preparing = 1
+  case ready = 2
+  case playing = 3
+  case paused = 4
+  case buffering = 5
+  case completed = 6
+  case error = 7
+  case released = 8
+}
+
+/// Why a controller stopped existing.
+enum ReleaseReasonMessage: Int {
+  case disposed = 0
+  case evicted = 1
+  case error = 2
+  case engineDetached = 3
+}
+
+/// How native video output reaches the Flutter scene.
+enum RenderModeMessage: Int {
+  /// A native view composited by Flutter's platform-view layer.
+  case platformView = 0
+  /// Frames copied into a Flutter texture, drawn by the Flutter renderer.
+  case texture = 1
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
-struct InitializeRequest: Hashable {
-  var maxCachedPlayers: Int64
-  var preloadCount: Int64
+struct FeedSourceMessage: Hashable {
+  /// Caller-owned stable identifier. Survives pagination and reordering.
+  var id: String
+  var uri: String
+  /// Position in the feed, used only to rank preload priority.
+  var rank: Int64
+  var kind: FeedMediaKindMessage
+  var headers: [String: String]
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
-  static func fromList(_ pigeonVar_list: [Any?]) -> InitializeRequest? {
-    let maxCachedPlayers = pigeonVar_list[0] as! Int64
-    let preloadCount = pigeonVar_list[1] as! Int64
+  static func fromList(_ pigeonVar_list: [Any?]) -> FeedSourceMessage? {
+    let id = pigeonVar_list[0] as! String
+    let uri = pigeonVar_list[1] as! String
+    let rank = pigeonVar_list[2] as! Int64
+    let kind = pigeonVar_list[3] as! FeedMediaKindMessage
+    let headers = pigeonVar_list[4] as! [String: String]
 
-    return InitializeRequest(
-      maxCachedPlayers: maxCachedPlayers,
-      preloadCount: preloadCount
+    return FeedSourceMessage(
+      id: id,
+      uri: uri,
+      rank: rank,
+      kind: kind,
+      headers: headers
     )
   }
   func toList() -> [Any?] {
     return [
-      maxCachedPlayers,
-      preloadCount,
+      id,
+      uri,
+      rank,
+      kind,
+      headers,
     ]
   }
-  static func == (lhs: InitializeRequest, rhs: InitializeRequest) -> Bool {
+  static func == (lhs: FeedSourceMessage, rhs: FeedSourceMessage) -> Bool {
     return deepEqualsMessages(lhs.toList(), rhs.toList())  }
   func hash(into hasher: inout Hasher) {
     deepHashMessages(value: toList(), hasher: &hasher)
@@ -158,28 +208,28 @@ struct InitializeRequest: Hashable {
 }
 
 /// Generated class from Pigeon that represents data sent in messages.
-struct VideoSourceMessage: Hashable {
-  var url: String
-  var index: Int64
+struct CachePolicyMessage: Hashable {
+  var enabled: Bool
+  var maxBytes: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
-  static func fromList(_ pigeonVar_list: [Any?]) -> VideoSourceMessage? {
-    let url = pigeonVar_list[0] as! String
-    let index = pigeonVar_list[1] as! Int64
+  static func fromList(_ pigeonVar_list: [Any?]) -> CachePolicyMessage? {
+    let enabled = pigeonVar_list[0] as! Bool
+    let maxBytes = pigeonVar_list[1] as! Int64
 
-    return VideoSourceMessage(
-      url: url,
-      index: index
+    return CachePolicyMessage(
+      enabled: enabled,
+      maxBytes: maxBytes
     )
   }
   func toList() -> [Any?] {
     return [
-      url,
-      index,
+      enabled,
+      maxBytes,
     ]
   }
-  static func == (lhs: VideoSourceMessage, rhs: VideoSourceMessage) -> Bool {
+  static func == (lhs: CachePolicyMessage, rhs: CachePolicyMessage) -> Bool {
     return deepEqualsMessages(lhs.toList(), rhs.toList())  }
   func hash(into hasher: inout Hasher) {
     deepHashMessages(value: toList(), hasher: &hasher)
@@ -187,24 +237,85 @@ struct VideoSourceMessage: Hashable {
 }
 
 /// Generated class from Pigeon that represents data sent in messages.
-struct PreloadRequest: Hashable {
-  var sources: [VideoSourceMessage]
+struct AudioPolicyMessage: Hashable {
+  var muted: Bool
+  var volume: Double
+  var handleAudioFocus: Bool
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
-  static func fromList(_ pigeonVar_list: [Any?]) -> PreloadRequest? {
-    let sources = pigeonVar_list[0] as! [VideoSourceMessage]
+  static func fromList(_ pigeonVar_list: [Any?]) -> AudioPolicyMessage? {
+    let muted = pigeonVar_list[0] as! Bool
+    let volume = pigeonVar_list[1] as! Double
+    let handleAudioFocus = pigeonVar_list[2] as! Bool
 
-    return PreloadRequest(
-      sources: sources
+    return AudioPolicyMessage(
+      muted: muted,
+      volume: volume,
+      handleAudioFocus: handleAudioFocus
     )
   }
   func toList() -> [Any?] {
     return [
-      sources
+      muted,
+      volume,
+      handleAudioFocus,
     ]
   }
-  static func == (lhs: PreloadRequest, rhs: PreloadRequest) -> Bool {
+  static func == (lhs: AudioPolicyMessage, rhs: AudioPolicyMessage) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct FeedPlayerConfigMessage: Hashable {
+  var maxActivePlayers: Int64
+  var preloadAhead: Int64
+  var preloadBehind: Int64
+  var maxConcurrentPreloads: Int64
+  var positionUpdateIntervalMs: Int64
+  var renderMode: RenderModeMessage
+  var cache: CachePolicyMessage
+  var audio: AudioPolicyMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> FeedPlayerConfigMessage? {
+    let maxActivePlayers = pigeonVar_list[0] as! Int64
+    let preloadAhead = pigeonVar_list[1] as! Int64
+    let preloadBehind = pigeonVar_list[2] as! Int64
+    let maxConcurrentPreloads = pigeonVar_list[3] as! Int64
+    let positionUpdateIntervalMs = pigeonVar_list[4] as! Int64
+    let renderMode = pigeonVar_list[5] as! RenderModeMessage
+    let cache = pigeonVar_list[6] as! CachePolicyMessage
+    let audio = pigeonVar_list[7] as! AudioPolicyMessage
+
+    return FeedPlayerConfigMessage(
+      maxActivePlayers: maxActivePlayers,
+      preloadAhead: preloadAhead,
+      preloadBehind: preloadBehind,
+      maxConcurrentPreloads: maxConcurrentPreloads,
+      positionUpdateIntervalMs: positionUpdateIntervalMs,
+      renderMode: renderMode,
+      cache: cache,
+      audio: audio
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      maxActivePlayers,
+      preloadAhead,
+      preloadBehind,
+      maxConcurrentPreloads,
+      positionUpdateIntervalMs,
+      renderMode,
+      cache,
+      audio,
+    ]
+  }
+  static func == (lhs: FeedPlayerConfigMessage, rhs: FeedPlayerConfigMessage) -> Bool {
     return deepEqualsMessages(lhs.toList(), rhs.toList())  }
   func hash(into hasher: inout Hasher) {
     deepHashMessages(value: toList(), hasher: &hasher)
@@ -213,30 +324,26 @@ struct PreloadRequest: Hashable {
 
 /// Generated class from Pigeon that represents data sent in messages.
 struct CreateControllerRequest: Hashable {
-  var url: String
-  var index: Int64
+  var sourceId: String
   var autoPlay: Bool
   var looping: Bool
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
   static func fromList(_ pigeonVar_list: [Any?]) -> CreateControllerRequest? {
-    let url = pigeonVar_list[0] as! String
-    let index = pigeonVar_list[1] as! Int64
-    let autoPlay = pigeonVar_list[2] as! Bool
-    let looping = pigeonVar_list[3] as! Bool
+    let sourceId = pigeonVar_list[0] as! String
+    let autoPlay = pigeonVar_list[1] as! Bool
+    let looping = pigeonVar_list[2] as! Bool
 
     return CreateControllerRequest(
-      url: url,
-      index: index,
+      sourceId: sourceId,
       autoPlay: autoPlay,
       looping: looping
     )
   }
   func toList() -> [Any?] {
     return [
-      url,
-      index,
+      sourceId,
       autoPlay,
       looping,
     ]
@@ -303,24 +410,82 @@ struct SeekRequest: Hashable {
 }
 
 /// Generated class from Pigeon that represents data sent in messages.
-struct VisibleIndexRequest: Hashable {
-  var index: Int64
+struct VisibleSourceRequest: Hashable {
+  var sourceId: String
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
-  static func fromList(_ pigeonVar_list: [Any?]) -> VisibleIndexRequest? {
-    let index = pigeonVar_list[0] as! Int64
+  static func fromList(_ pigeonVar_list: [Any?]) -> VisibleSourceRequest? {
+    let sourceId = pigeonVar_list[0] as! String
 
-    return VisibleIndexRequest(
-      index: index
+    return VisibleSourceRequest(
+      sourceId: sourceId
     )
   }
   func toList() -> [Any?] {
     return [
-      index
+      sourceId
     ]
   }
-  static func == (lhs: VisibleIndexRequest, rhs: VisibleIndexRequest) -> Bool {
+  static func == (lhs: VisibleSourceRequest, rhs: VisibleSourceRequest) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct ControllerDoubleRequest: Hashable {
+  var controllerId: Int64
+  var value: Double
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> ControllerDoubleRequest? {
+    let controllerId = pigeonVar_list[0] as! Int64
+    let value = pigeonVar_list[1] as! Double
+
+    return ControllerDoubleRequest(
+      controllerId: controllerId,
+      value: value
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      controllerId,
+      value,
+    ]
+  }
+  static func == (lhs: ControllerDoubleRequest, rhs: ControllerDoubleRequest) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct ControllerFlagRequest: Hashable {
+  var controllerId: Int64
+  var value: Bool
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> ControllerFlagRequest? {
+    let controllerId = pigeonVar_list[0] as! Int64
+    let value = pigeonVar_list[1] as! Bool
+
+    return ControllerFlagRequest(
+      controllerId: controllerId,
+      value: value
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      controllerId,
+      value,
+    ]
+  }
+  static func == (lhs: ControllerFlagRequest, rhs: ControllerFlagRequest) -> Bool {
     return deepEqualsMessages(lhs.toList(), rhs.toList())  }
   func hash(into hasher: inout Hasher) {
     deepHashMessages(value: toList(), hasher: &hasher)
@@ -356,25 +521,351 @@ struct AttachViewRequest: Hashable {
   }
 }
 
+/// Generated class from Pigeon that represents data sent in messages.
+struct SourceIdsRequest: Hashable {
+  var sourceIds: [String]
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> SourceIdsRequest? {
+    let sourceIds = pigeonVar_list[0] as! [String]
+
+    return SourceIdsRequest(
+      sourceIds: sourceIds
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      sourceIds
+    ]
+  }
+  static func == (lhs: SourceIdsRequest, rhs: SourceIdsRequest) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct CacheStatusMessage: Hashable {
+  var sourceId: String
+  var cachedBytes: Int64
+  var totalBytes: Int64
+  var isComplete: Bool
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CacheStatusMessage? {
+    let sourceId = pigeonVar_list[0] as! String
+    let cachedBytes = pigeonVar_list[1] as! Int64
+    let totalBytes = pigeonVar_list[2] as! Int64
+    let isComplete = pigeonVar_list[3] as! Bool
+
+    return CacheStatusMessage(
+      sourceId: sourceId,
+      cachedBytes: cachedBytes,
+      totalBytes: totalBytes,
+      isComplete: isComplete
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      sourceId,
+      cachedBytes,
+      totalBytes,
+      isComplete,
+    ]
+  }
+  static func == (lhs: CacheStatusMessage, rhs: CacheStatusMessage) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct PlaybackErrorMessage: Hashable {
+  var code: String
+  var message: String
+  var isRecoverable: Bool
+  var platformCode: String? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> PlaybackErrorMessage? {
+    let code = pigeonVar_list[0] as! String
+    let message = pigeonVar_list[1] as! String
+    let isRecoverable = pigeonVar_list[2] as! Bool
+    let platformCode: String? = nilOrValue(pigeonVar_list[3])
+
+    return PlaybackErrorMessage(
+      code: code,
+      message: message,
+      isRecoverable: isRecoverable,
+      platformCode: platformCode
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      code,
+      message,
+      isRecoverable,
+      platformCode,
+    ]
+  }
+  static func == (lhs: PlaybackErrorMessage, rhs: PlaybackErrorMessage) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct PlaybackStateEvent: Hashable {
+  var controllerId: Int64
+  var status: PlaybackStatusMessage
+  var error: PlaybackErrorMessage? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> PlaybackStateEvent? {
+    let controllerId = pigeonVar_list[0] as! Int64
+    let status = pigeonVar_list[1] as! PlaybackStatusMessage
+    let error: PlaybackErrorMessage? = nilOrValue(pigeonVar_list[2])
+
+    return PlaybackStateEvent(
+      controllerId: controllerId,
+      status: status,
+      error: error
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      controllerId,
+      status,
+      error,
+    ]
+  }
+  static func == (lhs: PlaybackStateEvent, rhs: PlaybackStateEvent) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct PositionEvent: Hashable {
+  var controllerId: Int64
+  var positionMs: Int64
+  var bufferedPositionMs: Int64? = nil
+  var durationMs: Int64? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> PositionEvent? {
+    let controllerId = pigeonVar_list[0] as! Int64
+    let positionMs = pigeonVar_list[1] as! Int64
+    let bufferedPositionMs: Int64? = nilOrValue(pigeonVar_list[2])
+    let durationMs: Int64? = nilOrValue(pigeonVar_list[3])
+
+    return PositionEvent(
+      controllerId: controllerId,
+      positionMs: positionMs,
+      bufferedPositionMs: bufferedPositionMs,
+      durationMs: durationMs
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      controllerId,
+      positionMs,
+      bufferedPositionMs,
+      durationMs,
+    ]
+  }
+  static func == (lhs: PositionEvent, rhs: PositionEvent) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct MetricsEvent: Hashable {
+  var controllerId: Int64
+  var rebufferCount: Int64
+  /// Monotonic total for the controller's lifetime on both platforms.
+  var droppedFrames: Int64
+  var timestampMs: Int64
+  /// Milliseconds from controller creation to the first rendered video frame.
+  var firstFrameLatencyMs: Int64? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> MetricsEvent? {
+    let controllerId = pigeonVar_list[0] as! Int64
+    let rebufferCount = pigeonVar_list[1] as! Int64
+    let droppedFrames = pigeonVar_list[2] as! Int64
+    let timestampMs = pigeonVar_list[3] as! Int64
+    let firstFrameLatencyMs: Int64? = nilOrValue(pigeonVar_list[4])
+
+    return MetricsEvent(
+      controllerId: controllerId,
+      rebufferCount: rebufferCount,
+      droppedFrames: droppedFrames,
+      timestampMs: timestampMs,
+      firstFrameLatencyMs: firstFrameLatencyMs
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      controllerId,
+      rebufferCount,
+      droppedFrames,
+      timestampMs,
+      firstFrameLatencyMs,
+    ]
+  }
+  static func == (lhs: MetricsEvent, rhs: MetricsEvent) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct VideoSizeEvent: Hashable {
+  var controllerId: Int64
+  /// Decoded pixel dimensions, before [rotationDegrees] is applied.
+  var width: Int64
+  var height: Int64
+  /// Clockwise rotation the renderer must apply, in degrees.
+  var rotationDegrees: Int64
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> VideoSizeEvent? {
+    let controllerId = pigeonVar_list[0] as! Int64
+    let width = pigeonVar_list[1] as! Int64
+    let height = pigeonVar_list[2] as! Int64
+    let rotationDegrees = pigeonVar_list[3] as! Int64
+
+    return VideoSizeEvent(
+      controllerId: controllerId,
+      width: width,
+      height: height,
+      rotationDegrees: rotationDegrees
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      controllerId,
+      width,
+      height,
+      rotationDegrees,
+    ]
+  }
+  static func == (lhs: VideoSizeEvent, rhs: VideoSizeEvent) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct ControllerLifecycleEvent: Hashable {
+  var controllerId: Int64
+  var reason: ReleaseReasonMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> ControllerLifecycleEvent? {
+    let controllerId = pigeonVar_list[0] as! Int64
+    let reason = pigeonVar_list[1] as! ReleaseReasonMessage
+
+    return ControllerLifecycleEvent(
+      controllerId: controllerId,
+      reason: reason
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      controllerId,
+      reason,
+    ]
+  }
+  static func == (lhs: ControllerLifecycleEvent, rhs: ControllerLifecycleEvent) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
 private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
     case 129:
-      return InitializeRequest.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return FeedMediaKindMessage(rawValue: enumResultAsInt)
+      }
+      return nil
     case 130:
-      return VideoSourceMessage.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return PlaybackStatusMessage(rawValue: enumResultAsInt)
+      }
+      return nil
     case 131:
-      return PreloadRequest.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return ReleaseReasonMessage(rawValue: enumResultAsInt)
+      }
+      return nil
     case 132:
-      return CreateControllerRequest.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return RenderModeMessage(rawValue: enumResultAsInt)
+      }
+      return nil
     case 133:
-      return ControllerRequest.fromList(self.readValue() as! [Any?])
+      return FeedSourceMessage.fromList(self.readValue() as! [Any?])
     case 134:
-      return SeekRequest.fromList(self.readValue() as! [Any?])
+      return CachePolicyMessage.fromList(self.readValue() as! [Any?])
     case 135:
-      return VisibleIndexRequest.fromList(self.readValue() as! [Any?])
+      return AudioPolicyMessage.fromList(self.readValue() as! [Any?])
     case 136:
+      return FeedPlayerConfigMessage.fromList(self.readValue() as! [Any?])
+    case 137:
+      return CreateControllerRequest.fromList(self.readValue() as! [Any?])
+    case 138:
+      return ControllerRequest.fromList(self.readValue() as! [Any?])
+    case 139:
+      return SeekRequest.fromList(self.readValue() as! [Any?])
+    case 140:
+      return VisibleSourceRequest.fromList(self.readValue() as! [Any?])
+    case 141:
+      return ControllerDoubleRequest.fromList(self.readValue() as! [Any?])
+    case 142:
+      return ControllerFlagRequest.fromList(self.readValue() as! [Any?])
+    case 143:
       return AttachViewRequest.fromList(self.readValue() as! [Any?])
+    case 144:
+      return SourceIdsRequest.fromList(self.readValue() as! [Any?])
+    case 145:
+      return CacheStatusMessage.fromList(self.readValue() as! [Any?])
+    case 146:
+      return PlaybackErrorMessage.fromList(self.readValue() as! [Any?])
+    case 147:
+      return PlaybackStateEvent.fromList(self.readValue() as! [Any?])
+    case 148:
+      return PositionEvent.fromList(self.readValue() as! [Any?])
+    case 149:
+      return MetricsEvent.fromList(self.readValue() as! [Any?])
+    case 150:
+      return VideoSizeEvent.fromList(self.readValue() as! [Any?])
+    case 151:
+      return ControllerLifecycleEvent.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -383,29 +874,74 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
 
 private class MessagesPigeonCodecWriter: FlutterStandardWriter {
   override func writeValue(_ value: Any) {
-    if let value = value as? InitializeRequest {
+    if let value = value as? FeedMediaKindMessage {
       super.writeByte(129)
-      super.writeValue(value.toList())
-    } else if let value = value as? VideoSourceMessage {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? PlaybackStatusMessage {
       super.writeByte(130)
-      super.writeValue(value.toList())
-    } else if let value = value as? PreloadRequest {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? ReleaseReasonMessage {
       super.writeByte(131)
-      super.writeValue(value.toList())
-    } else if let value = value as? CreateControllerRequest {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? RenderModeMessage {
       super.writeByte(132)
-      super.writeValue(value.toList())
-    } else if let value = value as? ControllerRequest {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? FeedSourceMessage {
       super.writeByte(133)
       super.writeValue(value.toList())
-    } else if let value = value as? SeekRequest {
+    } else if let value = value as? CachePolicyMessage {
       super.writeByte(134)
       super.writeValue(value.toList())
-    } else if let value = value as? VisibleIndexRequest {
+    } else if let value = value as? AudioPolicyMessage {
       super.writeByte(135)
       super.writeValue(value.toList())
-    } else if let value = value as? AttachViewRequest {
+    } else if let value = value as? FeedPlayerConfigMessage {
       super.writeByte(136)
+      super.writeValue(value.toList())
+    } else if let value = value as? CreateControllerRequest {
+      super.writeByte(137)
+      super.writeValue(value.toList())
+    } else if let value = value as? ControllerRequest {
+      super.writeByte(138)
+      super.writeValue(value.toList())
+    } else if let value = value as? SeekRequest {
+      super.writeByte(139)
+      super.writeValue(value.toList())
+    } else if let value = value as? VisibleSourceRequest {
+      super.writeByte(140)
+      super.writeValue(value.toList())
+    } else if let value = value as? ControllerDoubleRequest {
+      super.writeByte(141)
+      super.writeValue(value.toList())
+    } else if let value = value as? ControllerFlagRequest {
+      super.writeByte(142)
+      super.writeValue(value.toList())
+    } else if let value = value as? AttachViewRequest {
+      super.writeByte(143)
+      super.writeValue(value.toList())
+    } else if let value = value as? SourceIdsRequest {
+      super.writeByte(144)
+      super.writeValue(value.toList())
+    } else if let value = value as? CacheStatusMessage {
+      super.writeByte(145)
+      super.writeValue(value.toList())
+    } else if let value = value as? PlaybackErrorMessage {
+      super.writeByte(146)
+      super.writeValue(value.toList())
+    } else if let value = value as? PlaybackStateEvent {
+      super.writeByte(147)
+      super.writeValue(value.toList())
+    } else if let value = value as? PositionEvent {
+      super.writeByte(148)
+      super.writeValue(value.toList())
+    } else if let value = value as? MetricsEvent {
+      super.writeByte(149)
+      super.writeValue(value.toList())
+    } else if let value = value as? VideoSizeEvent {
+      super.writeByte(150)
+      super.writeValue(value.toList())
+    } else if let value = value as? ControllerLifecycleEvent {
+      super.writeByte(151)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -427,35 +963,55 @@ class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
   static let shared = MessagesPigeonCodec(readerWriter: MessagesPigeonCodecReaderWriter())
 }
 
+var messagesPigeonMethodCodec = FlutterStandardMethodCodec(readerWriter: MessagesPigeonCodecReaderWriter());
+
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
-protocol NativeReelsPlayerHostApi {
-  func initialize(request: InitializeRequest) throws
-  func preload(request: PreloadRequest) throws
+protocol NativeFeedPlayerHostApi {
+  func initialize(config: FeedPlayerConfigMessage) throws
+  /// Replaces the whole feed.
+  func setSources(sources: [FeedSourceMessage]) throws
+  /// Appends a page without renumbering existing sources.
+  func appendSources(sources: [FeedSourceMessage]) throws
+  func removeSources(request: SourceIdsRequest) throws
   func createController(request: CreateControllerRequest) throws -> Int64
   func disposeController(request: ControllerRequest) throws
   func play(request: ControllerRequest) throws
   func pause(request: ControllerRequest) throws
   func seekTo(request: SeekRequest) throws
-  func setVisibleIndex(request: VisibleIndexRequest) throws
-  func clearCache() throws
+  func setVolume(request: ControllerDoubleRequest) throws
+  func setMuted(request: ControllerFlagRequest) throws
+  func setPlaybackSpeed(request: ControllerDoubleRequest) throws
+  func setLooping(request: ControllerFlagRequest) throws
+  /// Applies to every controller, current and future.
+  func setAudioPolicy(policy: AudioPolicyMessage) throws
+  func setVisibleSource(request: VisibleSourceRequest) throws
+  /// Drops persisted media bytes for the given sources, or all of them when
+  /// the list is empty.
+  func evictCachedMedia(request: SourceIdsRequest) throws
+  func clearMediaCache() throws
+  func cacheStatus(request: VisibleSourceRequest) throws -> CacheStatusMessage
+  func cacheUsageBytes() throws -> Int64
   func attachView(request: AttachViewRequest) throws
   func detachView(request: ControllerRequest) throws
+  /// Binds the controller to a Flutter texture and returns its id.
+  func attachTexture(request: ControllerRequest) throws -> Int64
+  func detachTexture(request: ControllerRequest) throws
   func disposeAll() throws
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
-class NativeReelsPlayerHostApiSetup {
+class NativeFeedPlayerHostApiSetup {
   static var codec: FlutterStandardMessageCodec { MessagesPigeonCodec.shared }
-  /// Sets up an instance of `NativeReelsPlayerHostApi` to handle messages through the `binaryMessenger`.
-  static func setUp(binaryMessenger: FlutterBinaryMessenger, api: NativeReelsPlayerHostApi?, messageChannelSuffix: String = "") {
+  /// Sets up an instance of `NativeFeedPlayerHostApi` to handle messages through the `binaryMessenger`.
+  static func setUp(binaryMessenger: FlutterBinaryMessenger, api: NativeFeedPlayerHostApi?, messageChannelSuffix: String = "") {
     let channelSuffix = messageChannelSuffix.count > 0 ? ".\(messageChannelSuffix)" : ""
-    let initializeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.initialize\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let initializeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.initialize\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       initializeChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
-        let requestArg = args[0] as! InitializeRequest
+        let configArg = args[0] as! FeedPlayerConfigMessage
         do {
-          try api.initialize(request: requestArg)
+          try api.initialize(config: configArg)
           reply(wrapResult(nil))
         } catch {
           reply(wrapError(error))
@@ -464,22 +1020,54 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       initializeChannel.setMessageHandler(nil)
     }
-    let preloadChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.preload\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    /// Replaces the whole feed.
+    let setSourcesChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setSources\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
-      preloadChannel.setMessageHandler { message, reply in
+      setSourcesChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
-        let requestArg = args[0] as! PreloadRequest
+        let sourcesArg = args[0] as! [FeedSourceMessage]
         do {
-          try api.preload(request: requestArg)
+          try api.setSources(sources: sourcesArg)
           reply(wrapResult(nil))
         } catch {
           reply(wrapError(error))
         }
       }
     } else {
-      preloadChannel.setMessageHandler(nil)
+      setSourcesChannel.setMessageHandler(nil)
     }
-    let createControllerChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.createController\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    /// Appends a page without renumbering existing sources.
+    let appendSourcesChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.appendSources\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      appendSourcesChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let sourcesArg = args[0] as! [FeedSourceMessage]
+        do {
+          try api.appendSources(sources: sourcesArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      appendSourcesChannel.setMessageHandler(nil)
+    }
+    let removeSourcesChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.removeSources\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      removeSourcesChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! SourceIdsRequest
+        do {
+          try api.removeSources(request: requestArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      removeSourcesChannel.setMessageHandler(nil)
+    }
+    let createControllerChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.createController\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       createControllerChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -494,7 +1082,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       createControllerChannel.setMessageHandler(nil)
     }
-    let disposeControllerChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.disposeController\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let disposeControllerChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeController\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       disposeControllerChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -509,7 +1097,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       disposeControllerChannel.setMessageHandler(nil)
     }
-    let playChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.play\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let playChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.play\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       playChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -524,7 +1112,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       playChannel.setMessageHandler(nil)
     }
-    let pauseChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.pause\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let pauseChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.pause\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       pauseChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -539,7 +1127,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       pauseChannel.setMessageHandler(nil)
     }
-    let seekToChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.seekTo\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let seekToChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.seekTo\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       seekToChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -554,35 +1142,156 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       seekToChannel.setMessageHandler(nil)
     }
-    let setVisibleIndexChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.setVisibleIndex\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let setVolumeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVolume\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
-      setVisibleIndexChannel.setMessageHandler { message, reply in
+      setVolumeChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
-        let requestArg = args[0] as! VisibleIndexRequest
+        let requestArg = args[0] as! ControllerDoubleRequest
         do {
-          try api.setVisibleIndex(request: requestArg)
+          try api.setVolume(request: requestArg)
           reply(wrapResult(nil))
         } catch {
           reply(wrapError(error))
         }
       }
     } else {
-      setVisibleIndexChannel.setMessageHandler(nil)
+      setVolumeChannel.setMessageHandler(nil)
     }
-    let clearCacheChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.clearCache\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let setMutedChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setMuted\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
-      clearCacheChannel.setMessageHandler { _, reply in
+      setMutedChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! ControllerFlagRequest
         do {
-          try api.clearCache()
+          try api.setMuted(request: requestArg)
           reply(wrapResult(nil))
         } catch {
           reply(wrapError(error))
         }
       }
     } else {
-      clearCacheChannel.setMessageHandler(nil)
+      setMutedChannel.setMessageHandler(nil)
     }
-    let attachViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.attachView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let setPlaybackSpeedChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setPlaybackSpeed\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      setPlaybackSpeedChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! ControllerDoubleRequest
+        do {
+          try api.setPlaybackSpeed(request: requestArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      setPlaybackSpeedChannel.setMessageHandler(nil)
+    }
+    let setLoopingChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setLooping\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      setLoopingChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! ControllerFlagRequest
+        do {
+          try api.setLooping(request: requestArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      setLoopingChannel.setMessageHandler(nil)
+    }
+    /// Applies to every controller, current and future.
+    let setAudioPolicyChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setAudioPolicy\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      setAudioPolicyChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let policyArg = args[0] as! AudioPolicyMessage
+        do {
+          try api.setAudioPolicy(policy: policyArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      setAudioPolicyChannel.setMessageHandler(nil)
+    }
+    let setVisibleSourceChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleSource\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      setVisibleSourceChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! VisibleSourceRequest
+        do {
+          try api.setVisibleSource(request: requestArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      setVisibleSourceChannel.setMessageHandler(nil)
+    }
+    /// Drops persisted media bytes for the given sources, or all of them when
+    /// the list is empty.
+    let evictCachedMediaChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.evictCachedMedia\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      evictCachedMediaChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! SourceIdsRequest
+        do {
+          try api.evictCachedMedia(request: requestArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      evictCachedMediaChannel.setMessageHandler(nil)
+    }
+    let clearMediaCacheChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearMediaCache\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      clearMediaCacheChannel.setMessageHandler { _, reply in
+        do {
+          try api.clearMediaCache()
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      clearMediaCacheChannel.setMessageHandler(nil)
+    }
+    let cacheStatusChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.cacheStatus\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      cacheStatusChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! VisibleSourceRequest
+        do {
+          let result = try api.cacheStatus(request: requestArg)
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      cacheStatusChannel.setMessageHandler(nil)
+    }
+    let cacheUsageBytesChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.cacheUsageBytes\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      cacheUsageBytesChannel.setMessageHandler { _, reply in
+        do {
+          let result = try api.cacheUsageBytes()
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      cacheUsageBytesChannel.setMessageHandler(nil)
+    }
+    let attachViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.attachView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       attachViewChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -597,7 +1306,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       attachViewChannel.setMessageHandler(nil)
     }
-    let detachViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.detachView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let detachViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       detachViewChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -612,7 +1321,38 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       detachViewChannel.setMessageHandler(nil)
     }
-    let disposeAllChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.disposeAll\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    /// Binds the controller to a Flutter texture and returns its id.
+    let attachTextureChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.attachTexture\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      attachTextureChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! ControllerRequest
+        do {
+          let result = try api.attachTexture(request: requestArg)
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      attachTextureChannel.setMessageHandler(nil)
+    }
+    let detachTextureChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachTexture\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      detachTextureChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! ControllerRequest
+        do {
+          try api.detachTexture(request: requestArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      detachTextureChannel.setMessageHandler(nil)
+    }
+    let disposeAllChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeAll\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       disposeAllChannel.setMessageHandler { _, reply in
         do {
@@ -627,3 +1367,123 @@ class NativeReelsPlayerHostApiSetup {
     }
   }
 }
+
+private class PigeonStreamHandler<ReturnType>: NSObject, FlutterStreamHandler {
+  private let wrapper: PigeonEventChannelWrapper<ReturnType>
+  private var pigeonSink: PigeonEventSink<ReturnType>? = nil
+
+  init(wrapper: PigeonEventChannelWrapper<ReturnType>) {
+    self.wrapper = wrapper
+  }
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
+    -> FlutterError?
+  {
+    pigeonSink = PigeonEventSink<ReturnType>(events)
+    wrapper.onListen(withArguments: arguments, sink: pigeonSink!)
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    pigeonSink = nil
+    wrapper.onCancel(withArguments: arguments)
+    return nil
+  }
+}
+
+class PigeonEventChannelWrapper<ReturnType> {
+  func onListen(withArguments arguments: Any?, sink: PigeonEventSink<ReturnType>) {}
+  func onCancel(withArguments arguments: Any?) {}
+}
+
+class PigeonEventSink<ReturnType> {
+  private let sink: FlutterEventSink
+
+  init(_ sink: @escaping FlutterEventSink) {
+    self.sink = sink
+  }
+
+  func success(_ value: ReturnType) {
+    sink(value)
+  }
+
+  func error(code: String, message: String?, details: Any?) {
+    sink(FlutterError(code: code, message: message, details: details))
+  }
+
+  func endOfStream() {
+    sink(FlutterEndOfEventStream)
+  }
+
+}
+
+class PlaybackStateEventsStreamHandler: PigeonEventChannelWrapper<PlaybackStateEvent> {
+  static func register(with messenger: FlutterBinaryMessenger,
+                      instanceName: String = "",
+                      streamHandler: PlaybackStateEventsStreamHandler) {
+    var channelName = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.playbackStateEvents"
+    if !instanceName.isEmpty {
+      channelName += ".\(instanceName)"
+    }
+    let internalStreamHandler = PigeonStreamHandler<PlaybackStateEvent>(wrapper: streamHandler)
+    let channel = FlutterEventChannel(name: channelName, binaryMessenger: messenger, codec: messagesPigeonMethodCodec)
+    channel.setStreamHandler(internalStreamHandler)
+  }
+}
+      
+class PositionEventsStreamHandler: PigeonEventChannelWrapper<PositionEvent> {
+  static func register(with messenger: FlutterBinaryMessenger,
+                      instanceName: String = "",
+                      streamHandler: PositionEventsStreamHandler) {
+    var channelName = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.positionEvents"
+    if !instanceName.isEmpty {
+      channelName += ".\(instanceName)"
+    }
+    let internalStreamHandler = PigeonStreamHandler<PositionEvent>(wrapper: streamHandler)
+    let channel = FlutterEventChannel(name: channelName, binaryMessenger: messenger, codec: messagesPigeonMethodCodec)
+    channel.setStreamHandler(internalStreamHandler)
+  }
+}
+      
+class MetricsEventsStreamHandler: PigeonEventChannelWrapper<MetricsEvent> {
+  static func register(with messenger: FlutterBinaryMessenger,
+                      instanceName: String = "",
+                      streamHandler: MetricsEventsStreamHandler) {
+    var channelName = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.metricsEvents"
+    if !instanceName.isEmpty {
+      channelName += ".\(instanceName)"
+    }
+    let internalStreamHandler = PigeonStreamHandler<MetricsEvent>(wrapper: streamHandler)
+    let channel = FlutterEventChannel(name: channelName, binaryMessenger: messenger, codec: messagesPigeonMethodCodec)
+    channel.setStreamHandler(internalStreamHandler)
+  }
+}
+      
+class VideoSizeEventsStreamHandler: PigeonEventChannelWrapper<VideoSizeEvent> {
+  static func register(with messenger: FlutterBinaryMessenger,
+                      instanceName: String = "",
+                      streamHandler: VideoSizeEventsStreamHandler) {
+    var channelName = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.videoSizeEvents"
+    if !instanceName.isEmpty {
+      channelName += ".\(instanceName)"
+    }
+    let internalStreamHandler = PigeonStreamHandler<VideoSizeEvent>(wrapper: streamHandler)
+    let channel = FlutterEventChannel(name: channelName, binaryMessenger: messenger, codec: messagesPigeonMethodCodec)
+    channel.setStreamHandler(internalStreamHandler)
+  }
+}
+      
+class LifecycleEventsStreamHandler: PigeonEventChannelWrapper<ControllerLifecycleEvent> {
+  static func register(with messenger: FlutterBinaryMessenger,
+                      instanceName: String = "",
+                      streamHandler: LifecycleEventsStreamHandler) {
+    var channelName = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.lifecycleEvents"
+    if !instanceName.isEmpty {
+      channelName += ".\(instanceName)"
+    }
+    let internalStreamHandler = PigeonStreamHandler<ControllerLifecycleEvent>(wrapper: streamHandler)
+    let channel = FlutterEventChannel(name: channelName, binaryMessenger: messenger, codec: messagesPigeonMethodCodec)
+    channel.setStreamHandler(internalStreamHandler)
+  }
+}
+      

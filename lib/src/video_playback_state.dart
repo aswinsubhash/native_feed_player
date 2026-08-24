@@ -1,3 +1,6 @@
+import 'messages.g.dart';
+import 'playback_error.dart';
+
 /// Playback states emitted by the native player.
 enum VideoPlaybackState {
   idle,
@@ -8,29 +11,46 @@ enum VideoPlaybackState {
   buffering,
   completed,
   error,
-  disposed,
+
+  /// The native player no longer exists. Terminal.
+  released,
 }
 
-VideoPlaybackState playbackStateFromString(String value) {
-  switch (value) {
-    case 'idle':
+/// A playback state update, with failure detail when [state] is
+/// [VideoPlaybackState.error].
+class PlaybackStatusUpdate {
+  const PlaybackStatusUpdate({required this.state, this.error});
+
+  final VideoPlaybackState state;
+  final PlaybackError? error;
+
+  bool get isTerminal =>
+      state == VideoPlaybackState.released || state == VideoPlaybackState.error;
+
+  @override
+  String toString() =>
+      'PlaybackStatusUpdate(${state.name}${error == null ? '' : ', $error'})';
+}
+
+VideoPlaybackState playbackStateFromMessage(PlaybackStatusMessage message) {
+  switch (message) {
+    case PlaybackStatusMessage.idle:
       return VideoPlaybackState.idle;
-    case 'preparing':
+    case PlaybackStatusMessage.preparing:
       return VideoPlaybackState.preparing;
-    case 'ready':
+    case PlaybackStatusMessage.ready:
       return VideoPlaybackState.ready;
-    case 'playing':
+    case PlaybackStatusMessage.playing:
       return VideoPlaybackState.playing;
-    case 'paused':
+    case PlaybackStatusMessage.paused:
       return VideoPlaybackState.paused;
-    case 'buffering':
+    case PlaybackStatusMessage.buffering:
       return VideoPlaybackState.buffering;
-    case 'completed':
+    case PlaybackStatusMessage.completed:
       return VideoPlaybackState.completed;
-    case 'disposed':
-      return VideoPlaybackState.disposed;
-    case 'error':
-    default:
+    case PlaybackStatusMessage.error:
       return VideoPlaybackState.error;
+    case PlaybackStatusMessage.released:
+      return VideoPlaybackState.released;
   }
 }

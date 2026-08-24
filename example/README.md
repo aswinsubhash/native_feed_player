@@ -1,6 +1,6 @@
-# native_reels_player_example
+# native_feed_player_example
 
-Demonstrates how to use the native_reels_player plugin.
+Demonstrates how to use the native_feed_player plugin.
 
 ## Getting Started
 
