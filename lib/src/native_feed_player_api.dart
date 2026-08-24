@@ -133,6 +133,25 @@ class FeedPlayer {
     return _platform.setVisibleSource(sourceId);
   }
 
+  /// Changes audio behaviour for every controller, current and future.
+  Future<void> setAudioPolicy(AudioPolicy policy) async {
+    _ensureInitialized();
+    _config = FeedPlayerConfig(
+      maxActivePlayers: _config.maxActivePlayers,
+      preloadAhead: _config.preloadAhead,
+      preloadBehind: _config.preloadBehind,
+      maxConcurrentPreloads: _config.maxConcurrentPreloads,
+      positionUpdateInterval: _config.positionUpdateInterval,
+      cache: _config.cache,
+      audio: policy,
+    );
+    await _platform.setAudioPolicy(policy);
+  }
+
+  /// Convenience for the common "unmute on user intent" flow.
+  Future<void> setMuted(bool muted) =>
+      setAudioPolicy(_config.audio.copyWith(muted: muted));
+
   /// Drops cached media bytes for [sourceIds], or all sources when omitted.
   Future<void> evictCachedMedia([List<String> sourceIds = const <String>[]]) =>
       _platform.evictCachedMedia(sourceIds);

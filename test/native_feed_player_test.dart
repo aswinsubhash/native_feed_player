@@ -16,6 +16,11 @@ class FakeFeedPlayerPlatform
   final List<String> visibleSourceIds = <String>[];
   final List<List<FeedSource>> setSourceCalls = <List<FeedSource>>[];
   final List<(List<FeedSource>, int)> appendCalls = <(List<FeedSource>, int)>[];
+  final List<(int, double)> volumeCalls = <(int, double)>[];
+  final List<(int, bool)> mutedCalls = <(int, bool)>[];
+  final List<(int, double)> speedCalls = <(int, double)>[];
+  final List<(int, bool)> loopingCalls = <(int, bool)>[];
+  final List<AudioPolicy> audioPolicies = <AudioPolicy>[];
 
   FeedPlayerConfig? initializedWith;
   int nextControllerId = 1;
@@ -78,6 +83,35 @@ class FakeFeedPlayerPlatform
   @override
   Stream<VideoMetrics> metricsStream(int controllerId) =>
       const Stream<VideoMetrics>.empty();
+
+  @override
+  Future<void> setVolume(int controllerId, double volume) async {
+    volumeCalls.add((controllerId, volume));
+  }
+
+  @override
+  Future<void> setMuted(int controllerId, bool muted) async {
+    mutedCalls.add((controllerId, muted));
+  }
+
+  @override
+  Future<void> setPlaybackSpeed(int controllerId, double speed) async {
+    speedCalls.add((controllerId, speed));
+  }
+
+  @override
+  Future<void> setLooping(int controllerId, bool looping) async {
+    loopingCalls.add((controllerId, looping));
+  }
+
+  @override
+  Future<void> setAudioPolicy(AudioPolicy policy) async {
+    audioPolicies.add(policy);
+  }
+
+  @override
+  Stream<VideoSize> videoSizeStream(int controllerId) =>
+      const Stream<VideoSize>.empty();
 
   @override
   Future<void> setVisibleSource(String sourceId) async {
@@ -206,6 +240,47 @@ void main() {
       final FeedController second = await player.controllerFor('a');
 
       expect(identical(first, second), isTrue);
+    });
+
+    test('controller commands reach the platform', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController controller = await player.controllerFor('a');
+
+      await controller.setVolume(0.5);
+      await controller.setMuted(false);
+      await controller.setPlaybackSpeed(1.5);
+      await controller.setLooping(false);
+
+      final int id = controller.controllerId;
+      expect(platform.volumeCalls, <(int, double)>[(id, 0.5)]);
+      expect(platform.mutedCalls, <(int, bool)>[(id, false)]);
+      expect(platform.speedCalls, <(int, double)>[(id, 1.5)]);
+      expect(platform.loopingCalls, <(int, bool)>[(id, false)]);
+    });
+
+    test('volume is clamped before it reaches the platform', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController controller = await player.controllerFor('a');
+
+      await controller.setVolume(3.2);
+      await controller.setVolume(-1);
+
+      expect(
+        platform.volumeCalls.map(((int, double) call) => call.$2),
+        <double>[1.0, 0.0],
+      );
+    });
+
+    test('setMuted updates the retained audio policy', () async {
+      expect(player.config.audio.muted, isTrue);
+
+      await player.setMuted(false);
+
+      expect(platform.audioPolicies.single.muted, isFalse);
+      expect(player.config.audio.muted, isFalse);
+      // Other config must survive the targeted change.
+      expect(player.config.maxActivePlayers, 3);
+      expect(player.config.cache.maxBytes, 256 * 1024 * 1024);
     });
 
     test('uninitialized use is rejected', () {

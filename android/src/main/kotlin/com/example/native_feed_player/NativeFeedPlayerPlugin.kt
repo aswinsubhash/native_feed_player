@@ -1,8 +1,11 @@
 package com.example.native_feed_player
 
+import android.app.Activity
+import android.app.Application
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Bundle
 import android.view.TextureView
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
@@ -29,7 +32,16 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private val stateEvents = BufferedStreamHandler<PlaybackStateEvent>()
     private val positionEvents = BufferedStreamHandler<PositionEvent>()
     private val metricsEvents = BufferedStreamHandler<MetricsEvent>()
+    private val videoSizeEvents = BufferedStreamHandler<VideoSizeEvent>()
     private val lifecycleEvents = BufferedStreamHandler<ControllerLifecycleEvent>()
+
+    /**
+     * Foreground tracking so playback can be paused when the app leaves the
+     * screen. Counting started activities is enough and avoids pulling in the
+     * lifecycle-process artifact for one signal.
+     */
+    private var startedActivityCount = 0
+    private var activityCallbacks: Application.ActivityLifecycleCallbacks? = null
 
     private val textureViewPool = TextureViewPool(maxPoolSize = 8)
     private val videoViews = mutableMapOf<Int, NativeVideoPlatformView>()
@@ -61,6 +73,10 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             flutterPluginBinding.binaryMessenger,
             MetricsStreamAdapter(metricsEvents)
         )
+        VideoSizeEventsStreamHandler.register(
+            flutterPluginBinding.binaryMessenger,
+            VideoSizeStreamAdapter(videoSizeEvents)
+        )
         LifecycleEventsStreamHandler.register(
             flutterPluginBinding.binaryMessenger,
             LifecycleStreamAdapter(lifecycleEvents)
@@ -86,8 +102,11 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
                 )
             },
             onPosition = { event -> positionEvents.emit(event) },
-            onMetrics = { event -> metricsEvents.emit(event) }
+            onMetrics = { event -> metricsEvents.emit(event) },
+            onVideoSize = { event -> videoSizeEvents.emit(event) }
         )
+
+        registerActivityCallbacks(flutterPluginBinding.applicationContext)
 
         NativeFeedPlayerHostApi.setUp(
             binaryMessenger = flutterPluginBinding.binaryMessenger,
@@ -96,6 +115,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        unregisterActivityCallbacks()
         appContext?.unregisterComponentCallbacks(this)
         appContext = null
         exoPlayerManager?.disposeAll()
@@ -167,6 +187,26 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         if (controllerId > 0) {
             managerOrThrow().seekTo(controllerId, request.positionMs)
         }
+    }
+
+    override fun setVolume(request: ControllerDoubleRequest) {
+        managerOrThrow().setVolume(request.controllerId.toInt(), request.value)
+    }
+
+    override fun setMuted(request: ControllerFlagRequest) {
+        managerOrThrow().setMuted(request.controllerId.toInt(), request.value)
+    }
+
+    override fun setPlaybackSpeed(request: ControllerDoubleRequest) {
+        managerOrThrow().setPlaybackSpeed(request.controllerId.toInt(), request.value)
+    }
+
+    override fun setLooping(request: ControllerFlagRequest) {
+        managerOrThrow().setLooping(request.controllerId.toInt(), request.value)
+    }
+
+    override fun setAudioPolicy(policy: AudioPolicyMessage) {
+        managerOrThrow().applyAudioPolicy(policy)
     }
 
     override fun setVisibleSource(request: VisibleSourceRequest) {
@@ -241,6 +281,42 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         // No-op: handled by the Flutter engine and ExoPlayer internally.
+    }
+
+    private fun registerActivityCallbacks(context: Context) {
+        val application = context.applicationContext as? Application ?: return
+        unregisterActivityCallbacks()
+
+        val callbacks = object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: Activity) {
+                startedActivityCount += 1
+                if (startedActivityCount == 1) {
+                    exoPlayerManager?.onAppForegrounded()
+                }
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+                if (startedActivityCount == 0) {
+                    exoPlayerManager?.onAppBackgrounded()
+                }
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        }
+        application.registerActivityLifecycleCallbacks(callbacks)
+        activityCallbacks = callbacks
+    }
+
+    private fun unregisterActivityCallbacks() {
+        val application = appContext?.applicationContext as? Application
+        activityCallbacks?.let { application?.unregisterActivityLifecycleCallbacks(it) }
+        activityCallbacks = null
+        startedActivityCount = 0
     }
 
     private fun managerOrThrow(): ExoPlayerManager {

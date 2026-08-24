@@ -64,6 +64,13 @@ internal class MetricsStreamAdapter(
     override fun onCancel(p0: Any?) = holder.detach()
 }
 
+internal class VideoSizeStreamAdapter(
+    private val holder: BufferedStreamHandler<VideoSizeEvent>
+) : VideoSizeEventsStreamHandler() {
+    override fun onListen(p0: Any?, sink: PigeonEventSink<VideoSizeEvent>) = holder.attach(sink)
+    override fun onCancel(p0: Any?) = holder.detach()
+}
+
 internal class LifecycleStreamAdapter(
     private val holder: BufferedStreamHandler<ControllerLifecycleEvent>
 ) : LifecycleEventsStreamHandler() {

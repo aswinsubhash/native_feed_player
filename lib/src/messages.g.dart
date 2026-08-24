@@ -424,6 +424,86 @@ class VisibleSourceRequest {
   int get hashCode => Object.hashAll(_toList());
 }
 
+class ControllerDoubleRequest {
+  ControllerDoubleRequest({required this.controllerId, required this.value});
+
+  int controllerId;
+
+  double value;
+
+  List<Object?> _toList() {
+    return <Object?>[controllerId, value];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static ControllerDoubleRequest decode(Object result) {
+    result as List<Object?>;
+    return ControllerDoubleRequest(
+      controllerId: result[0]! as int,
+      value: result[1]! as double,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ControllerDoubleRequest || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+class ControllerFlagRequest {
+  ControllerFlagRequest({required this.controllerId, required this.value});
+
+  int controllerId;
+
+  bool value;
+
+  List<Object?> _toList() {
+    return <Object?>[controllerId, value];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static ControllerFlagRequest decode(Object result) {
+    result as List<Object?>;
+    return ControllerFlagRequest(
+      controllerId: result[0]! as int,
+      value: result[1]! as bool,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ControllerFlagRequest || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
 class AttachViewRequest {
   AttachViewRequest({required this.controllerId, required this.viewId});
 
@@ -764,6 +844,59 @@ class MetricsEvent {
   int get hashCode => Object.hashAll(_toList());
 }
 
+class VideoSizeEvent {
+  VideoSizeEvent({
+    required this.controllerId,
+    required this.width,
+    required this.height,
+    required this.rotationDegrees,
+  });
+
+  int controllerId;
+
+  /// Decoded pixel dimensions, before [rotationDegrees] is applied.
+  int width;
+
+  int height;
+
+  /// Clockwise rotation the renderer must apply, in degrees.
+  int rotationDegrees;
+
+  List<Object?> _toList() {
+    return <Object?>[controllerId, width, height, rotationDegrees];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static VideoSizeEvent decode(Object result) {
+    result as List<Object?>;
+    return VideoSizeEvent(
+      controllerId: result[0]! as int,
+      width: result[1]! as int,
+      height: result[2]! as int,
+      rotationDegrees: result[3]! as int,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! VideoSizeEvent || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
 class ControllerLifecycleEvent {
   ControllerLifecycleEvent({required this.controllerId, required this.reason});
 
@@ -845,29 +978,38 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is VisibleSourceRequest) {
       buffer.putUint8(139);
       writeValue(buffer, value.encode());
-    } else if (value is AttachViewRequest) {
+    } else if (value is ControllerDoubleRequest) {
       buffer.putUint8(140);
       writeValue(buffer, value.encode());
-    } else if (value is SourceIdsRequest) {
+    } else if (value is ControllerFlagRequest) {
       buffer.putUint8(141);
       writeValue(buffer, value.encode());
-    } else if (value is CacheStatusMessage) {
+    } else if (value is AttachViewRequest) {
       buffer.putUint8(142);
       writeValue(buffer, value.encode());
-    } else if (value is PlaybackErrorMessage) {
+    } else if (value is SourceIdsRequest) {
       buffer.putUint8(143);
       writeValue(buffer, value.encode());
-    } else if (value is PlaybackStateEvent) {
+    } else if (value is CacheStatusMessage) {
       buffer.putUint8(144);
       writeValue(buffer, value.encode());
-    } else if (value is PositionEvent) {
+    } else if (value is PlaybackErrorMessage) {
       buffer.putUint8(145);
       writeValue(buffer, value.encode());
-    } else if (value is MetricsEvent) {
+    } else if (value is PlaybackStateEvent) {
       buffer.putUint8(146);
       writeValue(buffer, value.encode());
-    } else if (value is ControllerLifecycleEvent) {
+    } else if (value is PositionEvent) {
       buffer.putUint8(147);
+      writeValue(buffer, value.encode());
+    } else if (value is MetricsEvent) {
+      buffer.putUint8(148);
+      writeValue(buffer, value.encode());
+    } else if (value is VideoSizeEvent) {
+      buffer.putUint8(149);
+      writeValue(buffer, value.encode());
+    } else if (value is ControllerLifecycleEvent) {
+      buffer.putUint8(150);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -903,20 +1045,26 @@ class _PigeonCodec extends StandardMessageCodec {
       case 139:
         return VisibleSourceRequest.decode(readValue(buffer)!);
       case 140:
-        return AttachViewRequest.decode(readValue(buffer)!);
+        return ControllerDoubleRequest.decode(readValue(buffer)!);
       case 141:
-        return SourceIdsRequest.decode(readValue(buffer)!);
+        return ControllerFlagRequest.decode(readValue(buffer)!);
       case 142:
-        return CacheStatusMessage.decode(readValue(buffer)!);
+        return AttachViewRequest.decode(readValue(buffer)!);
       case 143:
-        return PlaybackErrorMessage.decode(readValue(buffer)!);
+        return SourceIdsRequest.decode(readValue(buffer)!);
       case 144:
-        return PlaybackStateEvent.decode(readValue(buffer)!);
+        return CacheStatusMessage.decode(readValue(buffer)!);
       case 145:
-        return PositionEvent.decode(readValue(buffer)!);
+        return PlaybackErrorMessage.decode(readValue(buffer)!);
       case 146:
-        return MetricsEvent.decode(readValue(buffer)!);
+        return PlaybackStateEvent.decode(readValue(buffer)!);
       case 147:
+        return PositionEvent.decode(readValue(buffer)!);
+      case 148:
+        return MetricsEvent.decode(readValue(buffer)!);
+      case 149:
+        return VideoSizeEvent.decode(readValue(buffer)!);
+      case 150:
         return ControllerLifecycleEvent.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -1177,6 +1325,132 @@ class NativeFeedPlayerHostApi {
     }
   }
 
+  Future<void> setVolume(ControllerDoubleRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVolume$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  Future<void> setMuted(ControllerFlagRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setMuted$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  Future<void> setPlaybackSpeed(ControllerDoubleRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setPlaybackSpeed$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  Future<void> setLooping(ControllerFlagRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setLooping$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  /// Applies to every controller, current and future.
+  Future<void> setAudioPolicy(AudioPolicyMessage policy) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setAudioPolicy$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[policy],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
   Future<void> setVisibleSource(VisibleSourceRequest request) async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleSource$pigeonVar_messageChannelSuffix';
@@ -1422,6 +1696,19 @@ Stream<MetricsEvent> metricsEvents({String instanceName = ''}) {
   );
   return metricsEventsChannel.receiveBroadcastStream().map((dynamic event) {
     return event as MetricsEvent;
+  });
+}
+
+Stream<VideoSizeEvent> videoSizeEvents({String instanceName = ''}) {
+  if (instanceName.isNotEmpty) {
+    instanceName = '.$instanceName';
+  }
+  final EventChannel videoSizeEventsChannel = EventChannel(
+    'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.videoSizeEvents$instanceName',
+    pigeonMethodCodec,
+  );
+  return videoSizeEventsChannel.receiveBroadcastStream().map((dynamic event) {
+    return event as VideoSizeEvent;
   });
 }
 

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import UIKit
 
 /// AVPlayer lifecycle and event orchestration for native feed playback.
 ///
@@ -12,6 +13,7 @@ final class AVPlayerManager {
   typealias ReleasedCallback = (_ controllerId: Int, _ reason: ReleaseReasonMessage) -> Void
   typealias PositionCallback = (_ event: PositionEvent) -> Void
   typealias MetricsCallback = (_ event: MetricsEvent) -> Void
+  typealias VideoSizeCallback = (_ event: VideoSizeEvent) -> Void
 
   /// Structured failure surfaced to Dart instead of a blanket `create_failed`.
   struct PlaybackSetupError: LocalizedError {
@@ -49,6 +51,7 @@ final class AVPlayerManager {
     var itemStatusObservation: NSKeyValueObservation?
     var timeControlObservation: NSKeyValueObservation?
     var readyForDisplayObservation: NSKeyValueObservation?
+    var presentationSizeObservation: NSKeyValueObservation?
     var endObserver: NSObjectProtocol?
 
     init(
@@ -70,6 +73,7 @@ final class AVPlayerManager {
   private let onReleased: ReleasedCallback
   private let onPosition: PositionCallback
   private let onMetrics: MetricsCallback
+  private let onVideoSize: VideoSizeCallback
 
   private let registry = FeedSourceRegistry()
   private let resourceLoader = CachingResourceLoader()
@@ -90,6 +94,13 @@ final class AVPlayerManager {
   private var positionInterval: TimeInterval = 0.2
   private var muted: Bool = true
   private var volume: Float = 1.0
+  private var handleAudioFocus: Bool = false
+
+  /// Controllers paused by backgrounding, to be resumed on return.
+  private var autoPausedControllerIds = Set<Int>()
+  private var pendingRateByController: [Int: Float] = [:]
+  private var backgroundObserver: NSObjectProtocol?
+  private var foregroundObserver: NSObjectProtocol?
   private var visibleGeneration: Int = 0
   private var preloadGeneration: Int = 0
   private var positionTimer: Timer?
@@ -120,12 +131,15 @@ final class AVPlayerManager {
     onState: @escaping StateCallback,
     onReleased: @escaping ReleasedCallback,
     onPosition: @escaping PositionCallback,
-    onMetrics: @escaping MetricsCallback
+    onMetrics: @escaping MetricsCallback,
+    onVideoSize: @escaping VideoSizeCallback
   ) {
     self.onState = onState
     self.onReleased = onReleased
     self.onPosition = onPosition
     self.onMetrics = onMetrics
+    self.onVideoSize = onVideoSize
+    observeAppLifecycle()
   }
 
   deinit {
@@ -138,8 +152,7 @@ final class AVPlayerManager {
     preloadBehind = max(0, Int(config.preloadBehind))
     maxConcurrentPreloads = max(1, Int(config.maxConcurrentPreloads))
     positionInterval = max(0.05, Double(config.positionUpdateIntervalMs) / 1000.0)
-    muted = config.audio.muted
-    volume = min(max(Float(config.audio.volume), 0), 1)
+    applyAudioPolicy(config.audio)
     maxTotalPlayers = maxActivePlayers + preloadAhead + preloadBehind + 1
 
     MediaDiskCache.shared.configure(
@@ -253,11 +266,129 @@ final class AVPlayerManager {
   }
 
   func play(controllerId: Int) {
+    autoPausedControllerIds.remove(controllerId)
     controllers[controllerId]?.player.play()
   }
 
   func pause(controllerId: Int) {
+    autoPausedControllerIds.remove(controllerId)
     controllers[controllerId]?.player.pause()
+  }
+
+  // MARK: - Controls
+
+  func setVolume(controllerId: Int, value: Double) {
+    let clamped = min(max(Float(value), 0), 1)
+    controllers[controllerId]?.player.volume = muted ? 0 : clamped
+  }
+
+  func setMuted(controllerId: Int, value: Bool) {
+    controllers[controllerId]?.player.volume = value ? 0 : volume
+  }
+
+  func setPlaybackSpeed(controllerId: Int, speed: Double) {
+    guard let player = controllers[controllerId]?.player else {
+      return
+    }
+    let clamped = min(max(Float(speed), 0.25), 4)
+    // Assigning rate also starts playback, so only apply it while playing.
+    if player.timeControlStatus == .playing {
+      player.rate = clamped
+    }
+    pendingRateByController[controllerId] = clamped
+  }
+
+  func setLooping(controllerId: Int, looping: Bool) {
+    guard let managed = controllers[controllerId] else {
+      return
+    }
+    if looping {
+      guard managed.looper == nil, let item = managed.player.currentItem else {
+        return
+      }
+      managed.looper = AVPlayerLooper(player: managed.player, templateItem: item)
+      managed.player.actionAtItemEnd = .advance
+    } else {
+      managed.looper?.disableLooping()
+      managed.looper = nil
+      managed.player.actionAtItemEnd = .pause
+    }
+  }
+
+  /**
+   Applies audio behaviour to current and future players.
+
+   The session category matters as much as the volume: `.ambient` respects the
+   ringer switch and mixes with other audio, which is what a muted feed should
+   do, while `.playback` is only appropriate once the user has opted into sound.
+   */
+  func applyAudioPolicy(_ policy: AudioPolicyMessage) {
+    muted = policy.muted
+    volume = min(max(Float(policy.volume), 0), 1)
+    handleAudioFocus = policy.handleAudioFocus && !policy.muted
+
+    configureAudioSession()
+    for managed in controllers.values {
+      managed.player.volume = muted ? 0 : volume
+    }
+  }
+
+  private func configureAudioSession() {
+    let session = AVAudioSession.sharedInstance()
+    do {
+      if muted {
+        // Silent by design: never interrupt whatever the user is listening to.
+        try session.setCategory(.ambient, mode: .moviePlayback, options: [.mixWithOthers])
+      } else if handleAudioFocus {
+        try session.setCategory(.playback, mode: .moviePlayback)
+      } else {
+        try session.setCategory(
+          .playback,
+          mode: .moviePlayback,
+          options: [.mixWithOthers]
+        )
+      }
+      try session.setActive(true, options: [])
+    } catch {
+      // A failed session configuration must not take playback down with it.
+    }
+  }
+
+  // MARK: - App lifecycle
+
+  private func observeAppLifecycle() {
+    let center = NotificationCenter.default
+    backgroundObserver = center.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.onAppBackgrounded()
+    }
+    foregroundObserver = center.addObserver(
+      forName: UIApplication.willEnterForegroundNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.onAppForegrounded()
+    }
+  }
+
+  /// Pauses anything playing when the app leaves the foreground and remembers
+  /// it, so returning restores exactly what was interrupted.
+  private func onAppBackgrounded() {
+    for (controllerId, managed) in controllers
+    where managed.player.timeControlStatus == .playing {
+      autoPausedControllerIds.insert(controllerId)
+      managed.player.pause()
+    }
+  }
+
+  private func onAppForegrounded() {
+    for controllerId in autoPausedControllerIds {
+      controllers[controllerId]?.player.play()
+    }
+    autoPausedControllerIds.removeAll()
   }
 
   func seekTo(controllerId: Int, positionMs: Int64) {
@@ -640,6 +771,9 @@ final class AVPlayerManager {
     managed.itemStatusObservation?.invalidate()
     managed.timeControlObservation?.invalidate()
     managed.readyForDisplayObservation?.invalidate()
+    managed.presentationSizeObservation?.invalidate()
+    autoPausedControllerIds.remove(controllerId)
+    pendingRateByController.removeValue(forKey: controllerId)
     // Disable before releasing, otherwise the looper keeps re-queuing items on
     // a player that is about to be recycled.
     managed.looper?.disableLooping()
@@ -748,6 +882,11 @@ final class AVPlayerManager {
           metrics.hasBeenReady = true
           self.metricsByController[managed.id] = metrics
         }
+        // Rate can only be set while playing, so a speed requested earlier is
+        // applied at the first opportunity.
+        if let rate = self.pendingRateByController[managed.id], player.rate != rate {
+          player.rate = rate
+        }
         self.noteSteadyPlayback()
         self.onState(managed.id, .playing, nil)
       @unknown default:
@@ -757,6 +896,26 @@ final class AVPlayerManager {
           PlaybackErrorMapper.unknown(message: "Unrecognised timeControlStatus")
         )
       }
+    }
+
+    managed.presentationSizeObservation = playerItem.observe(
+      \.presentationSize,
+      options: [.new, .initial]
+    ) { [weak self] item, _ in
+      let size = item.presentationSize
+      guard size.width > 0, size.height > 0 else {
+        return
+      }
+      // AVFoundation reports the display size with orientation already
+      // applied, so no residual rotation is left for the renderer.
+      self?.onVideoSize(
+        VideoSizeEvent(
+          controllerId: Int64(managed.id),
+          width: Int64(size.width),
+          height: Int64(size.height),
+          rotationDegrees: 0
+        )
+      )
     }
 
     // Looping is handled by AVPlayerLooper, which recycles the item behind the

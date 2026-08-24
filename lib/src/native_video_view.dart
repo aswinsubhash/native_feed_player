@@ -5,12 +5,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'video_controller.dart';
+import 'video_size.dart';
 
-/// Platform view widget for rendering native video output.
+/// Renders native video output for a [FeedController].
+///
+/// The native surface fills its box, so [fit] is applied by sizing the surface
+/// against the reported [VideoSize] rather than by scaling pixels.
 class NativeVideoView extends StatefulWidget {
-  const NativeVideoView({required this.controller, super.key});
+  const NativeVideoView({
+    required this.controller,
+    this.fit = BoxFit.cover,
+    this.placeholder,
+    this.backgroundColor = const Color(0xFF000000),
+    super.key,
+  });
 
   final FeedController controller;
+
+  /// How the video is sized inside the widget. Feeds normally want
+  /// [BoxFit.cover]; [BoxFit.contain] letterboxes instead of cropping.
+  final BoxFit fit;
+
+  /// Shown until the first frame is rendered, hiding the black flash between
+  /// items.
+  final Widget? placeholder;
+
+  final Color backgroundColor;
 
   @override
   State<NativeVideoView> createState() => _NativeVideoViewState();
@@ -21,6 +41,15 @@ class _NativeVideoViewState extends State<NativeVideoView> {
 
   int? _viewId;
   FeedController? _attachedController;
+  StreamSubscription<VideoSize>? _videoSizeSub;
+  VideoSize _videoSize = VideoSize.zero;
+  bool _hasFirstFrame = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _observe(widget.controller);
+  }
 
   @override
   void didUpdateWidget(covariant NativeVideoView oldWidget) {
@@ -28,19 +57,46 @@ class _NativeVideoViewState extends State<NativeVideoView> {
     if (oldWidget.controller.controllerId == widget.controller.controllerId) {
       return;
     }
+    _observe(widget.controller);
     // The platform view may not exist yet. Attaching is retried from
-    // _onPlatformViewCreated once it does, so the new controller is never
-    // left permanently unbound.
+    // _onPlatformViewCreated once it does, so the new controller is never left
+    // permanently unbound.
     unawaited(_rebind(previous: oldWidget.controller));
   }
 
   @override
   void dispose() {
+    unawaited(_videoSizeSub?.cancel());
     final FeedController? attached = _attachedController;
     if (attached != null) {
       unawaited(_detach(attached));
     }
     super.dispose();
+  }
+
+  void _observe(FeedController controller) {
+    unawaited(_videoSizeSub?.cancel());
+    _videoSize = VideoSize.zero;
+    _hasFirstFrame = false;
+
+    _videoSizeSub = controller.videoSizeStream.listen((VideoSize size) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _videoSize = size);
+    });
+
+    unawaited(
+      controller.firstFrameRendered
+          .then((_) {
+            if (mounted && identical(widget.controller, controller)) {
+              setState(() => _hasFirstFrame = true);
+            }
+          })
+          .catchError((_) {
+            // Controller released before a frame appeared; the placeholder stays.
+          }),
+    );
   }
 
   Future<void> _rebind({FeedController? previous}) async {
@@ -77,8 +133,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
     await _attach(widget.controller, viewId);
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildPlatformView() {
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return AndroidView(
@@ -98,5 +153,36 @@ class _NativeVideoViewState extends State<NativeVideoView> {
       case TargetPlatform.windows:
         return const SizedBox.shrink();
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget video = _buildPlatformView();
+
+    // Until the size is known there is nothing to fit against, so the surface
+    // just fills the box.
+    if (_videoSize.isKnown) {
+      video = FittedBox(
+        fit: widget.fit,
+        clipBehavior: Clip.hardEdge,
+        child: SizedBox(
+          width: _videoSize.width.toDouble(),
+          height: _videoSize.height.toDouble(),
+          child: video,
+        ),
+      );
+    }
+
+    return ColoredBox(
+      color: widget.backgroundColor,
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          video,
+          if (!_hasFirstFrame && widget.placeholder != null)
+            widget.placeholder!,
+        ],
+      ),
+    );
   }
 }

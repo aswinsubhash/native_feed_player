@@ -9,6 +9,7 @@ import 'src/messages.g.dart';
 import 'src/playback_error.dart';
 import 'src/video_metrics.dart';
 import 'src/video_playback_state.dart';
+import 'src/video_size.dart';
 
 /// [FeedPlayerPlatform] implemented on top of the generated Pigeon contracts.
 ///
@@ -20,11 +21,13 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     Stream<PlaybackStateEvent>? playbackStateEventStream,
     Stream<PositionEvent>? positionEventStream,
     Stream<MetricsEvent>? metricsEventStream,
+    Stream<VideoSizeEvent>? videoSizeEventStream,
     Stream<ControllerLifecycleEvent>? lifecycleEventStream,
   }) : hostApi = hostApi ?? NativeFeedPlayerHostApi(),
        _playbackStateEventStream = playbackStateEventStream,
        _positionEventStream = positionEventStream,
        _metricsEventStream = metricsEventStream,
+       _videoSizeEventStream = videoSizeEventStream,
        _lifecycleEventStream = lifecycleEventStream;
 
   @visibleForTesting
@@ -33,6 +36,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   final Stream<PlaybackStateEvent>? _playbackStateEventStream;
   final Stream<PositionEvent>? _positionEventStream;
   final Stream<MetricsEvent>? _metricsEventStream;
+  final Stream<VideoSizeEvent>? _videoSizeEventStream;
   final Stream<ControllerLifecycleEvent>? _lifecycleEventStream;
 
   late final Stream<PlaybackStateEvent> _states =
@@ -44,6 +48,9 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   late final Stream<MetricsEvent> _metrics =
       (_metricsEventStream ?? metricsEvents()).asBroadcastStream();
 
+  late final Stream<VideoSizeEvent> _videoSizes =
+      (_videoSizeEventStream ?? videoSizeEvents()).asBroadcastStream();
+
   late final Stream<ControllerLifecycleEvent> _lifecycle =
       (_lifecycleEventStream ?? lifecycleEvents()).asBroadcastStream();
 
@@ -53,6 +60,8 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       <int, Stream<PlaybackPosition>>{};
   final Map<int, Stream<VideoMetrics>> _metricsStreams =
       <int, Stream<VideoMetrics>>{};
+  final Map<int, Stream<VideoSize>> _videoSizeStreams =
+      <int, Stream<VideoSize>>{};
 
   @override
   late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle
@@ -166,6 +175,48 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   }
 
   @override
+  Future<void> setVolume(int controllerId, double volume) async {
+    await hostApi.setVolume(
+      ControllerDoubleRequest(controllerId: controllerId, value: volume),
+    );
+  }
+
+  @override
+  Future<void> setMuted(int controllerId, bool muted) async {
+    await hostApi.setMuted(
+      ControllerFlagRequest(controllerId: controllerId, value: muted),
+    );
+  }
+
+  @override
+  Future<void> setPlaybackSpeed(int controllerId, double speed) async {
+    await hostApi.setPlaybackSpeed(
+      ControllerDoubleRequest(controllerId: controllerId, value: speed),
+    );
+  }
+
+  @override
+  Future<void> setLooping(int controllerId, bool looping) async {
+    await hostApi.setLooping(
+      ControllerFlagRequest(controllerId: controllerId, value: looping),
+    );
+  }
+
+  @override
+  Future<void> setAudioPolicy(AudioPolicy policy) async {
+    await hostApi.setAudioPolicy(policy.toMessage());
+  }
+
+  @override
+  Stream<VideoSize> videoSizeStream(int controllerId) {
+    return _videoSizeStreams.putIfAbsent(controllerId, () {
+      return _videoSizes
+          .where((VideoSizeEvent event) => event.controllerId == controllerId)
+          .map(VideoSize.fromMessage);
+    });
+  }
+
+  @override
   Future<void> setVisibleSource(String sourceId) async {
     await hostApi.setVisibleSource(VisibleSourceRequest(sourceId: sourceId));
   }
@@ -212,6 +263,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();
+    _videoSizeStreams.clear();
   }
 
   List<FeedSourceMessage> _toMessages(
@@ -228,6 +280,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _stateStreams.remove(controllerId);
     _positionStreams.remove(controllerId);
     _metricsStreams.remove(controllerId);
+    _videoSizeStreams.remove(controllerId);
   }
 
   void _ensureSupportedPlatform() {

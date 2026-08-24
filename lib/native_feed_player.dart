@@ -8,3 +8,4 @@ export 'src/playback_error.dart';
 export 'src/video_controller.dart';
 export 'src/video_metrics.dart';
 export 'src/video_playback_state.dart';
+export 'src/video_size.dart';

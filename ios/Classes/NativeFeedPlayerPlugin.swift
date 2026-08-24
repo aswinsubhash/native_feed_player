@@ -93,6 +93,22 @@ private final class MetricsStreamAdapter: MetricsEventsStreamHandler {
   }
 }
 
+private final class VideoSizeStreamAdapter: VideoSizeEventsStreamHandler {
+  private let holder: BufferedEventSink<VideoSizeEvent>
+
+  init(holder: BufferedEventSink<VideoSizeEvent>) {
+    self.holder = holder
+  }
+
+  override func onListen(withArguments arguments: Any?, sink: PigeonEventSink<VideoSizeEvent>) {
+    holder.attach(sink)
+  }
+
+  override func onCancel(withArguments arguments: Any?) {
+    holder.detach()
+  }
+}
+
 private final class LifecycleStreamAdapter: LifecycleEventsStreamHandler {
   private let holder: BufferedEventSink<ControllerLifecycleEvent>
 
@@ -123,6 +139,7 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   private let stateEvents = BufferedEventSink<PlaybackStateEvent>()
   private let positionEvents = BufferedEventSink<PositionEvent>()
   private let metricsEvents = BufferedEventSink<MetricsEvent>()
+  private let videoSizeEvents = BufferedEventSink<VideoSizeEvent>()
   private let lifecycleEvents = BufferedEventSink<ControllerLifecycleEvent>()
 
   private var manager: AVPlayerManager?
@@ -242,6 +259,32 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
   }
 
+  func setVolume(request: ControllerDoubleRequest) throws {
+    try managerOrThrow().setVolume(controllerId: Int(request.controllerId), value: request.value)
+  }
+
+  func setMuted(request: ControllerFlagRequest) throws {
+    try managerOrThrow().setMuted(controllerId: Int(request.controllerId), value: request.value)
+  }
+
+  func setPlaybackSpeed(request: ControllerDoubleRequest) throws {
+    try managerOrThrow().setPlaybackSpeed(
+      controllerId: Int(request.controllerId),
+      speed: request.value
+    )
+  }
+
+  func setLooping(request: ControllerFlagRequest) throws {
+    try managerOrThrow().setLooping(
+      controllerId: Int(request.controllerId),
+      looping: request.value
+    )
+  }
+
+  func setAudioPolicy(policy: AudioPolicyMessage) throws {
+    try managerOrThrow().applyAudioPolicy(policy)
+  }
+
   func setVisibleSource(request: VisibleSourceRequest) throws {
     try managerOrThrow().setVisibleSource(request.sourceId)
   }
@@ -320,6 +363,10 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
       with: messenger,
       streamHandler: MetricsStreamAdapter(holder: metricsEvents)
     )
+    VideoSizeEventsStreamHandler.register(
+      with: messenger,
+      streamHandler: VideoSizeStreamAdapter(holder: videoSizeEvents)
+    )
     LifecycleEventsStreamHandler.register(
       with: messenger,
       streamHandler: LifecycleStreamAdapter(holder: lifecycleEvents)
@@ -349,6 +396,9 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
       },
       onMetrics: { [weak self] event in
         self?.onMain { self?.metricsEvents.emit(event) }
+      },
+      onVideoSize: { [weak self] event in
+        self?.onMain { self?.videoSizeEvents.emit(event) }
       }
     )
 

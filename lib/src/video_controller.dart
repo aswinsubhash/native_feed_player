@@ -7,6 +7,7 @@ import 'controller_release.dart';
 import 'feed_player_exception.dart';
 import 'video_metrics.dart';
 import 'video_playback_state.dart';
+import 'video_size.dart';
 
 /// Handle for controlling the native player bound to one [FeedSource].
 ///
@@ -66,6 +67,44 @@ class FeedController {
   Future<void> seekTo(Duration position) {
     _ensureAlive();
     return _platform.seekTo(controllerId, position);
+  }
+
+  /// Sets output level in the range 0..1. Ignored while muted.
+  Future<void> setVolume(double volume) {
+    _ensureAlive();
+    return _platform.setVolume(controllerId, volume.clamp(0.0, 1.0));
+  }
+
+  Future<void> setMuted(bool muted) {
+    _ensureAlive();
+    return _platform.setMuted(controllerId, muted);
+  }
+
+  /// Playback rate, clamped natively to 0.25..4.
+  Future<void> setPlaybackSpeed(double speed) {
+    _ensureAlive();
+    return _platform.setPlaybackSpeed(controllerId, speed);
+  }
+
+  Future<void> setLooping(bool looping) {
+    _ensureAlive();
+    return _platform.setLooping(controllerId, looping);
+  }
+
+  /// Emits whenever the decoded video dimensions become known or change.
+  Stream<VideoSize> get videoSizeStream =>
+      _platform.videoSizeStream(controllerId);
+
+  /// Completes once the first frame has actually been rendered.
+  ///
+  /// Useful for dismissing a poster at the exact moment video appears rather
+  /// than when playback merely starts.
+  Future<Duration> get firstFrameRendered {
+    return metricsStream
+        .map((VideoMetrics metrics) => metrics.firstFrameLatency)
+        .where((Duration? latency) => latency != null)
+        .cast<Duration>()
+        .first;
   }
 
   /// Releases the native player. Safe to call more than once.

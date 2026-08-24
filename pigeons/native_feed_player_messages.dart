@@ -108,6 +108,20 @@ class VisibleSourceRequest {
   final String sourceId;
 }
 
+class ControllerDoubleRequest {
+  ControllerDoubleRequest({required this.controllerId, required this.value});
+
+  final int controllerId;
+  final double value;
+}
+
+class ControllerFlagRequest {
+  ControllerFlagRequest({required this.controllerId, required this.value});
+
+  final int controllerId;
+  final bool value;
+}
+
 class AttachViewRequest {
   AttachViewRequest({required this.controllerId, required this.viewId});
 
@@ -195,6 +209,24 @@ class MetricsEvent {
   final int? firstFrameLatencyMs;
 }
 
+class VideoSizeEvent {
+  VideoSizeEvent({
+    required this.controllerId,
+    required this.width,
+    required this.height,
+    required this.rotationDegrees,
+  });
+
+  final int controllerId;
+
+  /// Decoded pixel dimensions, before [rotationDegrees] is applied.
+  final int width;
+  final int height;
+
+  /// Clockwise rotation the renderer must apply, in degrees.
+  final int rotationDegrees;
+}
+
 class ControllerLifecycleEvent {
   ControllerLifecycleEvent({required this.controllerId, required this.reason});
 
@@ -224,6 +256,17 @@ abstract class NativeFeedPlayerHostApi {
 
   void seekTo(SeekRequest request);
 
+  void setVolume(ControllerDoubleRequest request);
+
+  void setMuted(ControllerFlagRequest request);
+
+  void setPlaybackSpeed(ControllerDoubleRequest request);
+
+  void setLooping(ControllerFlagRequest request);
+
+  /// Applies to every controller, current and future.
+  void setAudioPolicy(AudioPolicyMessage policy);
+
   void setVisibleSource(VisibleSourceRequest request);
 
   /// Drops persisted media bytes for the given sources, or all of them when
@@ -250,6 +293,8 @@ abstract class NativeFeedPlayerEventApi {
   PositionEvent positionEvents();
 
   MetricsEvent metricsEvents();
+
+  VideoSizeEvent videoSizeEvents();
 
   ControllerLifecycleEvent lifecycleEvents();
 }

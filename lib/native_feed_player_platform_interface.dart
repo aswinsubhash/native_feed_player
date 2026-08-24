@@ -7,6 +7,7 @@ import 'src/feed_source.dart';
 import 'src/playback_error.dart';
 import 'src/video_metrics.dart';
 import 'src/video_playback_state.dart';
+import 'src/video_size.dart';
 
 abstract class FeedPlayerPlatform extends PlatformInterface {
   /// Constructs a FeedPlayerPlatform.
@@ -59,6 +60,19 @@ abstract class FeedPlayerPlatform extends PlatformInterface {
   Future<void> pause(int controllerId);
 
   Future<void> seekTo(int controllerId, Duration position);
+
+  Future<void> setVolume(int controllerId, double volume);
+
+  Future<void> setMuted(int controllerId, bool muted);
+
+  Future<void> setPlaybackSpeed(int controllerId, double speed);
+
+  Future<void> setLooping(int controllerId, bool looping);
+
+  /// Applies to every controller, current and future.
+  Future<void> setAudioPolicy(AudioPolicy policy);
+
+  Stream<VideoSize> videoSizeStream(int controllerId);
 
   Stream<PlaybackPosition> positionStream(int controllerId);
 

@@ -6,6 +6,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.TextureView
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -26,7 +28,8 @@ internal class ExoPlayerManager(
     private val onState: (controllerId: Int, status: PlaybackStatusMessage, error: PlaybackErrorMessage?) -> Unit,
     private val onReleased: (controllerId: Int, reason: ReleaseReasonMessage) -> Unit,
     private val onPosition: (event: PositionEvent) -> Unit,
-    private val onMetrics: (event: MetricsEvent) -> Unit
+    private val onMetrics: (event: MetricsEvent) -> Unit,
+    private val onVideoSize: (event: VideoSizeEvent) -> Unit
 ) {
     private class ManagedPlayer(
         val player: ExoPlayer,
@@ -68,6 +71,10 @@ internal class ExoPlayerManager(
     private var positionIntervalMs = 200L
     private var muted = true
     private var volume = 1.0f
+    private var handleAudioFocus = false
+
+    /** Controllers paused by backgrounding, to be resumed on return. */
+    private val autoPausedControllerIds = mutableSetOf<Int>()
     private var visibleGeneration = 0L
     private var preloadGeneration = 0
     private var tickerRunning = false
@@ -108,8 +115,7 @@ internal class ExoPlayerManager(
         preloadBehind = maxOf(0, config.preloadBehind.toInt())
         maxConcurrentPreloads = maxOf(1, config.maxConcurrentPreloads.toInt())
         positionIntervalMs = maxOf(50L, config.positionUpdateIntervalMs)
-        muted = config.audio.muted
-        volume = config.audio.volume.toFloat().coerceIn(0f, 1f)
+        applyAudioPolicy(config.audio)
         // Preloading no longer costs a player, so the budget only has to cover
         // live controllers plus the recycle pool.
         maxTotalPlayers = maxActivePlayers * 2
@@ -183,6 +189,16 @@ internal class ExoPlayerManager(
         player.addAnalyticsListener(analyticsListener)
         player.repeatMode = if (looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         player.volume = if (muted) 0f else volume
+        player.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .setUsage(C.USAGE_MEDIA)
+                .build(),
+            handleAudioFocus
+        )
+        // Keeps the CPU alive for audio while the screen sleeps, without
+        // holding a wake lock when the feed is muted.
+        player.setWakeMode(if (muted) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
 
         managedPlayers[controllerId] = ManagedPlayer(
             player = player,
@@ -216,10 +232,76 @@ internal class ExoPlayerManager(
     }
 
     fun play(controllerId: Int) {
+        autoPausedControllerIds.remove(controllerId)
         managedPlayers[controllerId]?.player?.play()
     }
 
+    // MARK: - Controls
+
+    fun setVolume(controllerId: Int, value: Double) {
+        val clamped = value.toFloat().coerceIn(0f, 1f)
+        managedPlayers[controllerId]?.player?.volume = if (muted) 0f else clamped
+    }
+
+    fun setMuted(controllerId: Int, value: Boolean) {
+        managedPlayers[controllerId]?.player?.volume = if (value) 0f else volume
+    }
+
+    fun setPlaybackSpeed(controllerId: Int, speed: Double) {
+        val clamped = speed.toFloat().coerceIn(0.25f, 4f)
+        managedPlayers[controllerId]?.player?.setPlaybackSpeed(clamped)
+    }
+
+    fun setLooping(controllerId: Int, looping: Boolean) {
+        managedPlayers[controllerId]?.player?.repeatMode =
+            if (looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+    }
+
+    /**
+     * Applies audio behaviour to current and future players.
+     *
+     * Focus is only requested when audio is actually audible: a muted feed that
+     * grabs focus would needlessly duck or pause whatever the user is listening
+     * to.
+     */
+    fun applyAudioPolicy(policy: AudioPolicyMessage) {
+        muted = policy.muted
+        volume = policy.volume.toFloat().coerceIn(0f, 1f)
+        handleAudioFocus = policy.handleAudioFocus && !policy.muted
+
+        val attributes = AudioAttributes.Builder()
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .setUsage(C.USAGE_MEDIA)
+            .build()
+
+        for (managed in managedPlayers.values) {
+            managed.player.setAudioAttributes(attributes, handleAudioFocus)
+            managed.player.volume = if (muted) 0f else volume
+        }
+    }
+
+    /**
+     * Pauses anything playing when the app leaves the foreground and remembers
+     * it, so returning restores exactly what was interrupted.
+     */
+    fun onAppBackgrounded() {
+        for ((controllerId, managed) in managedPlayers) {
+            if (managed.player.isPlaying) {
+                autoPausedControllerIds.add(controllerId)
+                managed.player.pause()
+            }
+        }
+    }
+
+    fun onAppForegrounded() {
+        for (controllerId in autoPausedControllerIds.toList()) {
+            managedPlayers[controllerId]?.player?.play()
+        }
+        autoPausedControllerIds.clear()
+    }
+
     fun pause(controllerId: Int) {
+        autoPausedControllerIds.remove(controllerId)
         managedPlayers[controllerId]?.player?.pause()
     }
 
@@ -569,7 +651,19 @@ internal class ExoPlayerManager(
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
-                // Surfaced through position events so callers can size the view.
+                if (videoSize.width <= 0 || videoSize.height <= 0) {
+                    return
+                }
+                // Media3 applies rotation to the reported size itself on all
+                // supported API levels, so nothing is left for the renderer.
+                onVideoSize(
+                    VideoSizeEvent(
+                        controllerId = controllerId.toLong(),
+                        width = videoSize.width.toLong(),
+                        height = videoSize.height.toLong(),
+                        rotationDegrees = 0
+                    )
+                )
             }
 
             override fun onRenderedFirstFrame() {
