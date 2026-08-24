@@ -78,27 +78,84 @@ class FlutterError (
   val details: Any? = null
 ) : Throwable()
 
+/** How a source should be treated by the native loader. */
+enum class FeedMediaKindMessage(val raw: Int) {
+  AUTO(0),
+  PROGRESSIVE(1),
+  HLS(2);
+
+  companion object {
+    fun ofRaw(raw: Int): FeedMediaKindMessage? {
+      return values().firstOrNull { it.raw == raw }
+    }
+  }
+}
+
+/** Native playback status for a single controller. */
+enum class PlaybackStatusMessage(val raw: Int) {
+  IDLE(0),
+  PREPARING(1),
+  READY(2),
+  PLAYING(3),
+  PAUSED(4),
+  BUFFERING(5),
+  COMPLETED(6),
+  ERROR(7),
+  RELEASED(8);
+
+  companion object {
+    fun ofRaw(raw: Int): PlaybackStatusMessage? {
+      return values().firstOrNull { it.raw == raw }
+    }
+  }
+}
+
+/** Why a controller stopped existing. */
+enum class ReleaseReasonMessage(val raw: Int) {
+  DISPOSED(0),
+  EVICTED(1),
+  ERROR(2),
+  ENGINE_DETACHED(3);
+
+  companion object {
+    fun ofRaw(raw: Int): ReleaseReasonMessage? {
+      return values().firstOrNull { it.raw == raw }
+    }
+  }
+}
+
 /** Generated class from Pigeon that represents data sent in messages. */
-data class InitializeRequest (
-  val maxCachedPlayers: Long,
-  val preloadCount: Long
+data class FeedSourceMessage (
+  /** Caller-owned stable identifier. Survives pagination and reordering. */
+  val id: String,
+  val uri: String,
+  /** Position in the feed, used only to rank preload priority. */
+  val rank: Long,
+  val kind: FeedMediaKindMessage,
+  val headers: Map<String, String>
 )
  {
   companion object {
-    fun fromList(pigeonVar_list: List<Any?>): InitializeRequest {
-      val maxCachedPlayers = pigeonVar_list[0] as Long
-      val preloadCount = pigeonVar_list[1] as Long
-      return InitializeRequest(maxCachedPlayers, preloadCount)
+    fun fromList(pigeonVar_list: List<Any?>): FeedSourceMessage {
+      val id = pigeonVar_list[0] as String
+      val uri = pigeonVar_list[1] as String
+      val rank = pigeonVar_list[2] as Long
+      val kind = pigeonVar_list[3] as FeedMediaKindMessage
+      val headers = pigeonVar_list[4] as Map<String, String>
+      return FeedSourceMessage(id, uri, rank, kind, headers)
     }
   }
   fun toList(): List<Any?> {
     return listOf(
-      maxCachedPlayers,
-      preloadCount,
+      id,
+      uri,
+      rank,
+      kind,
+      headers,
     )
   }
   override fun equals(other: Any?): Boolean {
-    if (other !is InitializeRequest) {
+    if (other !is FeedSourceMessage) {
       return false
     }
     if (this === other) {
@@ -110,26 +167,26 @@ data class InitializeRequest (
 }
 
 /** Generated class from Pigeon that represents data sent in messages. */
-data class VideoSourceMessage (
-  val url: String,
-  val index: Long
+data class CachePolicyMessage (
+  val enabled: Boolean,
+  val maxBytes: Long
 )
  {
   companion object {
-    fun fromList(pigeonVar_list: List<Any?>): VideoSourceMessage {
-      val url = pigeonVar_list[0] as String
-      val index = pigeonVar_list[1] as Long
-      return VideoSourceMessage(url, index)
+    fun fromList(pigeonVar_list: List<Any?>): CachePolicyMessage {
+      val enabled = pigeonVar_list[0] as Boolean
+      val maxBytes = pigeonVar_list[1] as Long
+      return CachePolicyMessage(enabled, maxBytes)
     }
   }
   fun toList(): List<Any?> {
     return listOf(
-      url,
-      index,
+      enabled,
+      maxBytes,
     )
   }
   override fun equals(other: Any?): Boolean {
-    if (other !is VideoSourceMessage) {
+    if (other !is CachePolicyMessage) {
       return false
     }
     if (this === other) {
@@ -141,23 +198,75 @@ data class VideoSourceMessage (
 }
 
 /** Generated class from Pigeon that represents data sent in messages. */
-data class PreloadRequest (
-  val sources: List<VideoSourceMessage>
+data class AudioPolicyMessage (
+  val muted: Boolean,
+  val volume: Double,
+  val handleAudioFocus: Boolean
 )
  {
   companion object {
-    fun fromList(pigeonVar_list: List<Any?>): PreloadRequest {
-      val sources = pigeonVar_list[0] as List<VideoSourceMessage>
-      return PreloadRequest(sources)
+    fun fromList(pigeonVar_list: List<Any?>): AudioPolicyMessage {
+      val muted = pigeonVar_list[0] as Boolean
+      val volume = pigeonVar_list[1] as Double
+      val handleAudioFocus = pigeonVar_list[2] as Boolean
+      return AudioPolicyMessage(muted, volume, handleAudioFocus)
     }
   }
   fun toList(): List<Any?> {
     return listOf(
-      sources,
+      muted,
+      volume,
+      handleAudioFocus,
     )
   }
   override fun equals(other: Any?): Boolean {
-    if (other !is PreloadRequest) {
+    if (other !is AudioPolicyMessage) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    return MessagesPigeonUtils.deepEquals(toList(), other.toList())  }
+
+  override fun hashCode(): Int = toList().hashCode()
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class FeedPlayerConfigMessage (
+  val maxActivePlayers: Long,
+  val preloadAhead: Long,
+  val preloadBehind: Long,
+  val maxConcurrentPreloads: Long,
+  val positionUpdateIntervalMs: Long,
+  val cache: CachePolicyMessage,
+  val audio: AudioPolicyMessage
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): FeedPlayerConfigMessage {
+      val maxActivePlayers = pigeonVar_list[0] as Long
+      val preloadAhead = pigeonVar_list[1] as Long
+      val preloadBehind = pigeonVar_list[2] as Long
+      val maxConcurrentPreloads = pigeonVar_list[3] as Long
+      val positionUpdateIntervalMs = pigeonVar_list[4] as Long
+      val cache = pigeonVar_list[5] as CachePolicyMessage
+      val audio = pigeonVar_list[6] as AudioPolicyMessage
+      return FeedPlayerConfigMessage(maxActivePlayers, preloadAhead, preloadBehind, maxConcurrentPreloads, positionUpdateIntervalMs, cache, audio)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      maxActivePlayers,
+      preloadAhead,
+      preloadBehind,
+      maxConcurrentPreloads,
+      positionUpdateIntervalMs,
+      cache,
+      audio,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other !is FeedPlayerConfigMessage) {
       return false
     }
     if (this === other) {
@@ -170,25 +279,22 @@ data class PreloadRequest (
 
 /** Generated class from Pigeon that represents data sent in messages. */
 data class CreateControllerRequest (
-  val url: String,
-  val index: Long,
+  val sourceId: String,
   val autoPlay: Boolean,
   val looping: Boolean
 )
  {
   companion object {
     fun fromList(pigeonVar_list: List<Any?>): CreateControllerRequest {
-      val url = pigeonVar_list[0] as String
-      val index = pigeonVar_list[1] as Long
-      val autoPlay = pigeonVar_list[2] as Boolean
-      val looping = pigeonVar_list[3] as Boolean
-      return CreateControllerRequest(url, index, autoPlay, looping)
+      val sourceId = pigeonVar_list[0] as String
+      val autoPlay = pigeonVar_list[1] as Boolean
+      val looping = pigeonVar_list[2] as Boolean
+      return CreateControllerRequest(sourceId, autoPlay, looping)
     }
   }
   fun toList(): List<Any?> {
     return listOf(
-      url,
-      index,
+      sourceId,
       autoPlay,
       looping,
     )
@@ -265,23 +371,23 @@ data class SeekRequest (
 }
 
 /** Generated class from Pigeon that represents data sent in messages. */
-data class VisibleIndexRequest (
-  val index: Long
+data class VisibleSourceRequest (
+  val sourceId: String
 )
  {
   companion object {
-    fun fromList(pigeonVar_list: List<Any?>): VisibleIndexRequest {
-      val index = pigeonVar_list[0] as Long
-      return VisibleIndexRequest(index)
+    fun fromList(pigeonVar_list: List<Any?>): VisibleSourceRequest {
+      val sourceId = pigeonVar_list[0] as String
+      return VisibleSourceRequest(sourceId)
     }
   }
   fun toList(): List<Any?> {
     return listOf(
-      index,
+      sourceId,
     )
   }
   override fun equals(other: Any?): Boolean {
-    if (other !is VisibleIndexRequest) {
+    if (other !is VisibleSourceRequest) {
       return false
     }
     if (this === other) {
@@ -322,47 +428,348 @@ data class AttachViewRequest (
 
   override fun hashCode(): Int = toList().hashCode()
 }
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class SourceIdsRequest (
+  val sourceIds: List<String>
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): SourceIdsRequest {
+      val sourceIds = pigeonVar_list[0] as List<String>
+      return SourceIdsRequest(sourceIds)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      sourceIds,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other !is SourceIdsRequest) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    return MessagesPigeonUtils.deepEquals(toList(), other.toList())  }
+
+  override fun hashCode(): Int = toList().hashCode()
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class CacheStatusMessage (
+  val sourceId: String,
+  val cachedBytes: Long,
+  val totalBytes: Long,
+  val isComplete: Boolean
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CacheStatusMessage {
+      val sourceId = pigeonVar_list[0] as String
+      val cachedBytes = pigeonVar_list[1] as Long
+      val totalBytes = pigeonVar_list[2] as Long
+      val isComplete = pigeonVar_list[3] as Boolean
+      return CacheStatusMessage(sourceId, cachedBytes, totalBytes, isComplete)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      sourceId,
+      cachedBytes,
+      totalBytes,
+      isComplete,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other !is CacheStatusMessage) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    return MessagesPigeonUtils.deepEquals(toList(), other.toList())  }
+
+  override fun hashCode(): Int = toList().hashCode()
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class PlaybackErrorMessage (
+  val code: String,
+  val message: String,
+  val isRecoverable: Boolean,
+  val platformCode: String? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): PlaybackErrorMessage {
+      val code = pigeonVar_list[0] as String
+      val message = pigeonVar_list[1] as String
+      val isRecoverable = pigeonVar_list[2] as Boolean
+      val platformCode = pigeonVar_list[3] as String?
+      return PlaybackErrorMessage(code, message, isRecoverable, platformCode)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      code,
+      message,
+      isRecoverable,
+      platformCode,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other !is PlaybackErrorMessage) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    return MessagesPigeonUtils.deepEquals(toList(), other.toList())  }
+
+  override fun hashCode(): Int = toList().hashCode()
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class PlaybackStateEvent (
+  val controllerId: Long,
+  val status: PlaybackStatusMessage,
+  val error: PlaybackErrorMessage? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): PlaybackStateEvent {
+      val controllerId = pigeonVar_list[0] as Long
+      val status = pigeonVar_list[1] as PlaybackStatusMessage
+      val error = pigeonVar_list[2] as PlaybackErrorMessage?
+      return PlaybackStateEvent(controllerId, status, error)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      controllerId,
+      status,
+      error,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other !is PlaybackStateEvent) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    return MessagesPigeonUtils.deepEquals(toList(), other.toList())  }
+
+  override fun hashCode(): Int = toList().hashCode()
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class PositionEvent (
+  val controllerId: Long,
+  val positionMs: Long,
+  val bufferedPositionMs: Long? = null,
+  val durationMs: Long? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): PositionEvent {
+      val controllerId = pigeonVar_list[0] as Long
+      val positionMs = pigeonVar_list[1] as Long
+      val bufferedPositionMs = pigeonVar_list[2] as Long?
+      val durationMs = pigeonVar_list[3] as Long?
+      return PositionEvent(controllerId, positionMs, bufferedPositionMs, durationMs)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      controllerId,
+      positionMs,
+      bufferedPositionMs,
+      durationMs,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other !is PositionEvent) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    return MessagesPigeonUtils.deepEquals(toList(), other.toList())  }
+
+  override fun hashCode(): Int = toList().hashCode()
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class MetricsEvent (
+  val controllerId: Long,
+  val rebufferCount: Long,
+  /** Monotonic total for the controller's lifetime on both platforms. */
+  val droppedFrames: Long,
+  val timestampMs: Long,
+  /** Milliseconds from controller creation to the first rendered video frame. */
+  val firstFrameLatencyMs: Long? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): MetricsEvent {
+      val controllerId = pigeonVar_list[0] as Long
+      val rebufferCount = pigeonVar_list[1] as Long
+      val droppedFrames = pigeonVar_list[2] as Long
+      val timestampMs = pigeonVar_list[3] as Long
+      val firstFrameLatencyMs = pigeonVar_list[4] as Long?
+      return MetricsEvent(controllerId, rebufferCount, droppedFrames, timestampMs, firstFrameLatencyMs)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      controllerId,
+      rebufferCount,
+      droppedFrames,
+      timestampMs,
+      firstFrameLatencyMs,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other !is MetricsEvent) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    return MessagesPigeonUtils.deepEquals(toList(), other.toList())  }
+
+  override fun hashCode(): Int = toList().hashCode()
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class ControllerLifecycleEvent (
+  val controllerId: Long,
+  val reason: ReleaseReasonMessage
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): ControllerLifecycleEvent {
+      val controllerId = pigeonVar_list[0] as Long
+      val reason = pigeonVar_list[1] as ReleaseReasonMessage
+      return ControllerLifecycleEvent(controllerId, reason)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      controllerId,
+      reason,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other !is ControllerLifecycleEvent) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    return MessagesPigeonUtils.deepEquals(toList(), other.toList())  }
+
+  override fun hashCode(): Int = toList().hashCode()
+}
 private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
       129.toByte() -> {
-        return (readValue(buffer) as? List<Any?>)?.let {
-          InitializeRequest.fromList(it)
+        return (readValue(buffer) as Long?)?.let {
+          FeedMediaKindMessage.ofRaw(it.toInt())
         }
       }
       130.toByte() -> {
-        return (readValue(buffer) as? List<Any?>)?.let {
-          VideoSourceMessage.fromList(it)
+        return (readValue(buffer) as Long?)?.let {
+          PlaybackStatusMessage.ofRaw(it.toInt())
         }
       }
       131.toByte() -> {
-        return (readValue(buffer) as? List<Any?>)?.let {
-          PreloadRequest.fromList(it)
+        return (readValue(buffer) as Long?)?.let {
+          ReleaseReasonMessage.ofRaw(it.toInt())
         }
       }
       132.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CreateControllerRequest.fromList(it)
+          FeedSourceMessage.fromList(it)
         }
       }
       133.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          ControllerRequest.fromList(it)
+          CachePolicyMessage.fromList(it)
         }
       }
       134.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          SeekRequest.fromList(it)
+          AudioPolicyMessage.fromList(it)
         }
       }
       135.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          VisibleIndexRequest.fromList(it)
+          FeedPlayerConfigMessage.fromList(it)
         }
       }
       136.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
+          CreateControllerRequest.fromList(it)
+        }
+      }
+      137.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          ControllerRequest.fromList(it)
+        }
+      }
+      138.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          SeekRequest.fromList(it)
+        }
+      }
+      139.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          VisibleSourceRequest.fromList(it)
+        }
+      }
+      140.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
           AttachViewRequest.fromList(it)
+        }
+      }
+      141.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          SourceIdsRequest.fromList(it)
+        }
+      }
+      142.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CacheStatusMessage.fromList(it)
+        }
+      }
+      143.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          PlaybackErrorMessage.fromList(it)
+        }
+      }
+      144.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          PlaybackStateEvent.fromList(it)
+        }
+      }
+      145.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          PositionEvent.fromList(it)
+        }
+      }
+      146.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          MetricsEvent.fromList(it)
+        }
+      }
+      147.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          ControllerLifecycleEvent.fromList(it)
         }
       }
       else -> super.readValueOfType(type, buffer)
@@ -370,36 +777,80 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
   }
   override fun writeValue(stream: ByteArrayOutputStream, value: Any?)   {
     when (value) {
-      is InitializeRequest -> {
+      is FeedMediaKindMessage -> {
         stream.write(129)
-        writeValue(stream, value.toList())
+        writeValue(stream, value.raw.toLong())
       }
-      is VideoSourceMessage -> {
+      is PlaybackStatusMessage -> {
         stream.write(130)
-        writeValue(stream, value.toList())
+        writeValue(stream, value.raw.toLong())
       }
-      is PreloadRequest -> {
+      is ReleaseReasonMessage -> {
         stream.write(131)
-        writeValue(stream, value.toList())
+        writeValue(stream, value.raw.toLong())
       }
-      is CreateControllerRequest -> {
+      is FeedSourceMessage -> {
         stream.write(132)
         writeValue(stream, value.toList())
       }
-      is ControllerRequest -> {
+      is CachePolicyMessage -> {
         stream.write(133)
         writeValue(stream, value.toList())
       }
-      is SeekRequest -> {
+      is AudioPolicyMessage -> {
         stream.write(134)
         writeValue(stream, value.toList())
       }
-      is VisibleIndexRequest -> {
+      is FeedPlayerConfigMessage -> {
         stream.write(135)
         writeValue(stream, value.toList())
       }
-      is AttachViewRequest -> {
+      is CreateControllerRequest -> {
         stream.write(136)
+        writeValue(stream, value.toList())
+      }
+      is ControllerRequest -> {
+        stream.write(137)
+        writeValue(stream, value.toList())
+      }
+      is SeekRequest -> {
+        stream.write(138)
+        writeValue(stream, value.toList())
+      }
+      is VisibleSourceRequest -> {
+        stream.write(139)
+        writeValue(stream, value.toList())
+      }
+      is AttachViewRequest -> {
+        stream.write(140)
+        writeValue(stream, value.toList())
+      }
+      is SourceIdsRequest -> {
+        stream.write(141)
+        writeValue(stream, value.toList())
+      }
+      is CacheStatusMessage -> {
+        stream.write(142)
+        writeValue(stream, value.toList())
+      }
+      is PlaybackErrorMessage -> {
+        stream.write(143)
+        writeValue(stream, value.toList())
+      }
+      is PlaybackStateEvent -> {
+        stream.write(144)
+        writeValue(stream, value.toList())
+      }
+      is PositionEvent -> {
+        stream.write(145)
+        writeValue(stream, value.toList())
+      }
+      is MetricsEvent -> {
+        stream.write(146)
+        writeValue(stream, value.toList())
+      }
+      is ControllerLifecycleEvent -> {
+        stream.write(147)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -407,17 +858,30 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
   }
 }
 
+val MessagesPigeonMethodCodec = StandardMethodCodec(MessagesPigeonCodec())
+
 /** Generated interface from Pigeon that represents a handler of messages from Flutter. */
 interface NativeFeedPlayerHostApi {
-  fun initialize(request: InitializeRequest)
-  fun preload(request: PreloadRequest)
+  fun initialize(config: FeedPlayerConfigMessage)
+  /** Replaces the whole feed. */
+  fun setSources(sources: List<FeedSourceMessage>)
+  /** Appends a page without renumbering existing sources. */
+  fun appendSources(sources: List<FeedSourceMessage>)
+  fun removeSources(request: SourceIdsRequest)
   fun createController(request: CreateControllerRequest): Long
   fun disposeController(request: ControllerRequest)
   fun play(request: ControllerRequest)
   fun pause(request: ControllerRequest)
   fun seekTo(request: SeekRequest)
-  fun setVisibleIndex(request: VisibleIndexRequest)
-  fun clearCache()
+  fun setVisibleSource(request: VisibleSourceRequest)
+  /**
+   * Drops persisted media bytes for the given sources, or all of them when
+   * the list is empty.
+   */
+  fun evictCachedMedia(request: SourceIdsRequest)
+  fun clearMediaCache()
+  fun cacheStatus(request: VisibleSourceRequest): CacheStatusMessage
+  fun cacheUsageBytes(): Long
   fun attachView(request: AttachViewRequest)
   fun detachView(request: ControllerRequest)
   fun disposeAll()
@@ -436,9 +900,9 @@ interface NativeFeedPlayerHostApi {
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
-            val requestArg = args[0] as InitializeRequest
+            val configArg = args[0] as FeedPlayerConfigMessage
             val wrapped: List<Any?> = try {
-              api.initialize(requestArg)
+              api.initialize(configArg)
               listOf(null)
             } catch (exception: Throwable) {
               MessagesPigeonUtils.wrapError(exception)
@@ -450,13 +914,49 @@ interface NativeFeedPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.preload$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setSources$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
-            val requestArg = args[0] as PreloadRequest
+            val sourcesArg = args[0] as List<FeedSourceMessage>
             val wrapped: List<Any?> = try {
-              api.preload(requestArg)
+              api.setSources(sourcesArg)
+              listOf(null)
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.appendSources$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val sourcesArg = args[0] as List<FeedSourceMessage>
+            val wrapped: List<Any?> = try {
+              api.appendSources(sourcesArg)
+              listOf(null)
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.removeSources$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val requestArg = args[0] as SourceIdsRequest
+            val wrapped: List<Any?> = try {
+              api.removeSources(requestArg)
               listOf(null)
             } catch (exception: Throwable) {
               MessagesPigeonUtils.wrapError(exception)
@@ -557,13 +1057,13 @@ interface NativeFeedPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleIndex$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleSource$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
-            val requestArg = args[0] as VisibleIndexRequest
+            val requestArg = args[0] as VisibleSourceRequest
             val wrapped: List<Any?> = try {
-              api.setVisibleIndex(requestArg)
+              api.setVisibleSource(requestArg)
               listOf(null)
             } catch (exception: Throwable) {
               MessagesPigeonUtils.wrapError(exception)
@@ -575,12 +1075,62 @@ interface NativeFeedPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearCache$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.evictCachedMedia$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val requestArg = args[0] as SourceIdsRequest
+            val wrapped: List<Any?> = try {
+              api.evictCachedMedia(requestArg)
+              listOf(null)
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearMediaCache$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { _, reply ->
             val wrapped: List<Any?> = try {
-              api.clearCache()
+              api.clearMediaCache()
               listOf(null)
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.cacheStatus$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val requestArg = args[0] as VisibleSourceRequest
+            val wrapped: List<Any?> = try {
+              listOf(api.cacheStatus(requestArg))
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.cacheUsageBytes$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            val wrapped: List<Any?> = try {
+              listOf(api.cacheUsageBytes())
             } catch (exception: Throwable) {
               MessagesPigeonUtils.wrapError(exception)
             }
@@ -645,3 +1195,108 @@ interface NativeFeedPlayerHostApi {
     }
   }
 }
+
+private class MessagesPigeonStreamHandler<T>(
+    val wrapper: MessagesPigeonEventChannelWrapper<T>
+) : EventChannel.StreamHandler {
+  var pigeonSink: PigeonEventSink<T>? = null
+
+  override fun onListen(p0: Any?, sink: EventChannel.EventSink) {
+    pigeonSink = PigeonEventSink<T>(sink)
+    wrapper.onListen(p0, pigeonSink!!)
+  }
+
+  override fun onCancel(p0: Any?) {
+    pigeonSink = null
+    wrapper.onCancel(p0)
+  }
+}
+
+interface MessagesPigeonEventChannelWrapper<T> {
+  open fun onListen(p0: Any?, sink: PigeonEventSink<T>) {}
+
+  open fun onCancel(p0: Any?) {}
+}
+
+class PigeonEventSink<T>(private val sink: EventChannel.EventSink) {
+  fun success(value: T) {
+    sink.success(value)
+  }
+
+  fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+    sink.error(errorCode, errorMessage, errorDetails)
+  }
+
+  fun endOfStream() {
+    sink.endOfStream()
+  }
+}
+      
+abstract class PlaybackStateEventsStreamHandler : MessagesPigeonEventChannelWrapper<PlaybackStateEvent> {
+  companion object {
+    fun register(messenger: BinaryMessenger, streamHandler: PlaybackStateEventsStreamHandler, instanceName: String = "") {
+      var channelName: String = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.playbackStateEvents"
+      if (instanceName.isNotEmpty()) {
+        channelName += ".$instanceName"
+      }
+      val internalStreamHandler = MessagesPigeonStreamHandler<PlaybackStateEvent>(streamHandler)
+      EventChannel(messenger, channelName, MessagesPigeonMethodCodec).setStreamHandler(internalStreamHandler)
+    }
+  }
+// Implement methods from MessagesPigeonEventChannelWrapper
+override fun onListen(p0: Any?, sink: PigeonEventSink<PlaybackStateEvent>) {}
+
+override fun onCancel(p0: Any?) {}
+}
+      
+abstract class PositionEventsStreamHandler : MessagesPigeonEventChannelWrapper<PositionEvent> {
+  companion object {
+    fun register(messenger: BinaryMessenger, streamHandler: PositionEventsStreamHandler, instanceName: String = "") {
+      var channelName: String = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.positionEvents"
+      if (instanceName.isNotEmpty()) {
+        channelName += ".$instanceName"
+      }
+      val internalStreamHandler = MessagesPigeonStreamHandler<PositionEvent>(streamHandler)
+      EventChannel(messenger, channelName, MessagesPigeonMethodCodec).setStreamHandler(internalStreamHandler)
+    }
+  }
+// Implement methods from MessagesPigeonEventChannelWrapper
+override fun onListen(p0: Any?, sink: PigeonEventSink<PositionEvent>) {}
+
+override fun onCancel(p0: Any?) {}
+}
+      
+abstract class MetricsEventsStreamHandler : MessagesPigeonEventChannelWrapper<MetricsEvent> {
+  companion object {
+    fun register(messenger: BinaryMessenger, streamHandler: MetricsEventsStreamHandler, instanceName: String = "") {
+      var channelName: String = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.metricsEvents"
+      if (instanceName.isNotEmpty()) {
+        channelName += ".$instanceName"
+      }
+      val internalStreamHandler = MessagesPigeonStreamHandler<MetricsEvent>(streamHandler)
+      EventChannel(messenger, channelName, MessagesPigeonMethodCodec).setStreamHandler(internalStreamHandler)
+    }
+  }
+// Implement methods from MessagesPigeonEventChannelWrapper
+override fun onListen(p0: Any?, sink: PigeonEventSink<MetricsEvent>) {}
+
+override fun onCancel(p0: Any?) {}
+}
+      
+abstract class LifecycleEventsStreamHandler : MessagesPigeonEventChannelWrapper<ControllerLifecycleEvent> {
+  companion object {
+    fun register(messenger: BinaryMessenger, streamHandler: LifecycleEventsStreamHandler, instanceName: String = "") {
+      var channelName: String = "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.lifecycleEvents"
+      if (instanceName.isNotEmpty()) {
+        channelName += ".$instanceName"
+      }
+      val internalStreamHandler = MessagesPigeonStreamHandler<ControllerLifecycleEvent>(streamHandler)
+      EventChannel(messenger, channelName, MessagesPigeonMethodCodec).setStreamHandler(internalStreamHandler)
+    }
+  }
+// Implement methods from MessagesPigeonEventChannelWrapper
+override fun onListen(p0: Any?, sink: PigeonEventSink<ControllerLifecycleEvent>) {}
+
+override fun onCancel(p0: Any?) {}
+}
+      

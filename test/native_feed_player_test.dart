@@ -6,36 +6,47 @@ import 'package:native_feed_player/native_feed_player_method_channel.dart';
 import 'package:native_feed_player/native_feed_player_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
-class MockNativeFeedPlayerPlatform
+class FakeFeedPlayerPlatform
     with MockPlatformInterfaceMixin
-    implements NativeFeedPlayerPlatform {
-  MockNativeFeedPlayerPlatform();
-
+    implements FeedPlayerPlatform {
   final StreamController<ControllerReleaseEvent> releaseController =
       StreamController<ControllerReleaseEvent>.broadcast();
-  final List<int> disposedControllerIds = <int>[];
 
-  bool initializeCalled = false;
-  List<NativeVideoSource> preloadSources = <NativeVideoSource>[];
+  final List<int> disposedControllerIds = <int>[];
+  final List<String> visibleSourceIds = <String>[];
+  final List<List<FeedSource>> setSourceCalls = <List<FeedSource>>[];
+  final List<(List<FeedSource>, int)> appendCalls = <(List<FeedSource>, int)>[];
+
+  FeedPlayerConfig? initializedWith;
   int nextControllerId = 1;
 
   @override
   Stream<ControllerReleaseEvent> get releaseEvents => releaseController.stream;
 
   @override
-  Future<void> initialize({required NativeFeedConfig config}) async {
-    initializeCalled = true;
+  Future<void> initialize(FeedPlayerConfig config) async {
+    initializedWith = config;
   }
 
   @override
-  Future<void> preload(List<NativeVideoSource> sources) async {
-    preloadSources = sources;
+  Future<void> setSources(List<FeedSource> sources) async {
+    setSourceCalls.add(sources);
   }
+
+  @override
+  Future<void> appendSources(
+    List<FeedSource> sources, {
+    required int rankOffset,
+  }) async {
+    appendCalls.add((sources, rankOffset));
+  }
+
+  @override
+  Future<void> removeSources(List<String> sourceIds) async {}
 
   @override
   Future<int> createController({
-    required String url,
-    required int index,
+    required String sourceId,
     required bool autoPlay,
     required bool looping,
   }) async {
@@ -57,20 +68,38 @@ class MockNativeFeedPlayerPlatform
   Future<void> seekTo(int controllerId, Duration position) async {}
 
   @override
-  Stream<Duration> positionStream(int controllerId) => const Stream.empty();
+  Stream<PlaybackPosition> positionStream(int controllerId) =>
+      const Stream<PlaybackPosition>.empty();
 
   @override
-  Stream<VideoPlaybackState> stateStream(int controllerId) =>
-      const Stream.empty();
+  Stream<PlaybackStatusUpdate> stateStream(int controllerId) =>
+      const Stream<PlaybackStatusUpdate>.empty();
 
   @override
-  Stream<VideoMetrics> metricsStream(int controllerId) => const Stream.empty();
+  Stream<VideoMetrics> metricsStream(int controllerId) =>
+      const Stream<VideoMetrics>.empty();
 
   @override
-  Future<void> clearCache() async {}
+  Future<void> setVisibleSource(String sourceId) async {
+    visibleSourceIds.add(sourceId);
+  }
 
   @override
-  Future<void> setVisibleIndex(int index) async {}
+  Future<void> evictCachedMedia(List<String> sourceIds) async {}
+
+  @override
+  Future<void> clearMediaCache() async {}
+
+  @override
+  Future<CacheStatus> cacheStatus(String sourceId) async => CacheStatus(
+    sourceId: sourceId,
+    cachedBytes: 0,
+    totalBytes: 0,
+    isComplete: false,
+  );
+
+  @override
+  Future<int> cacheUsageBytes() async => 0;
 
   @override
   Future<void> attachView({
@@ -85,34 +114,24 @@ class MockNativeFeedPlayerPlatform
   Future<void> dispose() async {}
 }
 
+FeedSource _source(String id) =>
+    FeedSource(id: id, uri: 'https://example.test/$id.mp4');
+
 void main() {
-  final NativeFeedPlayerPlatform initialPlatform =
-      NativeFeedPlayerPlatform.instance;
-
-  test('$MethodChannelNativeFeedPlayer is the default instance', () {
-    expect(initialPlatform, isInstanceOf<MethodChannelNativeFeedPlayer>());
+  test('$MethodChannelFeedPlayer is the default instance', () {
+    expect(
+      FeedPlayerPlatform.instance,
+      isInstanceOf<MethodChannelFeedPlayer>(),
+    );
   });
 
-  test('initialize and preload', () async {
-    final MockNativeFeedPlayerPlatform fakePlatform =
-        MockNativeFeedPlayerPlatform();
-    final NativeFeedPlayer player = NativeFeedPlayer(platform: fakePlatform);
-
-    await player.initialize();
-    await player.preload(<String>['u1', 'u2']);
-
-    expect(fakePlatform.initializeCalled, isTrue);
-    expect(fakePlatform.preloadSources.length, 2);
-    expect(fakePlatform.preloadSources.first.url, 'u1');
-  });
-
-  group('native release reconciliation', () {
-    late MockNativeFeedPlayerPlatform platform;
-    late NativeFeedPlayer player;
+  group('FeedPlayer', () {
+    late FakeFeedPlayerPlatform platform;
+    late FeedPlayer player;
 
     setUp(() async {
-      platform = MockNativeFeedPlayerPlatform();
-      player = NativeFeedPlayer(platform: platform);
+      platform = FakeFeedPlayerPlatform();
+      player = FeedPlayer(platform: platform);
       await player.initialize();
     });
 
@@ -120,11 +139,98 @@ void main() {
       await platform.releaseController.close();
     });
 
-    test('eviction purges the controller cache', () async {
-      final VideoController controller = await player.getController(
-        url: 'u1',
-        index: 0,
+    test('defaults are feed-appropriate', () {
+      final FeedPlayerConfig config = platform.initializedWith!;
+      expect(config.maxActivePlayers, 3);
+      expect(config.preloadAhead, greaterThan(config.preloadBehind));
+      expect(config.audio.muted, isTrue);
+      expect(config.cache.enabled, isTrue);
+      expect(config.cache.maxBytes, 256 * 1024 * 1024);
+    });
+
+    test('setSources registers the feed in order', () async {
+      await player.setSources(<FeedSource>[_source('a'), _source('b')]);
+
+      expect(
+        platform.setSourceCalls.single.map((FeedSource s) => s.id),
+        <String>['a', 'b'],
       );
+      expect(player.sources, hasLength(2));
+    });
+
+    test('appendSources offsets ranks instead of renumbering', () async {
+      await player.setSources(<FeedSource>[_source('a'), _source('b')]);
+      await player.appendSources(<FeedSource>[_source('c'), _source('d')]);
+
+      final (List<FeedSource> appended, int offset) =
+          platform.appendCalls.single;
+      expect(offset, 2, reason: 'page 2 starts after the two existing sources');
+      expect(appended.map((FeedSource s) => s.id), <String>['c', 'd']);
+      expect(player.sources.map((FeedSource s) => s.id), <String>[
+        'a',
+        'b',
+        'c',
+        'd',
+      ]);
+    });
+
+    test('appending an empty page is a no-op', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      await player.appendSources(<FeedSource>[]);
+
+      expect(platform.appendCalls, isEmpty);
+    });
+
+    test('duplicate source ids are rejected', () async {
+      expect(
+        () => player.setSources(<FeedSource>[_source('a'), _source('a')]),
+        throwsArgumentError,
+      );
+    });
+
+    test('appending a colliding id is rejected', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      expect(
+        () => player.appendSources(<FeedSource>[_source('a')]),
+        throwsArgumentError,
+      );
+    });
+
+    test('controllerFor requires a registered source', () async {
+      expect(() => player.controllerFor('missing'), throwsArgumentError);
+    });
+
+    test('controllerFor reuses a live controller', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController first = await player.controllerFor('a');
+      final FeedController second = await player.controllerFor('a');
+
+      expect(identical(first, second), isTrue);
+    });
+
+    test('uninitialized use is rejected', () {
+      final FeedPlayer fresh = FeedPlayer(platform: FakeFeedPlayerPlatform());
+      expect(() => fresh.setSources(<FeedSource>[]), throwsStateError);
+    });
+  });
+
+  group('native release reconciliation', () {
+    late FakeFeedPlayerPlatform platform;
+    late FeedPlayer player;
+
+    setUp(() async {
+      platform = FakeFeedPlayerPlatform();
+      player = FeedPlayer(platform: platform);
+      await player.initialize();
+      await player.setSources(<FeedSource>[_source('a'), _source('b')]);
+    });
+
+    tearDown(() async {
+      await platform.releaseController.close();
+    });
+
+    test('eviction purges the controller cache', () async {
+      final FeedController controller = await player.controllerFor('a');
       expect(player.activeControllers, hasLength(1));
 
       platform.releaseController.add(
@@ -140,11 +246,8 @@ void main() {
       expect(player.activeControllers, isEmpty);
     });
 
-    test('getController creates a fresh controller after eviction', () async {
-      final VideoController first = await player.getController(
-        url: 'u1',
-        index: 0,
-      );
+    test('controllerFor rebuilds after eviction', () async {
+      final FeedController first = await player.controllerFor('a');
       platform.releaseController.add(
         ControllerReleaseEvent(
           controllerId: first.controllerId,
@@ -153,20 +256,14 @@ void main() {
       );
       await first.onReleased;
 
-      final VideoController second = await player.getController(
-        url: 'u1',
-        index: 0,
-      );
+      final FeedController second = await player.controllerFor('a');
 
       expect(second.controllerId, isNot(first.controllerId));
       expect(second.isReleased, isFalse);
     });
 
     test('commands on a released controller throw', () async {
-      final VideoController controller = await player.getController(
-        url: 'u1',
-        index: 0,
-      );
+      final FeedController controller = await player.controllerFor('a');
       platform.releaseController.add(
         ControllerReleaseEvent(
           controllerId: controller.controllerId,
@@ -184,10 +281,7 @@ void main() {
     });
 
     test('dispose is idempotent and removes the cache entry', () async {
-      final VideoController controller = await player.getController(
-        url: 'u1',
-        index: 0,
-      );
+      final FeedController controller = await player.controllerFor('a');
 
       await controller.dispose();
       await controller.dispose();
@@ -197,9 +291,17 @@ void main() {
       expect(controller.releaseReason, ControllerReleaseReason.disposed);
     });
 
+    test('removeSources releases the matching controller', () async {
+      final FeedController controller = await player.controllerFor('a');
+      await player.removeSources(<String>['a']);
+
+      expect(controller.isReleased, isTrue);
+      expect(player.sources.map((FeedSource s) => s.id), <String>['b']);
+    });
+
     test('player dispose releases every outstanding controller', () async {
-      final VideoController a = await player.getController(url: 'u1', index: 0);
-      final VideoController b = await player.getController(url: 'u2', index: 1);
+      final FeedController a = await player.controllerFor('a');
+      final FeedController b = await player.controllerFor('b');
 
       await player.dispose();
 

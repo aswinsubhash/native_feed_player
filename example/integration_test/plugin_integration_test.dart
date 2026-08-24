@@ -1,10 +1,8 @@
-// This is a basic Flutter integration test.
+// Integration tests for native_feed_player.
 //
-// Since integration tests run in a full Flutter application, they can interact
-// with the host side of a plugin implementation, unlike Dart unit tests.
-//
-// For more information about Flutter integration tests, please see
-// https://flutter.dev/to/integration-testing
+// These run in a full Flutter application so they exercise the real native
+// host, unlike the Dart unit tests. They also emit structured benchmark lines
+// consumed by tool/benchmark_report.dart.
 
 import 'dart:async';
 import 'dart:convert';
@@ -12,7 +10,6 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-
 import 'package:native_feed_player/native_feed_player.dart';
 
 void _emitBenchmarkSummary(Map<String, Object?> payload) {
@@ -38,25 +35,24 @@ class _BenchmarkCollector {
   final List<int> _firstFrameLatenciesMs = <int>[];
   int _metricSamples = 0;
   int _maxRebufferCount = 0;
-  int _maxDroppedFramesEstimate = 0;
+  int _maxDroppedFrames = 0;
 
-  void trackController(VideoController controller) {
-    final StreamSubscription<VideoMetrics> sub = controller.metricsStream
-        .listen((VideoMetrics metrics) {
-          _metricSamples += 1;
-          if (metrics.rebufferCount > _maxRebufferCount) {
-            _maxRebufferCount = metrics.rebufferCount;
-          }
-          if (metrics.droppedFramesEstimate > _maxDroppedFramesEstimate) {
-            _maxDroppedFramesEstimate = metrics.droppedFramesEstimate;
-          }
-          final int? firstFrameLatencyMs =
-              metrics.firstFrameLatency?.inMilliseconds;
-          if (firstFrameLatencyMs != null && firstFrameLatencyMs > 0) {
-            _firstFrameLatenciesMs.add(firstFrameLatencyMs);
-          }
-        });
-    _subscriptions.add(sub);
+  void trackController(FeedController controller) {
+    _subscriptions.add(
+      controller.metricsStream.listen((VideoMetrics metrics) {
+        _metricSamples += 1;
+        if (metrics.rebufferCount > _maxRebufferCount) {
+          _maxRebufferCount = metrics.rebufferCount;
+        }
+        if (metrics.droppedFrames > _maxDroppedFrames) {
+          _maxDroppedFrames = metrics.droppedFrames;
+        }
+        final int? firstFrameMs = metrics.firstFrameLatency?.inMilliseconds;
+        if (firstFrameMs != null && firstFrameMs > 0) {
+          _firstFrameLatenciesMs.add(firstFrameMs);
+        }
+      }),
+    );
   }
 
   Future<void> closeAndEmit() async {
@@ -72,81 +68,110 @@ class _BenchmarkCollector {
       'firstFrameP50Ms': _percentile(_firstFrameLatenciesMs, 0.50),
       'firstFrameP95Ms': _percentile(_firstFrameLatenciesMs, 0.95),
       'maxRebufferCount': _maxRebufferCount,
-      'maxDroppedFramesEstimate': _maxDroppedFramesEstimate,
+      'maxDroppedFrames': _maxDroppedFrames,
       'timestampMs': DateTime.now().millisecondsSinceEpoch,
     });
   }
 }
 
+const String _goodUriA =
+    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+const String _goodUriB =
+    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4';
+const String _unreachableUri = 'https://127.0.0.1:9/offline.mp4';
+
+List<FeedSource> _feed(int count) {
+  return <FeedSource>[
+    for (int index = 0; index < count; index += 1)
+      FeedSource(id: 'clip-$index', uri: index.isEven ? _goodUriA : _goodUriB),
+  ];
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  const String goodUrlA =
-      'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
-  const String goodUrlB =
-      'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4';
-  const String unreachableUrl = 'https://127.0.0.1:9/offline.mp4';
+  testWidgets('initialize and create a controller', (
+    WidgetTester tester,
+  ) async {
+    final FeedPlayer player = FeedPlayer();
+    await player.initialize();
+    await player.setSources(_feed(1));
 
-  testWidgets('initialize and create controller', (WidgetTester tester) async {
-    final NativeFeedPlayer plugin = NativeFeedPlayer();
-    await plugin.initialize();
-    await plugin.preload(<String>[goodUrlA]);
-    final VideoController controller = await plugin.getController(
-      url: goodUrlA,
-      index: 0,
-    );
+    final FeedController controller = await player.controllerFor('clip-0');
     expect(controller.controllerId, greaterThan(0));
-    await plugin.dispose();
+    expect(controller.sourceId, 'clip-0');
+
+    await player.dispose();
   });
 
-  testWidgets('fast fling style visible-index churn remains stable', (
+  testWidgets('appending a page preserves existing sources', (
+    WidgetTester tester,
+  ) async {
+    final FeedPlayer player = FeedPlayer();
+    await player.initialize();
+    await player.setSources(_feed(3));
+
+    final FeedController first = await player.controllerFor('clip-0');
+    await player.appendSources(<FeedSource>[
+      const FeedSource(id: 'page2-a', uri: _goodUriA),
+      const FeedSource(id: 'page2-b', uri: _goodUriB),
+    ]);
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // Pagination must not disturb an already-live controller.
+    expect(first.isReleased, isFalse);
+    expect(player.sources, hasLength(5));
+
+    final FeedController appended = await player.controllerFor('page2-a');
+    expect(appended.controllerId, greaterThan(0));
+
+    await player.dispose();
+  });
+
+  testWidgets('fast fling churn keeps controllers consistent', (
     WidgetTester tester,
   ) async {
     final _BenchmarkCollector collector = _BenchmarkCollector('fast_fling');
-    final NativeFeedPlayer plugin = NativeFeedPlayer();
-    await plugin.initialize(maxCachedPlayers: 5, preloadCount: 2);
-    final List<String> urls = <String>[
-      goodUrlA,
-      goodUrlB,
-      goodUrlA,
-      goodUrlB,
-      goodUrlA,
-      goodUrlB,
-      goodUrlA,
-      goodUrlB,
-    ];
-    await plugin.preload(urls);
+    final FeedPlayer player = FeedPlayer();
+    await player.initialize(
+      config: const FeedPlayerConfig(maxActivePlayers: 3, preloadAhead: 2),
+    );
 
-    final List<int> controllerIds = <int>[];
-    for (int index = 0; index < urls.length; index += 1) {
-      await plugin.setVisibleIndex(index);
-      final VideoController controller = await plugin.getController(
-        url: urls[index],
-        index: index,
-        autoPlay: index % 2 == 0,
+    final List<FeedSource> sources = _feed(8);
+    await player.setSources(sources);
+
+    for (final FeedSource source in sources) {
+      await player.setVisibleSource(source.id);
+      final FeedController controller = await player.controllerFor(
+        source.id,
+        autoPlay: true,
       );
       collector.trackController(controller);
-      controllerIds.add(controller.controllerId);
+      // Every controller handed out must be live at that moment.
+      expect(controller.isReleased, isFalse);
       await tester.pump(const Duration(milliseconds: 120));
     }
 
     await tester.pump(const Duration(milliseconds: 500));
     await collector.closeAndEmit();
-    expect(controllerIds.toSet().length, urls.length);
-    await plugin.dispose();
+
+    // Eviction must never leave a stale handle in the player's cache.
+    for (final FeedController controller in player.activeControllers) {
+      expect(controller.isReleased, isFalse);
+    }
+
+    await player.dispose();
   });
 
-  testWidgets('pause/resume lifecycle keeps controller commands usable', (
+  testWidgets('pause/resume lifecycle keeps commands usable', (
     WidgetTester tester,
   ) async {
     final _BenchmarkCollector collector = _BenchmarkCollector('pause_resume');
-    final NativeFeedPlayer plugin = NativeFeedPlayer();
-    await plugin.initialize();
-    await plugin.preload(<String>[goodUrlA]);
-    final VideoController controller = await plugin.getController(
-      url: goodUrlA,
-      index: 0,
-    );
+    final FeedPlayer player = FeedPlayer();
+    await player.initialize();
+    await player.setSources(_feed(1));
+
+    final FeedController controller = await player.controllerFor('clip-0');
     collector.trackController(controller);
 
     await controller.play();
@@ -155,49 +180,64 @@ void main() {
     await controller.pause();
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump(const Duration(milliseconds: 300));
+
+    // Backgrounding must not have destroyed the player.
+    expect(controller.isReleased, isFalse);
     await controller.play();
 
     await tester.pump(const Duration(milliseconds: 600));
     await collector.closeAndEmit();
-    expect(controller.controllerId, greaterThan(0));
-    await plugin.dispose();
+    await player.dispose();
   });
 
-  testWidgets(
-    'network loss and recovery path creates new playable controller',
-    (WidgetTester tester) async {
-      final _BenchmarkCollector collector = _BenchmarkCollector(
-        'network_recovery',
-      );
-      final NativeFeedPlayer plugin = NativeFeedPlayer();
-      await plugin.initialize();
-      await plugin.preload(<String>[unreachableUrl, goodUrlB]);
+  testWidgets('network failure surfaces a typed, retryable error', (
+    WidgetTester tester,
+  ) async {
+    final _BenchmarkCollector collector = _BenchmarkCollector(
+      'network_recovery',
+    );
+    final FeedPlayer player = FeedPlayer();
+    await player.initialize();
+    await player.setSources(<FeedSource>[
+      const FeedSource(id: 'offline', uri: _unreachableUri),
+      const FeedSource(id: 'online', uri: _goodUriB),
+    ]);
 
-      final VideoController badController = await plugin.getController(
-        url: unreachableUrl,
-        index: 0,
-        autoPlay: true,
-      );
-      collector.trackController(badController);
-      await badController.play();
-      await tester.pump(const Duration(milliseconds: 600));
+    final FeedController bad = await player.controllerFor(
+      'offline',
+      autoPlay: true,
+    );
+    collector.trackController(bad);
 
-      final VideoController recoveredController = await plugin.getController(
-        url: goodUrlB,
-        index: 1,
-        autoPlay: true,
-      );
-      collector.trackController(recoveredController);
-      await recoveredController.play();
-      await tester.pump(const Duration(milliseconds: 800));
-      await collector.closeAndEmit();
+    final Future<PlaybackStatusUpdate> failure = bad.stateStream
+        .firstWhere(
+          (PlaybackStatusUpdate u) => u.state == VideoPlaybackState.error,
+        )
+        .timeout(
+          const Duration(seconds: 20),
+          onTimeout: () =>
+              const PlaybackStatusUpdate(state: VideoPlaybackState.idle),
+        );
 
-      expect(recoveredController.controllerId, greaterThan(0));
-      expect(
-        recoveredController.controllerId,
-        isNot(badController.controllerId),
-      );
-      await plugin.dispose();
-    },
-  );
+    await bad.play();
+    await tester.pump(const Duration(milliseconds: 600));
+    final PlaybackStatusUpdate update = await failure;
+    if (update.state == VideoPlaybackState.error) {
+      expect(update.error, isNotNull);
+      expect(update.error!.code, isNotEmpty);
+    }
+
+    await player.setVisibleSource('online');
+    final FeedController recovered = await player.controllerFor(
+      'online',
+      autoPlay: true,
+    );
+    collector.trackController(recovered);
+    await recovered.play();
+    await tester.pump(const Duration(milliseconds: 800));
+    await collector.closeAndEmit();
+
+    expect(recovered.controllerId, isNot(bad.controllerId));
+    await player.dispose();
+  });
 }

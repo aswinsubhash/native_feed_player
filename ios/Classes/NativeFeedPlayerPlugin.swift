@@ -2,28 +2,129 @@ import Flutter
 import Foundation
 import UIKit
 
-private final class EventSinkStreamHandler: NSObject, FlutterStreamHandler {
-  var sink: FlutterEventSink?
+/// Holds the Pigeon sink for one event channel and buffers events emitted
+/// before Dart subscribes.
+///
+/// Native playback starts reporting state during `createController`, which runs
+/// before the caller has had a chance to listen to that controller's stream, so
+/// without a small buffer the first transition is silently lost.
+final class BufferedEventSink<T> {
+  private let maxBuffered: Int
+  private var pending: [T] = []
+  private var sink: PigeonEventSink<T>?
 
-  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
-    sink = events
-    return nil
+  init(maxBuffered: Int = 64) {
+    self.maxBuffered = maxBuffered
   }
 
-  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+  func attach(_ sink: PigeonEventSink<T>) {
+    self.sink = sink
+    let buffered = pending
+    pending.removeAll()
+    for event in buffered {
+      sink.success(event)
+    }
+  }
+
+  func detach() {
     sink = nil
-    return nil
+    pending.removeAll()
+  }
+
+  func emit(_ event: T) {
+    if let sink {
+      sink.success(event)
+      return
+    }
+    if pending.count >= maxBuffered {
+      pending.removeFirst()
+    }
+    pending.append(event)
+  }
+}
+
+/// Pigeon generates a distinct handler class per event channel, so each one
+/// needs a concrete adapter that forwards its sink into a shared holder.
+private final class PlaybackStateStreamAdapter: PlaybackStateEventsStreamHandler {
+  private let holder: BufferedEventSink<PlaybackStateEvent>
+
+  init(holder: BufferedEventSink<PlaybackStateEvent>) {
+    self.holder = holder
+  }
+
+  override func onListen(withArguments arguments: Any?, sink: PigeonEventSink<PlaybackStateEvent>) {
+    holder.attach(sink)
+  }
+
+  override func onCancel(withArguments arguments: Any?) {
+    holder.detach()
+  }
+}
+
+private final class PositionStreamAdapter: PositionEventsStreamHandler {
+  private let holder: BufferedEventSink<PositionEvent>
+
+  init(holder: BufferedEventSink<PositionEvent>) {
+    self.holder = holder
+  }
+
+  override func onListen(withArguments arguments: Any?, sink: PigeonEventSink<PositionEvent>) {
+    holder.attach(sink)
+  }
+
+  override func onCancel(withArguments arguments: Any?) {
+    holder.detach()
+  }
+}
+
+private final class MetricsStreamAdapter: MetricsEventsStreamHandler {
+  private let holder: BufferedEventSink<MetricsEvent>
+
+  init(holder: BufferedEventSink<MetricsEvent>) {
+    self.holder = holder
+  }
+
+  override func onListen(withArguments arguments: Any?, sink: PigeonEventSink<MetricsEvent>) {
+    holder.attach(sink)
+  }
+
+  override func onCancel(withArguments arguments: Any?) {
+    holder.detach()
+  }
+}
+
+private final class LifecycleStreamAdapter: LifecycleEventsStreamHandler {
+  private let holder: BufferedEventSink<ControllerLifecycleEvent>
+
+  init(holder: BufferedEventSink<ControllerLifecycleEvent>) {
+    self.holder = holder
+  }
+
+  override func onListen(
+    withArguments arguments: Any?,
+    sink: PigeonEventSink<ControllerLifecycleEvent>
+  ) {
+    holder.attach(sink)
+  }
+
+  override func onCancel(withArguments arguments: Any?) {
+    holder.detach()
   }
 }
 
 public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPlayerHostApi {
   private static let videoViewType = "native_feed_player/video_view"
 
-  private let stateStreamHandler = EventSinkStreamHandler()
-  private let positionStreamHandler = EventSinkStreamHandler()
-  private let metricsStreamHandler = EventSinkStreamHandler()
+  /// Controller ids must stay unique for the life of the process, not the life
+  /// of one engine attachment, so a re-attaching engine cannot mint ids that
+  /// collide with handles Dart still holds.
+  private static var controllerIdSeed = 0
 
-  private var nextControllerId: Int = 1
+  private let stateEvents = BufferedEventSink<PlaybackStateEvent>()
+  private let positionEvents = BufferedEventSink<PositionEvent>()
+  private let metricsEvents = BufferedEventSink<MetricsEvent>()
+  private let lifecycleEvents = BufferedEventSink<ControllerLifecycleEvent>()
+
   private var manager: AVPlayerManager?
   private var memoryWarningObserver: NSObjectProtocol?
   private let renderViewPool = RenderViewPool(maxPoolSize: 8)
@@ -32,26 +133,10 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   private var binaryMessenger: FlutterBinaryMessenger?
 
   public static func register(with registrar: FlutterPluginRegistrar) {
-    let stateChannel = FlutterEventChannel(
-      name: "native_feed_player/state",
-      binaryMessenger: registrar.messenger()
-    )
-    let positionChannel = FlutterEventChannel(
-      name: "native_feed_player/position",
-      binaryMessenger: registrar.messenger()
-    )
-    let metricsChannel = FlutterEventChannel(
-      name: "native_feed_player/metrics",
-      binaryMessenger: registrar.messenger()
-    )
-
     let instance = NativeFeedPlayerPlugin()
     instance.binaryMessenger = registrar.messenger()
-    instance.configureChannels(
-      stateChannel: stateChannel,
-      positionChannel: positionChannel,
-      metricsChannel: metricsChannel
-    )
+    instance.configure(messenger: registrar.messenger())
+
     let viewFactory = NativeVideoViewFactory(
       renderViewPool: instance.renderViewPool,
       onCreate: { [weak instance] viewId, view in
@@ -79,50 +164,45 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     manager?.disposeAll()
   }
 
-  func initialize(request: InitializeRequest) throws {
-    try managerOrThrow().initialize(
-      maxCachedPlayers: Int(request.maxCachedPlayers),
-      preloadCount: Int(request.preloadCount)
-    )
+  // MARK: - Host API
+
+  func initialize(config: FeedPlayerConfigMessage) throws {
+    try managerOrThrow().initialize(config: config)
   }
 
-  func preload(request: PreloadRequest) throws {
-    let sources: [[String: Any]] = request.sources.map { source in
-      [
-        "index": Int(source.index),
-        "url": source.url,
-      ]
-    }
-    try managerOrThrow().preload(sources: sources)
+  func setSources(sources: [FeedSourceMessage]) throws {
+    try managerOrThrow().setSources(sources.map { $0.toRegisteredSource() })
+  }
+
+  func appendSources(sources: [FeedSourceMessage]) throws {
+    try managerOrThrow().appendSources(sources.map { $0.toRegisteredSource() })
+  }
+
+  func removeSources(request: SourceIdsRequest) throws {
+    try managerOrThrow().removeSources(request.sourceIds)
   }
 
   func createController(request: CreateControllerRequest) throws -> Int64 {
-    let url = request.url
-    if url.isEmpty {
+    if request.sourceId.isEmpty {
       throw PigeonError(
-        code: "invalid_url",
-        message: "createController requires a non-empty URL.",
+        code: "invalid_source",
+        message: "createController requires a source id.",
         details: nil
       )
     }
 
-    let controllerId = nextControllerId
-    nextControllerId += 1
+    NativeFeedPlayerPlugin.controllerIdSeed += 1
+    let controllerId = NativeFeedPlayerPlugin.controllerIdSeed
 
     do {
       try managerOrThrow().createController(
         controllerId: controllerId,
-        url: url,
-        index: Int(request.index),
+        sourceId: request.sourceId,
         autoPlay: request.autoPlay,
         looping: request.looping
       )
     } catch let setupError as AVPlayerManager.PlaybackSetupError {
-      throw PigeonError(
-        code: setupError.code,
-        message: setupError.message,
-        details: nil
-      )
+      throw PigeonError(code: setupError.code, message: setupError.message, details: nil)
     } catch {
       throw PigeonError(
         code: "create_failed",
@@ -162,12 +242,29 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
   }
 
-  func setVisibleIndex(request: VisibleIndexRequest) throws {
-    try managerOrThrow().setVisibleIndex(index: Int(request.index))
+  func setVisibleSource(request: VisibleSourceRequest) throws {
+    try managerOrThrow().setVisibleSource(request.sourceId)
   }
 
-  func clearCache() throws {
-    try managerOrThrow().clearCache()
+  func evictCachedMedia(request: SourceIdsRequest) throws {
+    // Wired to the disk cache in a later phase.
+  }
+
+  func clearMediaCache() throws {
+    // No persistent cache yet; see docs/ARCHITECTURE.md for the roadmap.
+  }
+
+  func cacheStatus(request: VisibleSourceRequest) throws -> CacheStatusMessage {
+    CacheStatusMessage(
+      sourceId: request.sourceId,
+      cachedBytes: 0,
+      totalBytes: 0,
+      isComplete: false
+    )
+  }
+
+  func cacheUsageBytes() throws -> Int64 {
+    0
   }
 
   func attachView(request: AttachViewRequest) throws {
@@ -189,8 +286,8 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
 
     let manager = try managerOrThrow()
-    if let previousController = attachedControllerByViewId[viewId], previousController != controllerId {
-      manager.detach(controllerId: previousController)
+    if let previous = attachedControllerByViewId[viewId], previous != controllerId {
+      manager.detach(controllerId: previous)
     }
     attachedControllerByViewId[viewId] = controllerId
     manager.attach(controllerId: controllerId, renderView: platformView.renderView)
@@ -198,15 +295,13 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
 
   func detachView(request: ControllerRequest) throws {
     let controllerId = Int(request.controllerId)
-    if controllerId > 0 {
-      let manager = try managerOrThrow()
-      manager.detach(controllerId: controllerId)
-      let staleViews = attachedControllerByViewId
-        .filter { $0.value == controllerId }
-        .map { $0.key }
-      for viewId in staleViews {
-        attachedControllerByViewId.removeValue(forKey: viewId)
-      }
+    guard controllerId > 0 else {
+      return
+    }
+    let manager = try managerOrThrow()
+    manager.detach(controllerId: controllerId)
+    for (viewId, attached) in attachedControllerByViewId where attached == controllerId {
+      attachedControllerByViewId.removeValue(forKey: viewId)
     }
   }
 
@@ -215,29 +310,52 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     attachedControllerByViewId.removeAll()
   }
 
-  private func configureChannels(
-    stateChannel: FlutterEventChannel,
-    positionChannel: FlutterEventChannel,
-    metricsChannel: FlutterEventChannel
-  ) {
-    manager = AVPlayerManager(
-      onState: { [weak self] controllerId, state in
-        self?.emitState(controllerId: controllerId, state: state)
-      },
-      onReleased: { [weak self] controllerId, reason in
-        self?.emitState(controllerId: controllerId, state: "disposed", reason: reason)
-      },
-      onPosition: { [weak self] controllerId, positionMs in
-        self?.emitPosition(controllerId: controllerId, positionMs: positionMs)
-      },
-      onMetrics: { [weak self] _, payload in
-        self?.emitMetrics(payload: payload)
-      }
+  // MARK: - Wiring
+
+  private func configure(messenger: FlutterBinaryMessenger) {
+    PlaybackStateEventsStreamHandler.register(
+      with: messenger,
+      streamHandler: PlaybackStateStreamAdapter(holder: stateEvents)
+    )
+    PositionEventsStreamHandler.register(
+      with: messenger,
+      streamHandler: PositionStreamAdapter(holder: positionEvents)
+    )
+    MetricsEventsStreamHandler.register(
+      with: messenger,
+      streamHandler: MetricsStreamAdapter(holder: metricsEvents)
+    )
+    LifecycleEventsStreamHandler.register(
+      with: messenger,
+      streamHandler: LifecycleStreamAdapter(holder: lifecycleEvents)
     )
 
-    stateChannel.setStreamHandler(stateStreamHandler)
-    positionChannel.setStreamHandler(positionStreamHandler)
-    metricsChannel.setStreamHandler(metricsStreamHandler)
+    manager = AVPlayerManager(
+      onState: { [weak self] controllerId, status, error in
+        self?.onMain {
+          self?.stateEvents.emit(
+            PlaybackStateEvent(
+              controllerId: Int64(controllerId),
+              status: status,
+              error: error
+            )
+          )
+        }
+      },
+      onReleased: { [weak self] controllerId, reason in
+        self?.onMain {
+          self?.lifecycleEvents.emit(
+            ControllerLifecycleEvent(controllerId: Int64(controllerId), reason: reason)
+          )
+        }
+      },
+      onPosition: { [weak self] event in
+        self?.onMain { self?.positionEvents.emit(event) }
+      },
+      onMetrics: { [weak self] event in
+        self?.onMain { self?.metricsEvents.emit(event) }
+      }
+    )
 
     if let observer = memoryWarningObserver {
       NotificationCenter.default.removeObserver(observer)
@@ -252,53 +370,16 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
   }
 
-  private func emitState(controllerId: Int, state: String, reason: String? = nil) {
-    var payload: [String: Any] = [
-      "controllerId": controllerId,
-      "state": state,
-    ]
-    if let reason {
-      payload["reason"] = reason
-    }
+  private func onMain(_ work: @escaping () -> Void) {
     if Thread.isMainThread {
-      stateStreamHandler.sink?(payload)
+      work()
     } else {
-      DispatchQueue.main.async { [weak self] in
-        self?.stateStreamHandler.sink?(payload)
-      }
+      DispatchQueue.main.async(execute: work)
     }
   }
 
-  private func emitPosition(controllerId: Int, positionMs: Int64) {
-    let payload: [String: Any] = [
-      "controllerId": controllerId,
-      "positionMs": positionMs,
-    ]
-    if Thread.isMainThread {
-      positionStreamHandler.sink?(payload)
-    } else {
-      DispatchQueue.main.async { [weak self] in
-        self?.positionStreamHandler.sink?(payload)
-      }
-    }
-  }
-
-  private func emitMetrics(payload: [String: Any]) {
-    if Thread.isMainThread {
-      metricsStreamHandler.sink?(payload)
-    } else {
-      DispatchQueue.main.async { [weak self] in
-        self?.metricsStreamHandler.sink?(payload)
-      }
-    }
-  }
-
-  private func handleVideoViewDisposed(
-    viewId: Int64,
-    renderView: NativeVideoRenderView
-  ) {
-    let controllerId = attachedControllerByViewId.removeValue(forKey: viewId)
-    if let controllerId {
+  private func handleVideoViewDisposed(viewId: Int64, renderView: NativeVideoRenderView) {
+    if let controllerId = attachedControllerByViewId.removeValue(forKey: viewId) {
       manager?.detach(controllerId: controllerId)
     }
     videoViews.removeValue(forKey: viewId)
@@ -314,5 +395,17 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
       )
     }
     return manager
+  }
+}
+
+extension FeedSourceMessage {
+  fileprivate func toRegisteredSource() -> RegisteredSource {
+    RegisteredSource(
+      id: id,
+      uri: uri,
+      rank: Int(rank),
+      kind: kind,
+      headers: headers
+    )
   }
 }

@@ -15,27 +15,57 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  static const int _maxCachedPlayers = 3;
-  static const int _preloadCount = 1;
+  static const FeedPlayerConfig _config = FeedPlayerConfig(
+    maxActivePlayers: 3,
+    preloadAhead: 2,
+    preloadBehind: 1,
+  );
+
+  /// Positions around the visible one that get a controller eagerly, so a
+  /// swipe in either direction has a player ready.
   static const int _controllerWindow = 1;
 
-  final NativeFeedPlayer _player = NativeFeedPlayer();
+  final FeedPlayer _player = FeedPlayer();
   final PageController _pageController = PageController();
-  final Map<int, VideoController> _controllers = <int, VideoController>{};
-  final List<String> _urls = <String>[
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
+  final Map<String, FeedController> _controllers = <String, FeedController>{};
+
+  final List<FeedSource> _sources = <FeedSource>[
+    const FeedSource(
+      id: 'big-buck-bunny',
+      uri:
+          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+    ),
+    const FeedSource(
+      id: 'elephants-dream',
+      uri:
+          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+    ),
+    const FeedSource(
+      id: 'for-bigger-blazes',
+      uri:
+          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    ),
+    const FeedSource(
+      id: 'for-bigger-escapes',
+      uri:
+          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
+    ),
+    const FeedSource(
+      id: 'for-bigger-fun',
+      uri:
+          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
+    ),
   ];
-  StreamSubscription<VideoPlaybackState>? _stateSub;
-  StreamSubscription<Duration>? _positionSub;
+
+  StreamSubscription<PlaybackStatusUpdate>? _stateSub;
+  StreamSubscription<PlaybackPosition>? _positionSub;
   StreamSubscription<VideoMetrics>? _metricsSub;
+
   VideoPlaybackState _status = VideoPlaybackState.idle;
-  Duration _position = Duration.zero;
+  PlaybackError? _playbackError;
+  PlaybackPosition _position = const PlaybackPosition(position: Duration.zero);
   VideoMetrics? _metrics;
-  String? _error;
+  String? _fatalError;
   bool _ready = false;
   int _visibleIndex = 0;
   int? _activeControllerId;
@@ -49,170 +79,164 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _initializePlayer() async {
     try {
-      await _player.initialize(
-        maxCachedPlayers: _maxCachedPlayers,
-        preloadCount: _preloadCount,
-      );
-      await _player.preload(_urls);
-      await _prepareAround(0);
-      await _activateFeedItem(0);
+      await _player.initialize(config: _config);
+      await _player.setSources(_sources);
+      await _activate(0);
       if (!mounted) {
         return;
       }
-      setState(() {
-        _ready = true;
-      });
+      setState(() => _ready = true);
     } catch (error) {
       if (!mounted) {
         return;
       }
-      setState(() {
-        _error = 'Failed to initialize: $error';
-      });
+      setState(() => _fatalError = 'Failed to initialize: $error');
     }
   }
 
-  Set<int> _controllerWindowIndexes(int center) {
+  Set<int> _windowIndexes(int center) {
     return <int>{
       for (
         int candidate = center - _controllerWindow;
         candidate <= center + _controllerWindow;
         candidate += 1
       )
-        if (candidate >= 0 && candidate < _urls.length) candidate,
+        if (candidate >= 0 && candidate < _sources.length) candidate,
     };
   }
 
-  Future<VideoController> _ensureController(int index) async {
-    final VideoController? cached = _controllers[index];
+  Future<FeedController> _ensureController(int index) async {
+    final String sourceId = _sources[index].id;
+    final FeedController? cached = _controllers[sourceId];
     if (cached != null && !cached.isReleased) {
       return cached;
     }
-    if (cached != null) {
-      // Native reclaimed this player; drop the dead handle and rebuild.
-      _controllers.remove(index);
-    }
-    final VideoController controller = await _player.getController(
-      url: _urls[index],
-      index: index,
-      autoPlay: false,
-      looping: true,
-    );
-    _controllers[index] = controller;
+    // Native may have reclaimed the player; drop the dead handle and rebuild.
+    _controllers.remove(sourceId);
+
+    final FeedController controller = await _player.controllerFor(sourceId);
+    _controllers[sourceId] = controller;
     return controller;
   }
 
-  Future<void> _disposeControllersOutside(Set<int> keepIndexes) async {
-    final List<MapEntry<int, VideoController>> staleEntries = _controllers
-        .entries
-        .where((MapEntry<int, VideoController> entry) {
-          return !keepIndexes.contains(entry.key);
-        })
+  Future<void> _disposeControllersOutside(Set<int> keep) async {
+    final Set<String> keepIds = keep
+        .map((int index) => _sources[index].id)
+        .toSet();
+    final List<FeedController> stale = _controllers.entries
+        .where((MapEntry<String, FeedController> e) => !keepIds.contains(e.key))
+        .map((MapEntry<String, FeedController> e) => e.value)
         .toList();
 
-    for (final MapEntry<int, VideoController> entry in staleEntries) {
-      _controllers.remove(entry.key);
-      if (_activeControllerId == entry.value.controllerId) {
+    for (final FeedController controller in stale) {
+      _controllers.remove(controller.sourceId);
+      if (_activeControllerId == controller.controllerId) {
         _activeControllerId = null;
       }
-      await entry.value.dispose();
     }
+    await Future.wait(stale.map((FeedController c) => c.dispose()));
   }
 
-  Future<void> _prepareAround(int index) async {
-    final Set<int> preloadIndexes = _controllerWindowIndexes(index);
-    await Future.wait(
-      preloadIndexes.map((int candidate) => _ensureController(candidate)),
-    );
-    await _disposeControllersOutside(preloadIndexes);
-    await _player.setVisibleIndex(index);
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  Future<void> _activateFeedItem(int index) async {
+  Future<void> _activate(int index) async {
     final int token = ++_activationToken;
     try {
-      await _prepareAround(index);
+      // Publish the viewport first so the native scheduler ranks preloading
+      // and eviction around the right position.
+      await _player.setVisibleSource(_sources[index].id);
+
+      final Set<int> window = _windowIndexes(index);
+      await Future.wait(window.map(_ensureController));
+      await _disposeControllersOutside(window);
       if (!mounted || token != _activationToken) {
         return;
       }
-      final VideoController controller = await _ensureController(index);
+
+      final FeedController controller = await _ensureController(index);
       if (!mounted || token != _activationToken) {
         return;
       }
-      await _bindCurrentStreams(controller);
-      for (final MapEntry<int, VideoController> entry in _controllers.entries) {
-        if (entry.key == index) {
-          continue;
+
+      await _bindStreams(controller);
+      for (final FeedController other in _controllers.values) {
+        if (other.controllerId != controller.controllerId &&
+            !other.isReleased) {
+          unawaited(other.pause());
         }
-        unawaited(entry.value.pause());
       }
       await controller.play();
+      if (mounted) {
+        setState(() {});
+      }
+    } on ControllerReleasedError {
+      // The player was reclaimed mid-activation; the next swipe rebuilds it.
     } catch (error) {
       if (!mounted || token != _activationToken) {
         return;
       }
-      setState(() {
-        _error = 'Playback error: $error';
-      });
+      setState(() => _fatalError = 'Playback error: $error');
     }
   }
 
-  Future<void> _bindCurrentStreams(VideoController controller) async {
+  Future<void> _bindStreams(FeedController controller) async {
     await _stateSub?.cancel();
     await _positionSub?.cancel();
     await _metricsSub?.cancel();
     _activeControllerId = controller.controllerId;
 
-    _stateSub = controller.stateStream.listen((VideoPlaybackState state) {
-      if (!mounted || _activeControllerId != controller.controllerId) {
+    bool isCurrent() =>
+        mounted && _activeControllerId == controller.controllerId;
+
+    _stateSub = controller.stateStream.listen((PlaybackStatusUpdate update) {
+      if (!isCurrent()) {
         return;
       }
       setState(() {
-        _status = state;
+        _status = update.state;
+        _playbackError = update.error;
       });
     });
-    _positionSub = controller.positionStream.listen((Duration position) {
-      if (!mounted || _activeControllerId != controller.controllerId) {
+    _positionSub = controller.positionStream.listen((
+      PlaybackPosition position,
+    ) {
+      if (!isCurrent()) {
         return;
       }
-      setState(() {
-        _position = position;
-      });
+      setState(() => _position = position);
     });
     _metricsSub = controller.metricsStream.listen((VideoMetrics metrics) {
-      if (!mounted || _activeControllerId != controller.controllerId) {
+      if (!isCurrent()) {
         return;
       }
-      setState(() {
-        _metrics = metrics;
-      });
+      setState(() => _metrics = metrics);
     });
   }
 
   Future<void> _togglePlayback() async {
-    final VideoController? controller = _controllers[_visibleIndex];
-    if (controller == null) {
+    final FeedController? controller = _controllers[_sources[_visibleIndex].id];
+    if (controller == null || controller.isReleased) {
       return;
     }
-    if (_status == VideoPlaybackState.playing ||
-        _status == VideoPlaybackState.buffering) {
-      await controller.pause();
-      return;
+    try {
+      if (_status == VideoPlaybackState.playing ||
+          _status == VideoPlaybackState.buffering) {
+        await controller.pause();
+      } else {
+        await controller.play();
+      }
+    } on ControllerReleasedError {
+      // Reclaimed between the tap and the command; ignore.
     }
-    await controller.play();
   }
 
   void _onPageChanged(int index) {
     setState(() {
       _visibleIndex = index;
-      _position = Duration.zero;
+      _position = const PlaybackPosition(position: Duration.zero);
       _status = VideoPlaybackState.preparing;
+      _playbackError = null;
       _metrics = null;
     });
-    unawaited(_activateFeedItem(index));
+    unawaited(_activate(index));
   }
 
   @override
@@ -221,15 +245,13 @@ class _MyAppState extends State<MyApp> {
     unawaited(_positionSub?.cancel());
     unawaited(_metricsSub?.cancel());
     _pageController.dispose();
-    for (final VideoController controller in _controllers.values.toList()) {
-      unawaited(controller.dispose());
-    }
     _controllers.clear();
     unawaited(_player.dispose());
     super.dispose();
   }
 
-  Widget _buildCurrentStats() {
+  Widget _buildStats() {
+    final Duration? duration = _position.duration;
     return Positioned(
       left: 16,
       right: 16,
@@ -247,17 +269,28 @@ class _MyAppState extends State<MyApp> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text('Clip ${_visibleIndex + 1} / ${_urls.length}'),
+                  Text('Clip ${_visibleIndex + 1} / ${_sources.length}'),
                   Text('Status: ${_status.name}'),
-                  Text('Position: ${_position.inMilliseconds} ms'),
-                  Text('Rebuffers: ${_metrics?.rebufferCount ?? 0}'),
                   Text(
-                    'Dropped frames: ${_metrics?.droppedFramesEstimate ?? 0}',
+                    'Position: ${_position.position.inMilliseconds} ms'
+                    '${duration == null ? '' : ' / ${duration.inMilliseconds} ms'}',
                   ),
+                  Text(
+                    'Buffered: '
+                    '${_position.bufferedPosition?.inMilliseconds ?? 0} ms',
+                  ),
+                  Text('Rebuffers: ${_metrics?.rebufferCount ?? 0}'),
+                  Text('Dropped frames: ${_metrics?.droppedFrames ?? 0}'),
                   Text(
                     'First frame latency: '
                     '${_metrics?.firstFrameLatency?.inMilliseconds ?? 0} ms',
                   ),
+                  if (_playbackError != null)
+                    Text(
+                      'Error: ${_playbackError!.code}'
+                      '${_playbackError!.isRecoverable ? ' (retryable)' : ''}',
+                      style: const TextStyle(color: Color(0xFFFF8A80)),
+                    ),
                 ],
               ),
             ),
@@ -268,11 +301,12 @@ class _MyAppState extends State<MyApp> {
   }
 
   Widget _buildFeedPage(int index) {
-    final VideoController? cached = _controllers[index];
-    final VideoController? controller = (cached != null && !cached.isReleased)
+    final FeedController? cached = _controllers[_sources[index].id];
+    final FeedController? controller = (cached != null && !cached.isReleased)
         ? cached
         : null;
-    final String label = _urls[index].split('/').last;
+    final String label = _sources[index].uri.split('/').last;
+
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
@@ -322,12 +356,12 @@ class _MyAppState extends State<MyApp> {
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         backgroundColor: Colors.black,
-        body: _error != null
+        body: _fatalError != null
             ? Center(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    _error!,
+                    _fatalError!,
                     style: const TextStyle(color: Colors.white),
                     textAlign: TextAlign.center,
                   ),
@@ -342,14 +376,13 @@ class _MyAppState extends State<MyApp> {
                   children: <Widget>[
                     PageView.builder(
                       controller: _pageController,
-                      itemCount: _urls.length,
+                      itemCount: _sources.length,
                       scrollDirection: Axis.vertical,
                       onPageChanged: _onPageChanged,
-                      itemBuilder: (BuildContext context, int index) {
-                        return _buildFeedPage(index);
-                      },
+                      itemBuilder: (BuildContext context, int index) =>
+                          _buildFeedPage(index),
                     ),
-                    _buildCurrentStats(),
+                    _buildStats(),
                   ],
                 ),
               ),

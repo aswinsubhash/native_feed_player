@@ -10,7 +10,7 @@ import 'video_controller.dart';
 class NativeVideoView extends StatefulWidget {
   const NativeVideoView({required this.controller, super.key});
 
-  final VideoController controller;
+  final FeedController controller;
 
   @override
   State<NativeVideoView> createState() => _NativeVideoViewState();
@@ -20,7 +20,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
   static const String _viewType = 'native_feed_player/video_view';
 
   int? _viewId;
-  VideoController? _attachedController;
+  FeedController? _attachedController;
 
   @override
   void didUpdateWidget(covariant NativeVideoView oldWidget) {
@@ -36,14 +36,14 @@ class _NativeVideoViewState extends State<NativeVideoView> {
 
   @override
   void dispose() {
-    final VideoController? attached = _attachedController;
+    final FeedController? attached = _attachedController;
     if (attached != null) {
       unawaited(_detach(attached));
     }
     super.dispose();
   }
 
-  Future<void> _rebind({VideoController? previous}) async {
+  Future<void> _rebind({FeedController? previous}) async {
     final int? viewId = _viewId;
     if (previous != null && identical(_attachedController, previous)) {
       await _detach(previous);
@@ -54,7 +54,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
     await _attach(widget.controller, viewId);
   }
 
-  Future<void> _attach(VideoController controller, int viewId) async {
+  Future<void> _attach(FeedController controller, int viewId) async {
     if (controller.isReleased) {
       return;
     }
@@ -65,7 +65,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
     );
   }
 
-  Future<void> _detach(VideoController controller) async {
+  Future<void> _detach(FeedController controller) async {
     if (identical(_attachedController, controller)) {
       _attachedController = null;
     }

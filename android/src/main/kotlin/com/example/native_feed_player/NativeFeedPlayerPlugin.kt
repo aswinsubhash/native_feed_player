@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.view.TextureView
 import io.flutter.embedding.engine.plugins.FlutterPlugin
-import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.BinaryMessenger
 import java.util.concurrent.atomic.AtomicInteger
 
 /** NativeFeedPlayerPlugin */
@@ -22,15 +22,15 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         private val controllerIdSeed = AtomicInteger(0)
     }
 
-    private lateinit var stateChannel: EventChannel
-    private lateinit var positionChannel: EventChannel
-    private lateinit var metricsChannel: EventChannel
-
     private var appContext: Context? = null
-    private var stateSink: EventChannel.EventSink? = null
-    private var positionSink: EventChannel.EventSink? = null
-    private var metricsSink: EventChannel.EventSink? = null
     private var exoPlayerManager: ExoPlayerManager? = null
+    private var binaryMessenger: BinaryMessenger? = null
+
+    private val stateEvents = BufferedStreamHandler<PlaybackStateEvent>()
+    private val positionEvents = BufferedStreamHandler<PositionEvent>()
+    private val metricsEvents = BufferedStreamHandler<MetricsEvent>()
+    private val lifecycleEvents = BufferedStreamHandler<ControllerLifecycleEvent>()
+
     private val textureViewPool = TextureViewPool(maxPoolSize = 8)
     private val videoViews = mutableMapOf<Int, NativeVideoPlatformView>()
     private val attachedControllerByViewId = mutableMapOf<Int, Int>()
@@ -38,90 +38,55 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         appContext = flutterPluginBinding.applicationContext
         appContext?.registerComponentCallbacks(this)
-
-        stateChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_feed_player/state")
-        positionChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_feed_player/position")
-        metricsChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_feed_player/metrics")
+        binaryMessenger = flutterPluginBinding.binaryMessenger
 
         flutterPluginBinding.platformViewRegistry.registerViewFactory(
             VIDEO_VIEW_TYPE,
             NativeVideoViewFactory(
                 textureViewPool = textureViewPool,
-                onCreate = { viewId, view ->
-                    videoViews[viewId] = view
-                },
-                onDispose = { viewId, textureView ->
-                    handleVideoViewDisposed(viewId, textureView)
-                }
+                onCreate = { viewId, view -> videoViews[viewId] = view },
+                onDispose = { viewId, textureView -> handleVideoViewDisposed(viewId, textureView) }
             )
         )
 
-        stateChannel.setStreamHandler(
-            object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    stateSink = events
-                }
-
-                override fun onCancel(arguments: Any?) {
-                    stateSink = null
-                }
-            }
+        PlaybackStateEventsStreamHandler.register(
+            flutterPluginBinding.binaryMessenger,
+            PlaybackStateStreamAdapter(stateEvents)
         )
-
-        positionChannel.setStreamHandler(
-            object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    positionSink = events
-                }
-
-                override fun onCancel(arguments: Any?) {
-                    positionSink = null
-                }
-            }
+        PositionEventsStreamHandler.register(
+            flutterPluginBinding.binaryMessenger,
+            PositionStreamAdapter(positionEvents)
         )
-
-        metricsChannel.setStreamHandler(
-            object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    metricsSink = events
-                }
-
-                override fun onCancel(arguments: Any?) {
-                    metricsSink = null
-                }
-            }
+        MetricsEventsStreamHandler.register(
+            flutterPluginBinding.binaryMessenger,
+            MetricsStreamAdapter(metricsEvents)
+        )
+        LifecycleEventsStreamHandler.register(
+            flutterPluginBinding.binaryMessenger,
+            LifecycleStreamAdapter(lifecycleEvents)
         )
 
         exoPlayerManager = ExoPlayerManager(
             context = flutterPluginBinding.applicationContext,
-            onState = { controllerId, state ->
-                stateSink?.success(
-                    mapOf(
-                        "controllerId" to controllerId,
-                        "state" to state
+            onState = { controllerId, status, error ->
+                stateEvents.emit(
+                    PlaybackStateEvent(
+                        controllerId = controllerId.toLong(),
+                        status = status,
+                        error = error
                     )
                 )
             },
             onReleased = { controllerId, reason ->
-                stateSink?.success(
-                    mapOf(
-                        "controllerId" to controllerId,
-                        "state" to "disposed",
-                        "reason" to reason
+                lifecycleEvents.emit(
+                    ControllerLifecycleEvent(
+                        controllerId = controllerId.toLong(),
+                        reason = reason
                     )
                 )
             },
-            onPosition = { controllerId, positionMs ->
-                positionSink?.success(
-                    mapOf(
-                        "controllerId" to controllerId,
-                        "positionMs" to positionMs
-                    )
-                )
-            },
-            onMetrics = { _, metrics ->
-                metricsSink?.success(metrics)
-            }
+            onPosition = { event -> positionEvents.emit(event) },
+            onMetrics = { event -> metricsEvents.emit(event) }
         )
 
         NativeFeedPlayerHostApi.setUp(
@@ -138,50 +103,38 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         videoViews.clear()
         attachedControllerByViewId.clear()
         textureViewPool.clear()
-        stateSink = null
-        positionSink = null
-        metricsSink = null
-        NativeFeedPlayerHostApi.setUp(
-            binaryMessenger = binding.binaryMessenger,
-            api = null
-        )
-        stateChannel.setStreamHandler(null)
-        positionChannel.setStreamHandler(null)
-        metricsChannel.setStreamHandler(null)
+        stateEvents.detach()
+        positionEvents.detach()
+        metricsEvents.detach()
+        lifecycleEvents.detach()
+        NativeFeedPlayerHostApi.setUp(binaryMessenger = binding.binaryMessenger, api = null)
+        binaryMessenger = null
     }
 
-    override fun initialize(request: InitializeRequest) {
-        managerOrThrow().initialize(
-            maxCachedPlayers = request.maxCachedPlayers.toInt(),
-            preloadCount = request.preloadCount.toInt()
-        )
+    override fun initialize(config: FeedPlayerConfigMessage) {
+        managerOrThrow().initialize(config)
     }
 
-    override fun preload(request: PreloadRequest) {
-        val sources = request.sources.map { source ->
-            mapOf(
-                "index" to source.index.toInt(),
-                "url" to source.url
-            )
-        }
-        managerOrThrow().preload(sources)
+    override fun setSources(sources: List<FeedSourceMessage>) {
+        managerOrThrow().setSources(sources.map { it.toRegisteredSource() })
+    }
+
+    override fun appendSources(sources: List<FeedSourceMessage>) {
+        managerOrThrow().appendSources(sources.map { it.toRegisteredSource() })
+    }
+
+    override fun removeSources(request: SourceIdsRequest) {
+        managerOrThrow().removeSources(request.sourceIds)
     }
 
     override fun createController(request: CreateControllerRequest): Long {
-        val url = request.url
-        if (url.isBlank()) {
-            throw FlutterError(
-                "invalid_url",
-                "createController requires a non-empty URL.",
-                null
-            )
+        if (request.sourceId.isBlank()) {
+            throw FlutterError("invalid_source", "createController requires a source id.", null)
         }
-
         val controllerId = controllerIdSeed.incrementAndGet()
         managerOrThrow().createController(
             controllerId = controllerId,
-            url = url,
-            index = request.index.toInt(),
+            sourceId = request.sourceId,
             autoPlay = request.autoPlay,
             looping = request.looping
         )
@@ -216,13 +169,30 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         }
     }
 
-    override fun setVisibleIndex(request: VisibleIndexRequest) {
-        managerOrThrow().setVisibleIndex(request.index.toInt())
+    override fun setVisibleSource(request: VisibleSourceRequest) {
+        managerOrThrow().setVisibleSource(request.sourceId)
     }
 
-    override fun clearCache() {
-        managerOrThrow().clearCache()
+    override fun evictCachedMedia(request: SourceIdsRequest) {
+        // Wired to the disk cache in a later phase; preload state is dropped so
+        // the next request re-fetches.
+        managerOrThrow().removeSources(emptyList())
     }
+
+    override fun clearMediaCache() {
+        // No persistent cache yet; see docs/ARCHITECTURE.md for the roadmap.
+    }
+
+    override fun cacheStatus(request: VisibleSourceRequest): CacheStatusMessage {
+        return CacheStatusMessage(
+            sourceId = request.sourceId,
+            cachedBytes = 0,
+            totalBytes = 0,
+            isComplete = false
+        )
+    }
+
+    override fun cacheUsageBytes(): Long = 0
 
     override fun attachView(request: AttachViewRequest) {
         val controllerId = request.controllerId.toInt()
@@ -249,16 +219,17 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
 
     override fun detachView(request: ControllerRequest) {
         val controllerId = request.controllerId.toInt()
-        if (controllerId > 0) {
-            val manager = managerOrThrow()
-            manager.detachControllerFromView(controllerId)
-            val staleViewIds = attachedControllerByViewId
-                .filterValues { it == controllerId }
-                .keys
-                .toList()
-            for (viewId in staleViewIds) {
-                attachedControllerByViewId.remove(viewId)
-            }
+        if (controllerId <= 0) {
+            return
+        }
+        val manager = managerOrThrow()
+        manager.detachControllerFromView(controllerId)
+        val staleViewIds = attachedControllerByViewId
+            .filterValues { it == controllerId }
+            .keys
+            .toList()
+        for (viewId in staleViewIds) {
+            attachedControllerByViewId.remove(viewId)
         }
     }
 
@@ -271,12 +242,13 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         exoPlayerManager?.onTrimMemory(level)
     }
 
+    @Deprecated("ComponentCallbacks2.onLowMemory is deprecated by the platform")
     override fun onLowMemory() {
         exoPlayerManager?.onLowMemory()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
-        // No-op: handled by Flutter engine and ExoPlayer internally.
+        // No-op: handled by the Flutter engine and ExoPlayer internally.
     }
 
     private fun managerOrThrow(): ExoPlayerManager {
@@ -288,10 +260,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             )
     }
 
-    private fun handleVideoViewDisposed(
-        viewId: Int,
-        textureView: TextureView
-    ) {
+    private fun handleVideoViewDisposed(viewId: Int, textureView: TextureView) {
         val controllerId = attachedControllerByViewId.remove(viewId)
         if (controllerId != null) {
             exoPlayerManager?.detachControllerFromView(controllerId)
@@ -300,3 +269,11 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         textureViewPool.release(textureView)
     }
 }
+
+private fun FeedSourceMessage.toRegisteredSource(): RegisteredSource = RegisteredSource(
+    id = id,
+    uri = uri,
+    rank = rank.toInt(),
+    kind = kind,
+    headers = headers
+)

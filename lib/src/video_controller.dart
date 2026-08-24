@@ -8,28 +8,28 @@ import 'feed_player_exception.dart';
 import 'video_metrics.dart';
 import 'video_playback_state.dart';
 
-/// Handle for controlling a single native video instance.
+/// Handle for controlling the native player bound to one [FeedSource].
 ///
 /// A controller stays usable only while its native player is alive. The native
 /// scheduler may reclaim a player at any time (window eviction, memory
 /// pressure), so commands issued afterwards throw [ControllerReleasedError]
 /// instead of silently doing nothing.
-class VideoController {
-  VideoController({
+class FeedController {
+  FeedController({
     required this.controllerId,
-    required this.url,
-    required this.index,
-    required NativeFeedPlayerPlatform platform,
-    void Function(VideoController controller)? onReleasedCallback,
+    required this.sourceId,
+    required FeedPlayerPlatform platform,
+    void Function(FeedController controller)? onReleasedCallback,
   }) : _platform = platform,
        _onReleasedCallback = onReleasedCallback;
 
   final int controllerId;
-  final String url;
-  final int index;
 
-  final NativeFeedPlayerPlatform _platform;
-  final void Function(VideoController controller)? _onReleasedCallback;
+  /// Identifier of the [FeedSource] this controller plays.
+  final String sourceId;
+
+  final FeedPlayerPlatform _platform;
+  final void Function(FeedController controller)? _onReleasedCallback;
   final Completer<ControllerReleaseReason> _released =
       Completer<ControllerReleaseReason>();
 
@@ -44,9 +44,10 @@ class VideoController {
   /// Completes when the native player is released, for any reason.
   Future<ControllerReleaseReason> get onReleased => _released.future;
 
-  Stream<Duration> get positionStream => _platform.positionStream(controllerId);
+  Stream<PlaybackPosition> get positionStream =>
+      _platform.positionStream(controllerId);
 
-  Stream<VideoPlaybackState> get stateStream =>
+  Stream<PlaybackStatusUpdate> get stateStream =>
       _platform.stateStream(controllerId);
 
   Stream<VideoMetrics> get metricsStream =>
@@ -99,16 +100,19 @@ class VideoController {
     }
   }
 
-  @override
-  String toString() {
-    return 'VideoController(id: $controllerId, index: $index, url: $url, '
-        'released: $isReleased)';
-  }
-
   /// Platform implementation backing this controller.
   ///
   /// Exposed so widgets in this package bind to the same (possibly injected)
   /// platform as the controller rather than the global singleton.
   @internal
-  NativeFeedPlayerPlatform get platform => _platform;
+  FeedPlayerPlatform get platform => _platform;
+
+  @override
+  String toString() =>
+      'FeedController(id: $controllerId, source: $sourceId, '
+      'released: $isReleased)';
 }
+
+/// Former name of [FeedController].
+@Deprecated('Renamed to FeedController. Will be removed in 0.2.0.')
+typedef VideoController = FeedController;

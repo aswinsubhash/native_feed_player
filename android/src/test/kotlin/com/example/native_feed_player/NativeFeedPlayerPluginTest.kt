@@ -5,22 +5,43 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 /*
- * This demonstrates a simple unit test of the Kotlin portion of this plugin's implementation.
+ * Unit tests for the Kotlin portion of this plugin.
  *
- * Once you have built the plugin's example app, you can run these tests from the command
- * line by running `./gradlew testDebugUnitTest` in the `example/android/` directory, or
- * you can run them directly from IDEs that support JUnit such as Android Studio.
+ * Run from the `example/android/` directory with `./gradlew testDebugUnitTest`,
+ * or from an IDE with JUnit support.
  */
-
 internal class NativeFeedPlayerPluginTest {
+    private fun config() = FeedPlayerConfigMessage(
+        maxActivePlayers = 3,
+        preloadAhead = 2,
+        preloadBehind = 1,
+        maxConcurrentPreloads = 2,
+        positionUpdateIntervalMs = 200,
+        cache = CachePolicyMessage(enabled = true, maxBytes = 256L * 1024 * 1024),
+        audio = AudioPolicyMessage(muted = true, volume = 1.0, handleAudioFocus = false)
+    )
+
     @Test
     fun initialize_withoutAttachment_throwsFlutterError() {
         val plugin = NativeFeedPlayerPlugin()
 
         val error = assertFailsWith<FlutterError> {
-            plugin.initialize(InitializeRequest(maxCachedPlayers = 5, preloadCount = 2))
+            plugin.initialize(config())
         }
 
         assertEquals("not_attached", error.code)
+    }
+
+    @Test
+    fun createController_withBlankSourceId_isRejected() {
+        val plugin = NativeFeedPlayerPlugin()
+
+        val error = assertFailsWith<FlutterError> {
+            plugin.createController(
+                CreateControllerRequest(sourceId = "", autoPlay = false, looping = true)
+            )
+        }
+
+        assertEquals("invalid_source", error.code)
     }
 }

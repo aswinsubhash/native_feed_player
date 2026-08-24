@@ -6,7 +6,10 @@ final class NativeVideoRenderView: UIView {
     AVPlayerLayer.self
   }
 
-  private var playerLayer: AVPlayerLayer {
+  /// Exposed so the manager can observe `isReadyForDisplay`, which is the
+  /// genuine first-frame signal for the metrics pipeline.
+  var playerLayer: AVPlayerLayer {
+    // Safe: layerClass guarantees the backing layer type.
     layer as! AVPlayerLayer
   }
 

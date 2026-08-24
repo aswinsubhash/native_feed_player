@@ -2,38 +2,52 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'native_feed_player_method_channel.dart';
 import 'src/controller_release.dart';
+import 'src/feed_player_config.dart';
+import 'src/feed_source.dart';
+import 'src/playback_error.dart';
 import 'src/video_metrics.dart';
-import 'src/video_models.dart';
 import 'src/video_playback_state.dart';
 
-abstract class NativeFeedPlayerPlatform extends PlatformInterface {
-  /// Constructs a NativeFeedPlayerPlatform.
-  NativeFeedPlayerPlatform() : super(token: _token);
+abstract class FeedPlayerPlatform extends PlatformInterface {
+  /// Constructs a FeedPlayerPlatform.
+  FeedPlayerPlatform() : super(token: _token);
 
   static final Object _token = Object();
 
-  static NativeFeedPlayerPlatform _instance = MethodChannelNativeFeedPlayer();
+  static FeedPlayerPlatform _instance = MethodChannelFeedPlayer();
 
-  /// The default instance of [NativeFeedPlayerPlatform] to use.
+  /// The default instance of [FeedPlayerPlatform] to use.
   ///
-  /// Defaults to [MethodChannelNativeFeedPlayer].
-  static NativeFeedPlayerPlatform get instance => _instance;
+  /// Defaults to [MethodChannelFeedPlayer].
+  static FeedPlayerPlatform get instance => _instance;
 
   /// Platform-specific implementations should set this with their own
-  /// platform-specific class that extends [NativeFeedPlayerPlatform] when
-  /// they register themselves.
-  static set instance(NativeFeedPlayerPlatform instance) {
+  /// platform-specific class that extends [FeedPlayerPlatform] when they
+  /// register themselves.
+  static set instance(FeedPlayerPlatform instance) {
     PlatformInterface.verifyToken(instance, _token);
     _instance = instance;
   }
 
-  Future<void> initialize({required NativeFeedConfig config});
+  Future<void> initialize(FeedPlayerConfig config);
 
-  Future<void> preload(List<NativeVideoSource> sources);
+  /// Replaces the registered feed.
+  Future<void> setSources(List<FeedSource> sources);
+
+  /// Appends a page.
+  ///
+  /// [rankOffset] is the absolute feed position of the first appended source,
+  /// so existing sources keep their ranks and pagination cannot invalidate the
+  /// preload window.
+  Future<void> appendSources(
+    List<FeedSource> sources, {
+    required int rankOffset,
+  });
+
+  Future<void> removeSources(List<String> sourceIds);
 
   Future<int> createController({
-    required String url,
-    required int index,
+    required String sourceId,
     required bool autoPlay,
     required bool looping,
   });
@@ -46,9 +60,9 @@ abstract class NativeFeedPlayerPlatform extends PlatformInterface {
 
   Future<void> seekTo(int controllerId, Duration position);
 
-  Stream<Duration> positionStream(int controllerId);
+  Stream<PlaybackPosition> positionStream(int controllerId);
 
-  Stream<VideoPlaybackState> stateStream(int controllerId);
+  Stream<PlaybackStatusUpdate> stateStream(int controllerId);
 
   Stream<VideoMetrics> metricsStream(int controllerId);
 
@@ -56,9 +70,16 @@ abstract class NativeFeedPlayerPlatform extends PlatformInterface {
   /// Dart side did not request.
   Stream<ControllerReleaseEvent> get releaseEvents;
 
-  Future<void> clearCache();
+  Future<void> setVisibleSource(String sourceId);
 
-  Future<void> setVisibleIndex(int index);
+  /// Drops cached bytes for [sourceIds], or for every source when empty.
+  Future<void> evictCachedMedia(List<String> sourceIds);
+
+  Future<void> clearMediaCache();
+
+  Future<CacheStatus> cacheStatus(String sourceId);
+
+  Future<int> cacheUsageBytes();
 
   Future<void> attachView({required int controllerId, required int viewId});
 
@@ -66,3 +87,7 @@ abstract class NativeFeedPlayerPlatform extends PlatformInterface {
 
   Future<void> dispose();
 }
+
+/// Former name of [FeedPlayerPlatform].
+@Deprecated('Renamed to FeedPlayerPlatform. Will be removed in 0.2.0.')
+typedef NativeFeedPlayerPlatform = FeedPlayerPlatform;

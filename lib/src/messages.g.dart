@@ -33,36 +33,69 @@ bool _deepEquals(Object? a, Object? b) {
   return a == b;
 }
 
-class InitializeRequest {
-  InitializeRequest({
-    required this.maxCachedPlayers,
-    required this.preloadCount,
+/// How a source should be treated by the native loader.
+enum FeedMediaKindMessage { auto, progressive, hls }
+
+/// Native playback status for a single controller.
+enum PlaybackStatusMessage {
+  idle,
+  preparing,
+  ready,
+  playing,
+  paused,
+  buffering,
+  completed,
+  error,
+  released,
+}
+
+/// Why a controller stopped existing.
+enum ReleaseReasonMessage { disposed, evicted, error, engineDetached }
+
+class FeedSourceMessage {
+  FeedSourceMessage({
+    required this.id,
+    required this.uri,
+    required this.rank,
+    required this.kind,
+    required this.headers,
   });
 
-  int maxCachedPlayers;
+  /// Caller-owned stable identifier. Survives pagination and reordering.
+  String id;
 
-  int preloadCount;
+  String uri;
+
+  /// Position in the feed, used only to rank preload priority.
+  int rank;
+
+  FeedMediaKindMessage kind;
+
+  Map<String, String> headers;
 
   List<Object?> _toList() {
-    return <Object?>[maxCachedPlayers, preloadCount];
+    return <Object?>[id, uri, rank, kind, headers];
   }
 
   Object encode() {
     return _toList();
   }
 
-  static InitializeRequest decode(Object result) {
+  static FeedSourceMessage decode(Object result) {
     result as List<Object?>;
-    return InitializeRequest(
-      maxCachedPlayers: result[0]! as int,
-      preloadCount: result[1]! as int,
+    return FeedSourceMessage(
+      id: result[0]! as String,
+      uri: result[1]! as String,
+      rank: result[2]! as int,
+      kind: result[3]! as FeedMediaKindMessage,
+      headers: (result[4] as Map<Object?, Object?>?)!.cast<String, String>(),
     );
   }
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
   bool operator ==(Object other) {
-    if (other is! InitializeRequest || other.runtimeType != runtimeType) {
+    if (other is! FeedSourceMessage || other.runtimeType != runtimeType) {
       return false;
     }
     if (identical(this, other)) {
@@ -76,33 +109,33 @@ class InitializeRequest {
   int get hashCode => Object.hashAll(_toList());
 }
 
-class VideoSourceMessage {
-  VideoSourceMessage({required this.url, required this.index});
+class CachePolicyMessage {
+  CachePolicyMessage({required this.enabled, required this.maxBytes});
 
-  String url;
+  bool enabled;
 
-  int index;
+  int maxBytes;
 
   List<Object?> _toList() {
-    return <Object?>[url, index];
+    return <Object?>[enabled, maxBytes];
   }
 
   Object encode() {
     return _toList();
   }
 
-  static VideoSourceMessage decode(Object result) {
+  static CachePolicyMessage decode(Object result) {
     result as List<Object?>;
-    return VideoSourceMessage(
-      url: result[0]! as String,
-      index: result[1]! as int,
+    return CachePolicyMessage(
+      enabled: result[0]! as bool,
+      maxBytes: result[1]! as int,
     );
   }
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
   bool operator ==(Object other) {
-    if (other is! VideoSourceMessage || other.runtimeType != runtimeType) {
+    if (other is! CachePolicyMessage || other.runtimeType != runtimeType) {
       return false;
     }
     if (identical(this, other)) {
@@ -116,30 +149,111 @@ class VideoSourceMessage {
   int get hashCode => Object.hashAll(_toList());
 }
 
-class PreloadRequest {
-  PreloadRequest({required this.sources});
+class AudioPolicyMessage {
+  AudioPolicyMessage({
+    required this.muted,
+    required this.volume,
+    required this.handleAudioFocus,
+  });
 
-  List<VideoSourceMessage> sources;
+  bool muted;
+
+  double volume;
+
+  bool handleAudioFocus;
 
   List<Object?> _toList() {
-    return <Object?>[sources];
+    return <Object?>[muted, volume, handleAudioFocus];
   }
 
   Object encode() {
     return _toList();
   }
 
-  static PreloadRequest decode(Object result) {
+  static AudioPolicyMessage decode(Object result) {
     result as List<Object?>;
-    return PreloadRequest(
-      sources: (result[0] as List<Object?>?)!.cast<VideoSourceMessage>(),
+    return AudioPolicyMessage(
+      muted: result[0]! as bool,
+      volume: result[1]! as double,
+      handleAudioFocus: result[2]! as bool,
     );
   }
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
   bool operator ==(Object other) {
-    if (other is! PreloadRequest || other.runtimeType != runtimeType) {
+    if (other is! AudioPolicyMessage || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+class FeedPlayerConfigMessage {
+  FeedPlayerConfigMessage({
+    required this.maxActivePlayers,
+    required this.preloadAhead,
+    required this.preloadBehind,
+    required this.maxConcurrentPreloads,
+    required this.positionUpdateIntervalMs,
+    required this.cache,
+    required this.audio,
+  });
+
+  int maxActivePlayers;
+
+  int preloadAhead;
+
+  int preloadBehind;
+
+  int maxConcurrentPreloads;
+
+  int positionUpdateIntervalMs;
+
+  CachePolicyMessage cache;
+
+  AudioPolicyMessage audio;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      maxActivePlayers,
+      preloadAhead,
+      preloadBehind,
+      maxConcurrentPreloads,
+      positionUpdateIntervalMs,
+      cache,
+      audio,
+    ];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static FeedPlayerConfigMessage decode(Object result) {
+    result as List<Object?>;
+    return FeedPlayerConfigMessage(
+      maxActivePlayers: result[0]! as int,
+      preloadAhead: result[1]! as int,
+      preloadBehind: result[2]! as int,
+      maxConcurrentPreloads: result[3]! as int,
+      positionUpdateIntervalMs: result[4]! as int,
+      cache: result[5]! as CachePolicyMessage,
+      audio: result[6]! as AudioPolicyMessage,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! FeedPlayerConfigMessage || other.runtimeType != runtimeType) {
       return false;
     }
     if (identical(this, other)) {
@@ -155,22 +269,19 @@ class PreloadRequest {
 
 class CreateControllerRequest {
   CreateControllerRequest({
-    required this.url,
-    required this.index,
+    required this.sourceId,
     required this.autoPlay,
     required this.looping,
   });
 
-  String url;
-
-  int index;
+  String sourceId;
 
   bool autoPlay;
 
   bool looping;
 
   List<Object?> _toList() {
-    return <Object?>[url, index, autoPlay, looping];
+    return <Object?>[sourceId, autoPlay, looping];
   }
 
   Object encode() {
@@ -180,10 +291,9 @@ class CreateControllerRequest {
   static CreateControllerRequest decode(Object result) {
     result as List<Object?>;
     return CreateControllerRequest(
-      url: result[0]! as String,
-      index: result[1]! as int,
-      autoPlay: result[2]! as bool,
-      looping: result[3]! as bool,
+      sourceId: result[0]! as String,
+      autoPlay: result[1]! as bool,
+      looping: result[2]! as bool,
     );
   }
 
@@ -279,28 +389,28 @@ class SeekRequest {
   int get hashCode => Object.hashAll(_toList());
 }
 
-class VisibleIndexRequest {
-  VisibleIndexRequest({required this.index});
+class VisibleSourceRequest {
+  VisibleSourceRequest({required this.sourceId});
 
-  int index;
+  String sourceId;
 
   List<Object?> _toList() {
-    return <Object?>[index];
+    return <Object?>[sourceId];
   }
 
   Object encode() {
     return _toList();
   }
 
-  static VisibleIndexRequest decode(Object result) {
+  static VisibleSourceRequest decode(Object result) {
     result as List<Object?>;
-    return VisibleIndexRequest(index: result[0]! as int);
+    return VisibleSourceRequest(sourceId: result[0]! as String);
   }
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
   bool operator ==(Object other) {
-    if (other is! VisibleIndexRequest || other.runtimeType != runtimeType) {
+    if (other is! VisibleSourceRequest || other.runtimeType != runtimeType) {
       return false;
     }
     if (identical(this, other)) {
@@ -354,6 +464,347 @@ class AttachViewRequest {
   int get hashCode => Object.hashAll(_toList());
 }
 
+class SourceIdsRequest {
+  SourceIdsRequest({required this.sourceIds});
+
+  List<String> sourceIds;
+
+  List<Object?> _toList() {
+    return <Object?>[sourceIds];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static SourceIdsRequest decode(Object result) {
+    result as List<Object?>;
+    return SourceIdsRequest(
+      sourceIds: (result[0] as List<Object?>?)!.cast<String>(),
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! SourceIdsRequest || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+class CacheStatusMessage {
+  CacheStatusMessage({
+    required this.sourceId,
+    required this.cachedBytes,
+    required this.totalBytes,
+    required this.isComplete,
+  });
+
+  String sourceId;
+
+  int cachedBytes;
+
+  int totalBytes;
+
+  bool isComplete;
+
+  List<Object?> _toList() {
+    return <Object?>[sourceId, cachedBytes, totalBytes, isComplete];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static CacheStatusMessage decode(Object result) {
+    result as List<Object?>;
+    return CacheStatusMessage(
+      sourceId: result[0]! as String,
+      cachedBytes: result[1]! as int,
+      totalBytes: result[2]! as int,
+      isComplete: result[3]! as bool,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! CacheStatusMessage || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+class PlaybackErrorMessage {
+  PlaybackErrorMessage({
+    required this.code,
+    required this.message,
+    required this.isRecoverable,
+    this.platformCode,
+  });
+
+  String code;
+
+  String message;
+
+  bool isRecoverable;
+
+  String? platformCode;
+
+  List<Object?> _toList() {
+    return <Object?>[code, message, isRecoverable, platformCode];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static PlaybackErrorMessage decode(Object result) {
+    result as List<Object?>;
+    return PlaybackErrorMessage(
+      code: result[0]! as String,
+      message: result[1]! as String,
+      isRecoverable: result[2]! as bool,
+      platformCode: result[3] as String?,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! PlaybackErrorMessage || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+class PlaybackStateEvent {
+  PlaybackStateEvent({
+    required this.controllerId,
+    required this.status,
+    this.error,
+  });
+
+  int controllerId;
+
+  PlaybackStatusMessage status;
+
+  PlaybackErrorMessage? error;
+
+  List<Object?> _toList() {
+    return <Object?>[controllerId, status, error];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static PlaybackStateEvent decode(Object result) {
+    result as List<Object?>;
+    return PlaybackStateEvent(
+      controllerId: result[0]! as int,
+      status: result[1]! as PlaybackStatusMessage,
+      error: result[2] as PlaybackErrorMessage?,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! PlaybackStateEvent || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+class PositionEvent {
+  PositionEvent({
+    required this.controllerId,
+    required this.positionMs,
+    this.bufferedPositionMs,
+    this.durationMs,
+  });
+
+  int controllerId;
+
+  int positionMs;
+
+  int? bufferedPositionMs;
+
+  int? durationMs;
+
+  List<Object?> _toList() {
+    return <Object?>[controllerId, positionMs, bufferedPositionMs, durationMs];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static PositionEvent decode(Object result) {
+    result as List<Object?>;
+    return PositionEvent(
+      controllerId: result[0]! as int,
+      positionMs: result[1]! as int,
+      bufferedPositionMs: result[2] as int?,
+      durationMs: result[3] as int?,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! PositionEvent || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+class MetricsEvent {
+  MetricsEvent({
+    required this.controllerId,
+    required this.rebufferCount,
+    required this.droppedFrames,
+    required this.timestampMs,
+    this.firstFrameLatencyMs,
+  });
+
+  int controllerId;
+
+  int rebufferCount;
+
+  /// Monotonic total for the controller's lifetime on both platforms.
+  int droppedFrames;
+
+  int timestampMs;
+
+  /// Milliseconds from controller creation to the first rendered video frame.
+  int? firstFrameLatencyMs;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      controllerId,
+      rebufferCount,
+      droppedFrames,
+      timestampMs,
+      firstFrameLatencyMs,
+    ];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static MetricsEvent decode(Object result) {
+    result as List<Object?>;
+    return MetricsEvent(
+      controllerId: result[0]! as int,
+      rebufferCount: result[1]! as int,
+      droppedFrames: result[2]! as int,
+      timestampMs: result[3]! as int,
+      firstFrameLatencyMs: result[4] as int?,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! MetricsEvent || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
+class ControllerLifecycleEvent {
+  ControllerLifecycleEvent({required this.controllerId, required this.reason});
+
+  int controllerId;
+
+  ReleaseReasonMessage reason;
+
+  List<Object?> _toList() {
+    return <Object?>[controllerId, reason];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static ControllerLifecycleEvent decode(Object result) {
+    result as List<Object?>;
+    return ControllerLifecycleEvent(
+      controllerId: result[0]! as int,
+      reason: result[1]! as ReleaseReasonMessage,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ControllerLifecycleEvent ||
+        other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList());
+}
+
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -361,29 +812,62 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    } else if (value is InitializeRequest) {
+    } else if (value is FeedMediaKindMessage) {
       buffer.putUint8(129);
-      writeValue(buffer, value.encode());
-    } else if (value is VideoSourceMessage) {
+      writeValue(buffer, value.index);
+    } else if (value is PlaybackStatusMessage) {
       buffer.putUint8(130);
-      writeValue(buffer, value.encode());
-    } else if (value is PreloadRequest) {
+      writeValue(buffer, value.index);
+    } else if (value is ReleaseReasonMessage) {
       buffer.putUint8(131);
-      writeValue(buffer, value.encode());
-    } else if (value is CreateControllerRequest) {
+      writeValue(buffer, value.index);
+    } else if (value is FeedSourceMessage) {
       buffer.putUint8(132);
       writeValue(buffer, value.encode());
-    } else if (value is ControllerRequest) {
+    } else if (value is CachePolicyMessage) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    } else if (value is SeekRequest) {
+    } else if (value is AudioPolicyMessage) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    } else if (value is VisibleIndexRequest) {
+    } else if (value is FeedPlayerConfigMessage) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
-    } else if (value is AttachViewRequest) {
+    } else if (value is CreateControllerRequest) {
       buffer.putUint8(136);
+      writeValue(buffer, value.encode());
+    } else if (value is ControllerRequest) {
+      buffer.putUint8(137);
+      writeValue(buffer, value.encode());
+    } else if (value is SeekRequest) {
+      buffer.putUint8(138);
+      writeValue(buffer, value.encode());
+    } else if (value is VisibleSourceRequest) {
+      buffer.putUint8(139);
+      writeValue(buffer, value.encode());
+    } else if (value is AttachViewRequest) {
+      buffer.putUint8(140);
+      writeValue(buffer, value.encode());
+    } else if (value is SourceIdsRequest) {
+      buffer.putUint8(141);
+      writeValue(buffer, value.encode());
+    } else if (value is CacheStatusMessage) {
+      buffer.putUint8(142);
+      writeValue(buffer, value.encode());
+    } else if (value is PlaybackErrorMessage) {
+      buffer.putUint8(143);
+      writeValue(buffer, value.encode());
+    } else if (value is PlaybackStateEvent) {
+      buffer.putUint8(144);
+      writeValue(buffer, value.encode());
+    } else if (value is PositionEvent) {
+      buffer.putUint8(145);
+      writeValue(buffer, value.encode());
+    } else if (value is MetricsEvent) {
+      buffer.putUint8(146);
+      writeValue(buffer, value.encode());
+    } else if (value is ControllerLifecycleEvent) {
+      buffer.putUint8(147);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -394,26 +878,55 @@ class _PigeonCodec extends StandardMessageCodec {
   Object? readValueOfType(int type, ReadBuffer buffer) {
     switch (type) {
       case 129:
-        return InitializeRequest.decode(readValue(buffer)!);
+        final value = readValue(buffer) as int?;
+        return value == null ? null : FeedMediaKindMessage.values[value];
       case 130:
-        return VideoSourceMessage.decode(readValue(buffer)!);
+        final value = readValue(buffer) as int?;
+        return value == null ? null : PlaybackStatusMessage.values[value];
       case 131:
-        return PreloadRequest.decode(readValue(buffer)!);
+        final value = readValue(buffer) as int?;
+        return value == null ? null : ReleaseReasonMessage.values[value];
       case 132:
-        return CreateControllerRequest.decode(readValue(buffer)!);
+        return FeedSourceMessage.decode(readValue(buffer)!);
       case 133:
-        return ControllerRequest.decode(readValue(buffer)!);
+        return CachePolicyMessage.decode(readValue(buffer)!);
       case 134:
-        return SeekRequest.decode(readValue(buffer)!);
+        return AudioPolicyMessage.decode(readValue(buffer)!);
       case 135:
-        return VisibleIndexRequest.decode(readValue(buffer)!);
+        return FeedPlayerConfigMessage.decode(readValue(buffer)!);
       case 136:
+        return CreateControllerRequest.decode(readValue(buffer)!);
+      case 137:
+        return ControllerRequest.decode(readValue(buffer)!);
+      case 138:
+        return SeekRequest.decode(readValue(buffer)!);
+      case 139:
+        return VisibleSourceRequest.decode(readValue(buffer)!);
+      case 140:
         return AttachViewRequest.decode(readValue(buffer)!);
+      case 141:
+        return SourceIdsRequest.decode(readValue(buffer)!);
+      case 142:
+        return CacheStatusMessage.decode(readValue(buffer)!);
+      case 143:
+        return PlaybackErrorMessage.decode(readValue(buffer)!);
+      case 144:
+        return PlaybackStateEvent.decode(readValue(buffer)!);
+      case 145:
+        return PositionEvent.decode(readValue(buffer)!);
+      case 146:
+        return MetricsEvent.decode(readValue(buffer)!);
+      case 147:
+        return ControllerLifecycleEvent.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
   }
 }
+
+const StandardMethodCodec pigeonMethodCodec = StandardMethodCodec(
+  _PigeonCodec(),
+);
 
 class NativeFeedPlayerHostApi {
   /// Constructor for [NativeFeedPlayerHostApi].  The [binaryMessenger] named argument is
@@ -432,7 +945,7 @@ class NativeFeedPlayerHostApi {
 
   final String pigeonVar_messageChannelSuffix;
 
-  Future<void> initialize(InitializeRequest request) async {
+  Future<void> initialize(FeedPlayerConfigMessage config) async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.initialize$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
@@ -441,7 +954,7 @@ class NativeFeedPlayerHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[request],
+      <Object?>[config],
     );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -457,9 +970,61 @@ class NativeFeedPlayerHostApi {
     }
   }
 
-  Future<void> preload(PreloadRequest request) async {
+  /// Replaces the whole feed.
+  Future<void> setSources(List<FeedSourceMessage> sources) async {
     final pigeonVar_channelName =
-        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.preload$pigeonVar_messageChannelSuffix';
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setSources$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[sources],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  /// Appends a page without renumbering existing sources.
+  Future<void> appendSources(List<FeedSourceMessage> sources) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.appendSources$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[sources],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  Future<void> removeSources(SourceIdsRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.removeSources$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -612,9 +1177,9 @@ class NativeFeedPlayerHostApi {
     }
   }
 
-  Future<void> setVisibleIndex(VisibleIndexRequest request) async {
+  Future<void> setVisibleSource(VisibleSourceRequest request) async {
     final pigeonVar_channelName =
-        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleIndex$pigeonVar_messageChannelSuffix';
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleSource$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -637,9 +1202,36 @@ class NativeFeedPlayerHostApi {
     }
   }
 
-  Future<void> clearCache() async {
+  /// Drops persisted media bytes for the given sources, or all of them when
+  /// the list is empty.
+  Future<void> evictCachedMedia(SourceIdsRequest request) async {
     final pigeonVar_channelName =
-        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearCache$pigeonVar_messageChannelSuffix';
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.evictCachedMedia$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  Future<void> clearMediaCache() async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearMediaCache$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -657,6 +1249,64 @@ class NativeFeedPlayerHostApi {
       );
     } else {
       return;
+    }
+  }
+
+  Future<CacheStatusMessage> cacheStatus(VisibleSourceRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.cacheStatus$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as CacheStatusMessage?)!;
+    }
+  }
+
+  Future<int> cacheUsageBytes() async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.cacheUsageBytes$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as int?)!;
     }
   }
 
@@ -732,4 +1382,58 @@ class NativeFeedPlayerHostApi {
       return;
     }
   }
+}
+
+Stream<PlaybackStateEvent> playbackStateEvents({String instanceName = ''}) {
+  if (instanceName.isNotEmpty) {
+    instanceName = '.$instanceName';
+  }
+  final EventChannel playbackStateEventsChannel = EventChannel(
+    'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.playbackStateEvents$instanceName',
+    pigeonMethodCodec,
+  );
+  return playbackStateEventsChannel.receiveBroadcastStream().map((
+    dynamic event,
+  ) {
+    return event as PlaybackStateEvent;
+  });
+}
+
+Stream<PositionEvent> positionEvents({String instanceName = ''}) {
+  if (instanceName.isNotEmpty) {
+    instanceName = '.$instanceName';
+  }
+  final EventChannel positionEventsChannel = EventChannel(
+    'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.positionEvents$instanceName',
+    pigeonMethodCodec,
+  );
+  return positionEventsChannel.receiveBroadcastStream().map((dynamic event) {
+    return event as PositionEvent;
+  });
+}
+
+Stream<MetricsEvent> metricsEvents({String instanceName = ''}) {
+  if (instanceName.isNotEmpty) {
+    instanceName = '.$instanceName';
+  }
+  final EventChannel metricsEventsChannel = EventChannel(
+    'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.metricsEvents$instanceName',
+    pigeonMethodCodec,
+  );
+  return metricsEventsChannel.receiveBroadcastStream().map((dynamic event) {
+    return event as MetricsEvent;
+  });
+}
+
+Stream<ControllerLifecycleEvent> lifecycleEvents({String instanceName = ''}) {
+  if (instanceName.isNotEmpty) {
+    instanceName = '.$instanceName';
+  }
+  final EventChannel lifecycleEventsChannel = EventChannel(
+    'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerEventApi.lifecycleEvents$instanceName',
+    pigeonMethodCodec,
+  );
+  return lifecycleEventsChannel.receiveBroadcastStream().map((dynamic event) {
+    return event as ControllerLifecycleEvent;
+  });
 }

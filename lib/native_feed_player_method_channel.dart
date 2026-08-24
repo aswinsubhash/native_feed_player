@@ -1,109 +1,102 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 
 import 'native_feed_player_platform_interface.dart';
 import 'src/controller_release.dart';
+import 'src/feed_player_config.dart';
 import 'src/feed_player_exception.dart';
+import 'src/feed_source.dart';
 import 'src/messages.g.dart';
+import 'src/playback_error.dart';
 import 'src/video_metrics.dart';
-import 'src/video_models.dart';
 import 'src/video_playback_state.dart';
 
-/// An implementation of [NativeFeedPlayerPlatform] that uses Pigeon host APIs.
-class MethodChannelNativeFeedPlayer extends NativeFeedPlayerPlatform {
+/// [FeedPlayerPlatform] implemented on top of the generated Pigeon contracts.
+///
+/// Commands use the host API; events use Pigeon event channels, so payloads are
+/// typed end to end instead of untyped maps filtered on the Dart side.
+class MethodChannelFeedPlayer extends FeedPlayerPlatform {
+  MethodChannelFeedPlayer({
+    NativeFeedPlayerHostApi? hostApi,
+    Stream<PlaybackStateEvent>? playbackStateEventStream,
+    Stream<PositionEvent>? positionEventStream,
+    Stream<MetricsEvent>? metricsEventStream,
+    Stream<ControllerLifecycleEvent>? lifecycleEventStream,
+  }) : hostApi = hostApi ?? NativeFeedPlayerHostApi(),
+       _playbackStateEventStream = playbackStateEventStream,
+       _positionEventStream = positionEventStream,
+       _metricsEventStream = metricsEventStream,
+       _lifecycleEventStream = lifecycleEventStream;
+
   @visibleForTesting
   final NativeFeedPlayerHostApi hostApi;
 
-  MethodChannelNativeFeedPlayer({NativeFeedPlayerHostApi? hostApi})
-    : hostApi = hostApi ?? NativeFeedPlayerHostApi();
+  final Stream<PlaybackStateEvent>? _playbackStateEventStream;
+  final Stream<PositionEvent>? _positionEventStream;
+  final Stream<MetricsEvent>? _metricsEventStream;
+  final Stream<ControllerLifecycleEvent>? _lifecycleEventStream;
 
-  @visibleForTesting
-  final stateEventChannel = const EventChannel('native_feed_player/state');
+  late final Stream<PlaybackStateEvent> _states =
+      (_playbackStateEventStream ?? playbackStateEvents()).asBroadcastStream();
 
-  @visibleForTesting
-  final positionEventChannel = const EventChannel(
-    'native_feed_player/position',
-  );
+  late final Stream<PositionEvent> _positions =
+      (_positionEventStream ?? positionEvents()).asBroadcastStream();
 
-  @visibleForTesting
-  final metricsEventChannel = const EventChannel('native_feed_player/metrics');
+  late final Stream<MetricsEvent> _metrics =
+      (_metricsEventStream ?? metricsEvents()).asBroadcastStream();
 
-  late final Stream<Map<dynamic, dynamic>> _rawStateEvents = stateEventChannel
-      .receiveBroadcastStream()
-      .where((Object? event) => event is Map<dynamic, dynamic>)
-      .cast<Map<dynamic, dynamic>>()
-      .asBroadcastStream();
+  late final Stream<ControllerLifecycleEvent> _lifecycle =
+      (_lifecycleEventStream ?? lifecycleEvents()).asBroadcastStream();
 
-  late final Stream<Map<dynamic, dynamic>> _rawPositionEvents =
-      positionEventChannel
-          .receiveBroadcastStream()
-          .where((Object? event) => event is Map<dynamic, dynamic>)
-          .cast<Map<dynamic, dynamic>>()
-          .asBroadcastStream();
-
-  late final Stream<Map<dynamic, dynamic>> _rawMetricsEvents =
-      metricsEventChannel
-          .receiveBroadcastStream()
-          .where((Object? event) => event is Map<dynamic, dynamic>)
-          .cast<Map<dynamic, dynamic>>()
-          .asBroadcastStream();
-
-  final Map<int, Stream<VideoPlaybackState>> _stateStreams =
-      <int, Stream<VideoPlaybackState>>{};
-  final Map<int, Stream<Duration>> _positionStreams = <int, Stream<Duration>>{};
+  final Map<int, Stream<PlaybackStatusUpdate>> _stateStreams =
+      <int, Stream<PlaybackStatusUpdate>>{};
+  final Map<int, Stream<PlaybackPosition>> _positionStreams =
+      <int, Stream<PlaybackPosition>>{};
   final Map<int, Stream<VideoMetrics>> _metricsStreams =
       <int, Stream<VideoMetrics>>{};
 
   @override
-  late final Stream<ControllerReleaseEvent> releaseEvents = _rawStateEvents
-      .where(
-        (Map<dynamic, dynamic> event) =>
-            event['state']?.toString() == 'disposed',
+  late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle
+      .map(
+        (ControllerLifecycleEvent event) => ControllerReleaseEvent(
+          controllerId: event.controllerId,
+          reason: releaseReasonFromMessage(event.reason),
+        ),
       )
-      .map((Map<dynamic, dynamic> event) {
-        return ControllerReleaseEvent(
-          controllerId: _asInt(event['controllerId']),
-          reason: releaseReasonFromString(event['reason']?.toString()),
-        );
-      })
       .asBroadcastStream();
 
   @override
-  Future<void> initialize({required NativeFeedConfig config}) async {
+  Future<void> initialize(FeedPlayerConfig config) async {
     _ensureSupportedPlatform();
-    await hostApi.initialize(
-      InitializeRequest(
-        maxCachedPlayers: config.maxCachedPlayers,
-        preloadCount: config.preloadCount,
-      ),
-    );
+    await hostApi.initialize(config.toMessage());
   }
 
   @override
-  Future<void> preload(List<NativeVideoSource> sources) async {
-    await hostApi.preload(
-      PreloadRequest(
-        sources: sources
-            .map(
-              (NativeVideoSource source) =>
-                  VideoSourceMessage(url: source.url, index: source.index),
-            )
-            .toList(),
-      ),
-    );
+  Future<void> setSources(List<FeedSource> sources) async {
+    await hostApi.setSources(_toMessages(sources));
+  }
+
+  @override
+  Future<void> appendSources(
+    List<FeedSource> sources, {
+    required int rankOffset,
+  }) async {
+    await hostApi.appendSources(_toMessages(sources, startRank: rankOffset));
+  }
+
+  @override
+  Future<void> removeSources(List<String> sourceIds) async {
+    await hostApi.removeSources(SourceIdsRequest(sourceIds: sourceIds));
   }
 
   @override
   Future<int> createController({
-    required String url,
-    required int index,
+    required String sourceId,
     required bool autoPlay,
     required bool looping,
-  }) async {
+  }) {
     return hostApi.createController(
       CreateControllerRequest(
-        url: url,
-        index: index,
+        sourceId: sourceId,
         autoPlay: autoPlay,
         looping: looping,
       ),
@@ -115,9 +108,7 @@ class MethodChannelNativeFeedPlayer extends NativeFeedPlayerPlatform {
     await hostApi.disposeController(
       ControllerRequest(controllerId: controllerId),
     );
-    _stateStreams.remove(controllerId);
-    _positionStreams.remove(controllerId);
-    _metricsStreams.remove(controllerId);
+    _forgetStreams(controllerId);
   }
 
   @override
@@ -141,56 +132,64 @@ class MethodChannelNativeFeedPlayer extends NativeFeedPlayerPlatform {
   }
 
   @override
-  Stream<Duration> positionStream(int controllerId) {
+  Stream<PlaybackPosition> positionStream(int controllerId) {
     return _positionStreams.putIfAbsent(controllerId, () {
-      return _rawPositionEvents
-          .where(
-            (Map<dynamic, dynamic> event) =>
-                event['controllerId'] == controllerId,
-          )
-          .map((Map<dynamic, dynamic> event) {
-            final int positionMs = _asInt(event['positionMs']);
-            return Duration(milliseconds: positionMs);
-          });
+      return _positions
+          .where((PositionEvent event) => event.controllerId == controllerId)
+          .map(PlaybackPosition.fromMessage);
     });
   }
 
   @override
-  Stream<VideoPlaybackState> stateStream(int controllerId) {
+  Stream<PlaybackStatusUpdate> stateStream(int controllerId) {
     return _stateStreams.putIfAbsent(controllerId, () {
-      return _rawStateEvents
+      return _states
           .where(
-            (Map<dynamic, dynamic> event) =>
-                event['controllerId'] == controllerId,
+            (PlaybackStateEvent event) => event.controllerId == controllerId,
           )
-          .map((Map<dynamic, dynamic> event) {
-            final String rawState = event['state']?.toString() ?? 'error';
-            return playbackStateFromString(rawState);
-          });
+          .map(
+            (PlaybackStateEvent event) => PlaybackStatusUpdate(
+              state: playbackStateFromMessage(event.status),
+              error: PlaybackError.fromMessage(event.error),
+            ),
+          );
     });
   }
 
   @override
   Stream<VideoMetrics> metricsStream(int controllerId) {
     return _metricsStreams.putIfAbsent(controllerId, () {
-      return _rawMetricsEvents
-          .where(
-            (Map<dynamic, dynamic> event) =>
-                event['controllerId'] == controllerId,
-          )
-          .map(VideoMetrics.fromEventMap);
+      return _metrics
+          .where((MetricsEvent event) => event.controllerId == controllerId)
+          .map(VideoMetrics.fromMessage);
     });
   }
 
   @override
-  Future<void> clearCache() async {
-    await hostApi.clearCache();
+  Future<void> setVisibleSource(String sourceId) async {
+    await hostApi.setVisibleSource(VisibleSourceRequest(sourceId: sourceId));
   }
 
   @override
-  Future<void> setVisibleIndex(int index) async {
-    await hostApi.setVisibleIndex(VisibleIndexRequest(index: index));
+  Future<void> evictCachedMedia(List<String> sourceIds) async {
+    await hostApi.evictCachedMedia(SourceIdsRequest(sourceIds: sourceIds));
   }
+
+  @override
+  Future<void> clearMediaCache() async {
+    await hostApi.clearMediaCache();
+  }
+
+  @override
+  Future<CacheStatus> cacheStatus(String sourceId) async {
+    final CacheStatusMessage message = await hostApi.cacheStatus(
+      VisibleSourceRequest(sourceId: sourceId),
+    );
+    return CacheStatus.fromMessage(message);
+  }
+
+  @override
+  Future<int> cacheUsageBytes() => hostApi.cacheUsageBytes();
 
   @override
   Future<void> attachView({
@@ -215,6 +214,22 @@ class MethodChannelNativeFeedPlayer extends NativeFeedPlayerPlatform {
     _metricsStreams.clear();
   }
 
+  List<FeedSourceMessage> _toMessages(
+    List<FeedSource> sources, {
+    int startRank = 0,
+  }) {
+    return <FeedSourceMessage>[
+      for (int offset = 0; offset < sources.length; offset += 1)
+        sources[offset].toMessage(startRank + offset),
+    ];
+  }
+
+  void _forgetStreams(int controllerId) {
+    _stateStreams.remove(controllerId);
+    _positionStreams.remove(controllerId);
+    _metricsStreams.remove(controllerId);
+  }
+
   void _ensureSupportedPlatform() {
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
@@ -227,14 +242,8 @@ class MethodChannelNativeFeedPlayer extends NativeFeedPlayerPlatform {
         throw UnsupportedPlatformError(defaultTargetPlatform.name);
     }
   }
-
-  int _asInt(Object? value) {
-    if (value is int) {
-      return value;
-    }
-    if (value is num) {
-      return value.toInt();
-    }
-    return 0;
-  }
 }
+
+/// Former name of [MethodChannelFeedPlayer].
+@Deprecated('Renamed to MethodChannelFeedPlayer. Will be removed in 0.2.0.')
+typedef MethodChannelNativeFeedPlayer = MethodChannelFeedPlayer;
