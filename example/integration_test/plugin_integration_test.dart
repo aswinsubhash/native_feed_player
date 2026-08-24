@@ -74,10 +74,12 @@ class _BenchmarkCollector {
   }
 }
 
+// Hosts that answer range requests, which the iOS byte-range cache needs. The
+// gtv-videos-bucket samples these once used now return 403.
 const String _goodUriA =
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+    'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4';
 const String _goodUriB =
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4';
+    'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4';
 const String _unreachableUri = 'https://127.0.0.1:9/offline.mp4';
 
 List<FeedSource> _feed(int count) {

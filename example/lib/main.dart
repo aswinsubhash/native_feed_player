@@ -29,31 +29,35 @@ class _MyAppState extends State<MyApp> {
   final PageController _pageController = PageController();
   final Map<String, FeedController> _controllers = <String, FeedController>{};
 
+  /// Hosts that answer range requests, which the iOS byte-range cache needs.
+  ///
+  /// The `gtv-videos-bucket` samples these once used now return 403.
   final List<FeedSource> _sources = <FeedSource>[
     const FeedSource(
-      id: 'big-buck-bunny',
+      id: 'bee',
       uri:
-          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+          'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4',
     ),
     const FeedSource(
-      id: 'elephants-dream',
+      id: 'butterfly',
       uri:
-          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+          'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
     ),
     const FeedSource(
-      id: 'for-bigger-blazes',
+      id: 'sintel',
+      uri: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+    ),
+    // Same clip as 'bee' under a different id, which exercises the scheduler's
+    // duplicate-URI collapsing.
+    const FeedSource(
+      id: 'bee-again',
       uri:
-          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+          'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4',
     ),
     const FeedSource(
-      id: 'for-bigger-escapes',
+      id: 'butterfly-again',
       uri:
-          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-    ),
-    const FeedSource(
-      id: 'for-bigger-fun',
-      uri:
-          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
+          'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
     ),
   ];
 
@@ -305,7 +309,7 @@ class _MyAppState extends State<MyApp> {
     final FeedController? controller = (cached != null && !cached.isReleased)
         ? cached
         : null;
-    final String label = _sources[index].uri.split('/').last;
+    final String label = _sources[index].id;
 
     return Stack(
       fit: StackFit.expand,
