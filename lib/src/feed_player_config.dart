@@ -55,7 +55,7 @@ class AudioPolicy {
 /// How native video output reaches the Flutter scene.
 ///
 /// Both paths are supported so the choice can be measured per device class
-/// rather than assumed; see `docs/RENDERING_BENCHMARK.md`.
+/// rather than assumed; see `doc/RENDERING_BENCHMARK.md`.
 enum RenderMode {
   /// A native view composited by Flutter's platform-view layer. Most
   /// compatible, but compositing costs a synchronisation step per frame.

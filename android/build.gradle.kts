@@ -1,4 +1,4 @@
-group = "com.example.native_feed_player"
+group = "io.github.aswinsubhash.native_feed_player"
 version = "1.0-SNAPSHOT"
 
 val media3Version = "1.11.0"
@@ -29,7 +29,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.native_feed_player"
+    namespace = "io.github.aswinsubhash.native_feed_player"
 
     compileSdk = 36
 

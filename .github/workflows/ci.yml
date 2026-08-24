@@ -119,7 +119,7 @@ jobs:
         # during suite teardown ("Early unexpected exit ... Crash: Runner"),
         # which xcodebuild reports as a run failure regardless of results. The
         # step stays visible instead of being deleted, and must be made blocking
-        # once the host teardown is fixed. See docs/IMPLEMENTATION_BACKLOG.md.
+        # once the host teardown is fixed. See doc/IMPLEMENTATION_BACKLOG.md.
         continue-on-error: true
         run: |
           xcodebuild test \
