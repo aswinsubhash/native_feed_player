@@ -52,13 +52,13 @@ jobs:
           dart run pigeon \
             --input pigeons/native_feed_player_messages.dart \
             --dart_out lib/src/messages.g.dart \
-            --kotlin_out android/src/main/kotlin/com/example/native_feed_player/Messages.g.kt \
-            --kotlin_package com.example.native_feed_player \
+            --kotlin_out android/src/main/kotlin/io/github/aswinsubhash/native_feed_player/Messages.g.kt \
+            --kotlin_package io.github.aswinsubhash.native_feed_player \
             --swift_out ios/Classes/Messages.g.swift
           dart format lib/src/messages.g.dart
           git diff --exit-code -- \
             lib/src/messages.g.dart \
-            android/src/main/kotlin/com/example/native_feed_player/Messages.g.kt \
+            android/src/main/kotlin/io/github/aswinsubhash/native_feed_player/Messages.g.kt \
             ios/Classes/Messages.g.swift
 
       - uses: actions/upload-artifact@v4
@@ -116,11 +116,25 @@ jobs:
       - name: Plugin unit tests
         working-directory: example/ios
         run: |
+          SIMULATOR_ID="$(
+            xcrun simctl list devices available -j | ruby -rjson -e '
+              devices = JSON.parse(STDIN.read).fetch("devices").values.flatten
+              phone = devices.find { |device| device["isAvailable"] && device["name"].start_with?("iPhone") }
+              puts phone["udid"] if phone
+            '
+          )"
+          if [ -z "$SIMULATOR_ID" ]; then
+            echo "No available iPhone simulator found" >&2
+            xcrun simctl list devices available
+            exit 1
+          fi
+          xcrun simctl boot "$SIMULATOR_ID" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
           xcodebuild test \
             -workspace Runner.xcworkspace \
             -scheme Runner \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination "id=$SIMULATOR_ID" \
             -only-testing:RunnerTests \
             CODE_SIGNING_ALLOWED=NO
 
