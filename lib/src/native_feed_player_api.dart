@@ -136,15 +136,7 @@ class FeedPlayer {
   /// Changes audio behaviour for every controller, current and future.
   Future<void> setAudioPolicy(AudioPolicy policy) async {
     _ensureInitialized();
-    _config = FeedPlayerConfig(
-      maxActivePlayers: _config.maxActivePlayers,
-      preloadAhead: _config.preloadAhead,
-      preloadBehind: _config.preloadBehind,
-      maxConcurrentPreloads: _config.maxConcurrentPreloads,
-      positionUpdateInterval: _config.positionUpdateInterval,
-      cache: _config.cache,
-      audio: policy,
-    );
+    _config = _config.copyWith(audio: policy);
     await _platform.setAudioPolicy(policy);
   }
 

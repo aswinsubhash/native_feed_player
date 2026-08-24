@@ -52,6 +52,31 @@ class AudioPolicy {
   );
 }
 
+/// How native video output reaches the Flutter scene.
+///
+/// Both paths are supported so the choice can be measured per device class
+/// rather than assumed; see `docs/RENDERING_BENCHMARK.md`.
+enum RenderMode {
+  /// A native view composited by Flutter's platform-view layer. Most
+  /// compatible, but compositing costs a synchronisation step per frame.
+  platformView,
+
+  /// Frames copied into a Flutter texture and drawn by the Flutter renderer.
+  /// Usually smoother while scrolling.
+  texture,
+}
+
+extension RenderModeMessaging on RenderMode {
+  RenderModeMessage toMessage() {
+    switch (this) {
+      case RenderMode.platformView:
+        return RenderModeMessage.platformView;
+      case RenderMode.texture:
+        return RenderModeMessage.texture;
+    }
+  }
+}
+
 /// Tuning for the native scheduler.
 class FeedPlayerConfig {
   const FeedPlayerConfig({
@@ -60,6 +85,7 @@ class FeedPlayerConfig {
     this.preloadBehind = 1,
     this.maxConcurrentPreloads = 2,
     this.positionUpdateInterval = const Duration(milliseconds: 200),
+    this.renderMode = RenderMode.platformView,
     this.cache = const CachePolicy(),
     this.audio = const AudioPolicy(),
   }) : assert(maxActivePlayers >= 1, 'maxActivePlayers must be at least 1'),
@@ -87,6 +113,7 @@ class FeedPlayerConfig {
   final int maxConcurrentPreloads;
 
   final Duration positionUpdateInterval;
+  final RenderMode renderMode;
   final CachePolicy cache;
   final AudioPolicy audio;
 
@@ -96,7 +123,32 @@ class FeedPlayerConfig {
     preloadBehind: preloadBehind,
     maxConcurrentPreloads: maxConcurrentPreloads,
     positionUpdateIntervalMs: positionUpdateInterval.inMilliseconds,
+    renderMode: renderMode.toMessage(),
     cache: cache.toMessage(),
     audio: audio.toMessage(),
   );
+
+  FeedPlayerConfig copyWith({
+    int? maxActivePlayers,
+    int? preloadAhead,
+    int? preloadBehind,
+    int? maxConcurrentPreloads,
+    Duration? positionUpdateInterval,
+    RenderMode? renderMode,
+    CachePolicy? cache,
+    AudioPolicy? audio,
+  }) {
+    return FeedPlayerConfig(
+      maxActivePlayers: maxActivePlayers ?? this.maxActivePlayers,
+      preloadAhead: preloadAhead ?? this.preloadAhead,
+      preloadBehind: preloadBehind ?? this.preloadBehind,
+      maxConcurrentPreloads:
+          maxConcurrentPreloads ?? this.maxConcurrentPreloads,
+      positionUpdateInterval:
+          positionUpdateInterval ?? this.positionUpdateInterval,
+      renderMode: renderMode ?? this.renderMode,
+      cache: cache ?? this.cache,
+      audio: audio ?? this.audio,
+    );
+  }
 }

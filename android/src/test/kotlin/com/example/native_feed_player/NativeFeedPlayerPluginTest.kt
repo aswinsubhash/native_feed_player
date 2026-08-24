@@ -17,6 +17,7 @@ internal class NativeFeedPlayerPluginTest {
         preloadBehind = 1,
         maxConcurrentPreloads = 2,
         positionUpdateIntervalMs = 200,
+        renderMode = RenderModeMessage.PLATFORM_VIEW,
         cache = CachePolicyMessage(enabled = true, maxBytes = 256L * 1024 * 1024),
         audio = AudioPolicyMessage(muted = true, volume = 1.0, handleAudioFocus = false)
     )

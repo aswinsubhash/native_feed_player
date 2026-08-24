@@ -156,6 +156,14 @@ enum ReleaseReasonMessage: Int {
   case engineDetached = 3
 }
 
+/// How native video output reaches the Flutter scene.
+enum RenderModeMessage: Int {
+  /// A native view composited by Flutter's platform-view layer.
+  case platformView = 0
+  /// Frames copied into a Flutter texture, drawn by the Flutter renderer.
+  case texture = 1
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
 struct FeedSourceMessage: Hashable {
   /// Caller-owned stable identifier. Survives pagination and reordering.
@@ -268,6 +276,7 @@ struct FeedPlayerConfigMessage: Hashable {
   var preloadBehind: Int64
   var maxConcurrentPreloads: Int64
   var positionUpdateIntervalMs: Int64
+  var renderMode: RenderModeMessage
   var cache: CachePolicyMessage
   var audio: AudioPolicyMessage
 
@@ -279,8 +288,9 @@ struct FeedPlayerConfigMessage: Hashable {
     let preloadBehind = pigeonVar_list[2] as! Int64
     let maxConcurrentPreloads = pigeonVar_list[3] as! Int64
     let positionUpdateIntervalMs = pigeonVar_list[4] as! Int64
-    let cache = pigeonVar_list[5] as! CachePolicyMessage
-    let audio = pigeonVar_list[6] as! AudioPolicyMessage
+    let renderMode = pigeonVar_list[5] as! RenderModeMessage
+    let cache = pigeonVar_list[6] as! CachePolicyMessage
+    let audio = pigeonVar_list[7] as! AudioPolicyMessage
 
     return FeedPlayerConfigMessage(
       maxActivePlayers: maxActivePlayers,
@@ -288,6 +298,7 @@ struct FeedPlayerConfigMessage: Hashable {
       preloadBehind: preloadBehind,
       maxConcurrentPreloads: maxConcurrentPreloads,
       positionUpdateIntervalMs: positionUpdateIntervalMs,
+      renderMode: renderMode,
       cache: cache,
       audio: audio
     )
@@ -299,6 +310,7 @@ struct FeedPlayerConfigMessage: Hashable {
       preloadBehind,
       maxConcurrentPreloads,
       positionUpdateIntervalMs,
+      renderMode,
       cache,
       audio,
     ]
@@ -811,42 +823,48 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       }
       return nil
     case 132:
-      return FeedSourceMessage.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return RenderModeMessage(rawValue: enumResultAsInt)
+      }
+      return nil
     case 133:
-      return CachePolicyMessage.fromList(self.readValue() as! [Any?])
+      return FeedSourceMessage.fromList(self.readValue() as! [Any?])
     case 134:
-      return AudioPolicyMessage.fromList(self.readValue() as! [Any?])
+      return CachePolicyMessage.fromList(self.readValue() as! [Any?])
     case 135:
-      return FeedPlayerConfigMessage.fromList(self.readValue() as! [Any?])
+      return AudioPolicyMessage.fromList(self.readValue() as! [Any?])
     case 136:
-      return CreateControllerRequest.fromList(self.readValue() as! [Any?])
+      return FeedPlayerConfigMessage.fromList(self.readValue() as! [Any?])
     case 137:
-      return ControllerRequest.fromList(self.readValue() as! [Any?])
+      return CreateControllerRequest.fromList(self.readValue() as! [Any?])
     case 138:
-      return SeekRequest.fromList(self.readValue() as! [Any?])
+      return ControllerRequest.fromList(self.readValue() as! [Any?])
     case 139:
-      return VisibleSourceRequest.fromList(self.readValue() as! [Any?])
+      return SeekRequest.fromList(self.readValue() as! [Any?])
     case 140:
-      return ControllerDoubleRequest.fromList(self.readValue() as! [Any?])
+      return VisibleSourceRequest.fromList(self.readValue() as! [Any?])
     case 141:
-      return ControllerFlagRequest.fromList(self.readValue() as! [Any?])
+      return ControllerDoubleRequest.fromList(self.readValue() as! [Any?])
     case 142:
-      return AttachViewRequest.fromList(self.readValue() as! [Any?])
+      return ControllerFlagRequest.fromList(self.readValue() as! [Any?])
     case 143:
-      return SourceIdsRequest.fromList(self.readValue() as! [Any?])
+      return AttachViewRequest.fromList(self.readValue() as! [Any?])
     case 144:
-      return CacheStatusMessage.fromList(self.readValue() as! [Any?])
+      return SourceIdsRequest.fromList(self.readValue() as! [Any?])
     case 145:
-      return PlaybackErrorMessage.fromList(self.readValue() as! [Any?])
+      return CacheStatusMessage.fromList(self.readValue() as! [Any?])
     case 146:
-      return PlaybackStateEvent.fromList(self.readValue() as! [Any?])
+      return PlaybackErrorMessage.fromList(self.readValue() as! [Any?])
     case 147:
-      return PositionEvent.fromList(self.readValue() as! [Any?])
+      return PlaybackStateEvent.fromList(self.readValue() as! [Any?])
     case 148:
-      return MetricsEvent.fromList(self.readValue() as! [Any?])
+      return PositionEvent.fromList(self.readValue() as! [Any?])
     case 149:
-      return VideoSizeEvent.fromList(self.readValue() as! [Any?])
+      return MetricsEvent.fromList(self.readValue() as! [Any?])
     case 150:
+      return VideoSizeEvent.fromList(self.readValue() as! [Any?])
+    case 151:
       return ControllerLifecycleEvent.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
@@ -865,62 +883,65 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
     } else if let value = value as? ReleaseReasonMessage {
       super.writeByte(131)
       super.writeValue(value.rawValue)
-    } else if let value = value as? FeedSourceMessage {
+    } else if let value = value as? RenderModeMessage {
       super.writeByte(132)
-      super.writeValue(value.toList())
-    } else if let value = value as? CachePolicyMessage {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? FeedSourceMessage {
       super.writeByte(133)
       super.writeValue(value.toList())
-    } else if let value = value as? AudioPolicyMessage {
+    } else if let value = value as? CachePolicyMessage {
       super.writeByte(134)
       super.writeValue(value.toList())
-    } else if let value = value as? FeedPlayerConfigMessage {
+    } else if let value = value as? AudioPolicyMessage {
       super.writeByte(135)
       super.writeValue(value.toList())
-    } else if let value = value as? CreateControllerRequest {
+    } else if let value = value as? FeedPlayerConfigMessage {
       super.writeByte(136)
       super.writeValue(value.toList())
-    } else if let value = value as? ControllerRequest {
+    } else if let value = value as? CreateControllerRequest {
       super.writeByte(137)
       super.writeValue(value.toList())
-    } else if let value = value as? SeekRequest {
+    } else if let value = value as? ControllerRequest {
       super.writeByte(138)
       super.writeValue(value.toList())
-    } else if let value = value as? VisibleSourceRequest {
+    } else if let value = value as? SeekRequest {
       super.writeByte(139)
       super.writeValue(value.toList())
-    } else if let value = value as? ControllerDoubleRequest {
+    } else if let value = value as? VisibleSourceRequest {
       super.writeByte(140)
       super.writeValue(value.toList())
-    } else if let value = value as? ControllerFlagRequest {
+    } else if let value = value as? ControllerDoubleRequest {
       super.writeByte(141)
       super.writeValue(value.toList())
-    } else if let value = value as? AttachViewRequest {
+    } else if let value = value as? ControllerFlagRequest {
       super.writeByte(142)
       super.writeValue(value.toList())
-    } else if let value = value as? SourceIdsRequest {
+    } else if let value = value as? AttachViewRequest {
       super.writeByte(143)
       super.writeValue(value.toList())
-    } else if let value = value as? CacheStatusMessage {
+    } else if let value = value as? SourceIdsRequest {
       super.writeByte(144)
       super.writeValue(value.toList())
-    } else if let value = value as? PlaybackErrorMessage {
+    } else if let value = value as? CacheStatusMessage {
       super.writeByte(145)
       super.writeValue(value.toList())
-    } else if let value = value as? PlaybackStateEvent {
+    } else if let value = value as? PlaybackErrorMessage {
       super.writeByte(146)
       super.writeValue(value.toList())
-    } else if let value = value as? PositionEvent {
+    } else if let value = value as? PlaybackStateEvent {
       super.writeByte(147)
       super.writeValue(value.toList())
-    } else if let value = value as? MetricsEvent {
+    } else if let value = value as? PositionEvent {
       super.writeByte(148)
       super.writeValue(value.toList())
-    } else if let value = value as? VideoSizeEvent {
+    } else if let value = value as? MetricsEvent {
       super.writeByte(149)
       super.writeValue(value.toList())
-    } else if let value = value as? ControllerLifecycleEvent {
+    } else if let value = value as? VideoSizeEvent {
       super.writeByte(150)
+      super.writeValue(value.toList())
+    } else if let value = value as? ControllerLifecycleEvent {
+      super.writeByte(151)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -972,6 +993,9 @@ protocol NativeFeedPlayerHostApi {
   func cacheUsageBytes() throws -> Int64
   func attachView(request: AttachViewRequest) throws
   func detachView(request: ControllerRequest) throws
+  /// Binds the controller to a Flutter texture and returns its id.
+  func attachTexture(request: ControllerRequest) throws -> Int64
+  func detachTexture(request: ControllerRequest) throws
   func disposeAll() throws
 }
 
@@ -1296,6 +1320,37 @@ class NativeFeedPlayerHostApiSetup {
       }
     } else {
       detachViewChannel.setMessageHandler(nil)
+    }
+    /// Binds the controller to a Flutter texture and returns its id.
+    let attachTextureChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.attachTexture\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      attachTextureChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! ControllerRequest
+        do {
+          let result = try api.attachTexture(request: requestArg)
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      attachTextureChannel.setMessageHandler(nil)
+    }
+    let detachTextureChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachTexture\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      detachTextureChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! ControllerRequest
+        do {
+          try api.detachTexture(request: requestArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      detachTextureChannel.setMessageHandler(nil)
     }
     let disposeAllChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeAll\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {

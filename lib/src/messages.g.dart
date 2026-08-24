@@ -52,6 +52,15 @@ enum PlaybackStatusMessage {
 /// Why a controller stopped existing.
 enum ReleaseReasonMessage { disposed, evicted, error, engineDetached }
 
+/// How native video output reaches the Flutter scene.
+enum RenderModeMessage {
+  /// A native view composited by Flutter's platform-view layer.
+  platformView,
+
+  /// Frames copied into a Flutter texture, drawn by the Flutter renderer.
+  texture,
+}
+
 class FeedSourceMessage {
   FeedSourceMessage({
     required this.id,
@@ -203,6 +212,7 @@ class FeedPlayerConfigMessage {
     required this.preloadBehind,
     required this.maxConcurrentPreloads,
     required this.positionUpdateIntervalMs,
+    required this.renderMode,
     required this.cache,
     required this.audio,
   });
@@ -217,6 +227,8 @@ class FeedPlayerConfigMessage {
 
   int positionUpdateIntervalMs;
 
+  RenderModeMessage renderMode;
+
   CachePolicyMessage cache;
 
   AudioPolicyMessage audio;
@@ -228,6 +240,7 @@ class FeedPlayerConfigMessage {
       preloadBehind,
       maxConcurrentPreloads,
       positionUpdateIntervalMs,
+      renderMode,
       cache,
       audio,
     ];
@@ -245,8 +258,9 @@ class FeedPlayerConfigMessage {
       preloadBehind: result[2]! as int,
       maxConcurrentPreloads: result[3]! as int,
       positionUpdateIntervalMs: result[4]! as int,
-      cache: result[5]! as CachePolicyMessage,
-      audio: result[6]! as AudioPolicyMessage,
+      renderMode: result[5]! as RenderModeMessage,
+      cache: result[6]! as CachePolicyMessage,
+      audio: result[7]! as AudioPolicyMessage,
     );
   }
 
@@ -954,62 +968,65 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is ReleaseReasonMessage) {
       buffer.putUint8(131);
       writeValue(buffer, value.index);
-    } else if (value is FeedSourceMessage) {
+    } else if (value is RenderModeMessage) {
       buffer.putUint8(132);
-      writeValue(buffer, value.encode());
-    } else if (value is CachePolicyMessage) {
+      writeValue(buffer, value.index);
+    } else if (value is FeedSourceMessage) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    } else if (value is AudioPolicyMessage) {
+    } else if (value is CachePolicyMessage) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    } else if (value is FeedPlayerConfigMessage) {
+    } else if (value is AudioPolicyMessage) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
-    } else if (value is CreateControllerRequest) {
+    } else if (value is FeedPlayerConfigMessage) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
-    } else if (value is ControllerRequest) {
+    } else if (value is CreateControllerRequest) {
       buffer.putUint8(137);
       writeValue(buffer, value.encode());
-    } else if (value is SeekRequest) {
+    } else if (value is ControllerRequest) {
       buffer.putUint8(138);
       writeValue(buffer, value.encode());
-    } else if (value is VisibleSourceRequest) {
+    } else if (value is SeekRequest) {
       buffer.putUint8(139);
       writeValue(buffer, value.encode());
-    } else if (value is ControllerDoubleRequest) {
+    } else if (value is VisibleSourceRequest) {
       buffer.putUint8(140);
       writeValue(buffer, value.encode());
-    } else if (value is ControllerFlagRequest) {
+    } else if (value is ControllerDoubleRequest) {
       buffer.putUint8(141);
       writeValue(buffer, value.encode());
-    } else if (value is AttachViewRequest) {
+    } else if (value is ControllerFlagRequest) {
       buffer.putUint8(142);
       writeValue(buffer, value.encode());
-    } else if (value is SourceIdsRequest) {
+    } else if (value is AttachViewRequest) {
       buffer.putUint8(143);
       writeValue(buffer, value.encode());
-    } else if (value is CacheStatusMessage) {
+    } else if (value is SourceIdsRequest) {
       buffer.putUint8(144);
       writeValue(buffer, value.encode());
-    } else if (value is PlaybackErrorMessage) {
+    } else if (value is CacheStatusMessage) {
       buffer.putUint8(145);
       writeValue(buffer, value.encode());
-    } else if (value is PlaybackStateEvent) {
+    } else if (value is PlaybackErrorMessage) {
       buffer.putUint8(146);
       writeValue(buffer, value.encode());
-    } else if (value is PositionEvent) {
+    } else if (value is PlaybackStateEvent) {
       buffer.putUint8(147);
       writeValue(buffer, value.encode());
-    } else if (value is MetricsEvent) {
+    } else if (value is PositionEvent) {
       buffer.putUint8(148);
       writeValue(buffer, value.encode());
-    } else if (value is VideoSizeEvent) {
+    } else if (value is MetricsEvent) {
       buffer.putUint8(149);
       writeValue(buffer, value.encode());
-    } else if (value is ControllerLifecycleEvent) {
+    } else if (value is VideoSizeEvent) {
       buffer.putUint8(150);
+      writeValue(buffer, value.encode());
+    } else if (value is ControllerLifecycleEvent) {
+      buffer.putUint8(151);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -1029,42 +1046,45 @@ class _PigeonCodec extends StandardMessageCodec {
         final value = readValue(buffer) as int?;
         return value == null ? null : ReleaseReasonMessage.values[value];
       case 132:
-        return FeedSourceMessage.decode(readValue(buffer)!);
+        final value = readValue(buffer) as int?;
+        return value == null ? null : RenderModeMessage.values[value];
       case 133:
-        return CachePolicyMessage.decode(readValue(buffer)!);
+        return FeedSourceMessage.decode(readValue(buffer)!);
       case 134:
-        return AudioPolicyMessage.decode(readValue(buffer)!);
+        return CachePolicyMessage.decode(readValue(buffer)!);
       case 135:
-        return FeedPlayerConfigMessage.decode(readValue(buffer)!);
+        return AudioPolicyMessage.decode(readValue(buffer)!);
       case 136:
-        return CreateControllerRequest.decode(readValue(buffer)!);
+        return FeedPlayerConfigMessage.decode(readValue(buffer)!);
       case 137:
-        return ControllerRequest.decode(readValue(buffer)!);
+        return CreateControllerRequest.decode(readValue(buffer)!);
       case 138:
-        return SeekRequest.decode(readValue(buffer)!);
+        return ControllerRequest.decode(readValue(buffer)!);
       case 139:
-        return VisibleSourceRequest.decode(readValue(buffer)!);
+        return SeekRequest.decode(readValue(buffer)!);
       case 140:
-        return ControllerDoubleRequest.decode(readValue(buffer)!);
+        return VisibleSourceRequest.decode(readValue(buffer)!);
       case 141:
-        return ControllerFlagRequest.decode(readValue(buffer)!);
+        return ControllerDoubleRequest.decode(readValue(buffer)!);
       case 142:
-        return AttachViewRequest.decode(readValue(buffer)!);
+        return ControllerFlagRequest.decode(readValue(buffer)!);
       case 143:
-        return SourceIdsRequest.decode(readValue(buffer)!);
+        return AttachViewRequest.decode(readValue(buffer)!);
       case 144:
-        return CacheStatusMessage.decode(readValue(buffer)!);
+        return SourceIdsRequest.decode(readValue(buffer)!);
       case 145:
-        return PlaybackErrorMessage.decode(readValue(buffer)!);
+        return CacheStatusMessage.decode(readValue(buffer)!);
       case 146:
-        return PlaybackStateEvent.decode(readValue(buffer)!);
+        return PlaybackErrorMessage.decode(readValue(buffer)!);
       case 147:
-        return PositionEvent.decode(readValue(buffer)!);
+        return PlaybackStateEvent.decode(readValue(buffer)!);
       case 148:
-        return MetricsEvent.decode(readValue(buffer)!);
+        return PositionEvent.decode(readValue(buffer)!);
       case 149:
-        return VideoSizeEvent.decode(readValue(buffer)!);
+        return MetricsEvent.decode(readValue(buffer)!);
       case 150:
+        return VideoSizeEvent.decode(readValue(buffer)!);
+      case 151:
         return ControllerLifecycleEvent.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -1612,6 +1632,62 @@ class NativeFeedPlayerHostApi {
   Future<void> detachView(ControllerRequest request) async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachView$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  /// Binds the controller to a Flutter texture and returns its id.
+  Future<int> attachTexture(ControllerRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.attachTexture$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as int?)!;
+    }
+  }
+
+  Future<void> detachTexture(ControllerRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachTexture$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,

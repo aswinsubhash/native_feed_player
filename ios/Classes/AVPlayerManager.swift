@@ -424,6 +424,11 @@ final class AVPlayerManager {
     }
   }
 
+  /// The live player for a controller, used to bind texture output.
+  func player(for controllerId: Int) -> AVPlayer? {
+    controllers[controllerId]?.player
+  }
+
   func detach(controllerId: Int) {
     guard let renderView = attachedRenderViews.removeValue(forKey: controllerId) else {
       return

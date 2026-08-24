@@ -258,6 +258,16 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   }
 
   @override
+  Future<int> attachTexture(int controllerId) {
+    return hostApi.attachTexture(ControllerRequest(controllerId: controllerId));
+  }
+
+  @override
+  Future<void> detachTexture(int controllerId) async {
+    await hostApi.detachTexture(ControllerRequest(controllerId: controllerId));
+  }
+
+  @override
   Future<void> dispose() async {
     await hostApi.disposeAll();
     _stateStreams.clear();

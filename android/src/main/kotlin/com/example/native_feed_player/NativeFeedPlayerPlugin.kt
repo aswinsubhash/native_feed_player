@@ -46,11 +46,13 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private val textureViewPool = TextureViewPool(maxPoolSize = 8)
     private val videoViews = mutableMapOf<Int, NativeVideoPlatformView>()
     private val attachedControllerByViewId = mutableMapOf<Int, Int>()
+    private var textureOutputs: TextureOutputRegistry? = null
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         appContext = flutterPluginBinding.applicationContext
         appContext?.registerComponentCallbacks(this)
         binaryMessenger = flutterPluginBinding.binaryMessenger
+        textureOutputs = TextureOutputRegistry(flutterPluginBinding.textureRegistry)
 
         flutterPluginBinding.platformViewRegistry.registerViewFactory(
             VIDEO_VIEW_TYPE,
@@ -116,6 +118,8 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         unregisterActivityCallbacks()
+        releaseTextureOutputs()
+        textureOutputs = null
         appContext?.unregisterComponentCallbacks(this)
         appContext = null
         exoPlayerManager?.disposeAll()
@@ -265,9 +269,33 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         }
     }
 
+    override fun attachTexture(request: ControllerRequest): Long {
+        val controllerId = request.controllerId.toInt()
+        val registry = textureOutputs
+            ?: throw FlutterError("not_attached", "No texture registry available.", null)
+        val manager = managerOrThrow()
+        return registry.attach(controllerId) { surface ->
+            manager.bindSurface(controllerId, surface)
+        }
+    }
+
+    override fun detachTexture(request: ControllerRequest) {
+        val controllerId = request.controllerId.toInt()
+        val manager = exoPlayerManager
+        textureOutputs?.detach(controllerId) { _ ->
+            manager?.unbindSurface(controllerId)
+        }
+    }
+
     override fun disposeAll() {
+        releaseTextureOutputs()
         managerOrThrow().disposeAll()
         attachedControllerByViewId.clear()
+    }
+
+    private fun releaseTextureOutputs() {
+        val manager = exoPlayerManager
+        textureOutputs?.clear { controllerId, _ -> manager?.unbindSurface(controllerId) }
     }
 
     override fun onTrimMemory(level: Int) {

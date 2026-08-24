@@ -148,10 +148,12 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   private var videoViews: [Int64: NativeVideoPlatformView] = [:]
   private var attachedControllerByViewId: [Int64: Int] = [:]
   private var binaryMessenger: FlutterBinaryMessenger?
+  private var textureOutputs: TextureOutputRegistry?
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = NativeFeedPlayerPlugin()
     instance.binaryMessenger = registrar.messenger()
+    instance.textureOutputs = TextureOutputRegistry(registry: registrar.textures())
     instance.configure(messenger: registrar.messenger())
 
     let viewFactory = NativeVideoViewFactory(
@@ -343,7 +345,31 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
   }
 
+  func attachTexture(request: ControllerRequest) throws -> Int64 {
+    let controllerId = Int(request.controllerId)
+    guard let textureOutputs else {
+      throw PigeonError(
+        code: "not_attached",
+        message: "No texture registry available.",
+        details: nil
+      )
+    }
+    guard let player = try managerOrThrow().player(for: controllerId) else {
+      throw PigeonError(
+        code: "controller_not_found",
+        message: "No live controller with id=\(controllerId).",
+        details: nil
+      )
+    }
+    return textureOutputs.attach(controllerId: controllerId, player: player)
+  }
+
+  func detachTexture(request: ControllerRequest) throws {
+    textureOutputs?.detach(controllerId: Int(request.controllerId))
+  }
+
   func disposeAll() throws {
+    textureOutputs?.clear()
     try managerOrThrow().disposeAll()
     attachedControllerByViewId.removeAll()
   }

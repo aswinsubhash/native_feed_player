@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Surface
 import android.view.TextureView
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -61,6 +62,7 @@ internal class ExoPlayerManager(
     private val recycledPlayers = ArrayDeque<ExoPlayer>()
     private var preloadManager: FeedPreloadManager? = null
     private val attachedTextureByController = mutableMapOf<Int, TextureView>()
+    private val surfaceByController = mutableMapOf<Int, Surface>()
     private val metricsByController = mutableMapOf<Int, PlaybackMetrics>()
     private val handler = Handler(Looper.getMainLooper())
 
@@ -209,6 +211,7 @@ internal class ExoPlayerManager(
         )
         creationOrder.addLast(controllerId)
         attachedTextureByController[controllerId]?.let { player.setVideoTextureView(it) }
+        surfaceByController[controllerId]?.let { player.setVideoSurface(it) }
 
         if (player.playbackState == Player.STATE_IDLE) {
             onState(controllerId, PlaybackStatusMessage.PREPARING, null)
@@ -332,6 +335,21 @@ internal class ExoPlayerManager(
         managedPlayers[controllerId]?.player?.clearVideoTextureView(textureView)
     }
 
+    fun bindSurface(controllerId: Int, surface: Surface) {
+        surfaceByController[controllerId] = surface
+        managedPlayers[controllerId]?.player?.setVideoSurface(surface)
+    }
+
+    fun unbindSurface(controllerId: Int) {
+        surfaceByController.remove(controllerId)
+        managedPlayers[controllerId]?.player?.setVideoSurface(null)
+    }
+
+    /** True when the controller has any video output bound. */
+    private fun hasVideoOutput(controllerId: Int): Boolean =
+        attachedTextureByController.containsKey(controllerId) ||
+            surfaceByController.containsKey(controllerId)
+
     /**
      * Maps a trim level to a pressure response.
      *
@@ -369,6 +387,7 @@ internal class ExoPlayerManager(
             releaseController(id, ReleaseReasonMessage.ENGINE_DETACHED)
         }
         attachedTextureByController.clear()
+        surfaceByController.clear()
         metricsByController.clear()
         releaseAllPooledPlayers()
         registry.clear()
@@ -718,7 +737,7 @@ internal class ExoPlayerManager(
             // Offscreen, idle players do not need per-tick position traffic.
             // A controller is interesting only if it is rendering somewhere or
             // actively playing.
-            val isRendering = attachedTextureByController.containsKey(controllerId)
+            val isRendering = hasVideoOutput(controllerId)
             if (!isRendering && !player.isPlaying) {
                 continue
             }
@@ -760,6 +779,9 @@ internal class ExoPlayerManager(
         managed.player.removeAnalyticsListener(managed.analyticsListener)
         attachedTextureByController.remove(controllerId)?.let { texture ->
             managed.player.clearVideoTextureView(texture)
+        }
+        if (surfaceByController.remove(controllerId) != null) {
+            managed.player.setVideoSurface(null)
         }
         metricsByController.remove(controllerId)
         recycleOrReleasePlayer(managed.player)

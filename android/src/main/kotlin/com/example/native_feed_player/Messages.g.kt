@@ -124,6 +124,20 @@ enum class ReleaseReasonMessage(val raw: Int) {
   }
 }
 
+/** How native video output reaches the Flutter scene. */
+enum class RenderModeMessage(val raw: Int) {
+  /** A native view composited by Flutter's platform-view layer. */
+  PLATFORM_VIEW(0),
+  /** Frames copied into a Flutter texture, drawn by the Flutter renderer. */
+  TEXTURE(1);
+
+  companion object {
+    fun ofRaw(raw: Int): RenderModeMessage? {
+      return values().firstOrNull { it.raw == raw }
+    }
+  }
+}
+
 /** Generated class from Pigeon that represents data sent in messages. */
 data class FeedSourceMessage (
   /** Caller-owned stable identifier. Survives pagination and reordering. */
@@ -238,6 +252,7 @@ data class FeedPlayerConfigMessage (
   val preloadBehind: Long,
   val maxConcurrentPreloads: Long,
   val positionUpdateIntervalMs: Long,
+  val renderMode: RenderModeMessage,
   val cache: CachePolicyMessage,
   val audio: AudioPolicyMessage
 )
@@ -249,9 +264,10 @@ data class FeedPlayerConfigMessage (
       val preloadBehind = pigeonVar_list[2] as Long
       val maxConcurrentPreloads = pigeonVar_list[3] as Long
       val positionUpdateIntervalMs = pigeonVar_list[4] as Long
-      val cache = pigeonVar_list[5] as CachePolicyMessage
-      val audio = pigeonVar_list[6] as AudioPolicyMessage
-      return FeedPlayerConfigMessage(maxActivePlayers, preloadAhead, preloadBehind, maxConcurrentPreloads, positionUpdateIntervalMs, cache, audio)
+      val renderMode = pigeonVar_list[5] as RenderModeMessage
+      val cache = pigeonVar_list[6] as CachePolicyMessage
+      val audio = pigeonVar_list[7] as AudioPolicyMessage
+      return FeedPlayerConfigMessage(maxActivePlayers, preloadAhead, preloadBehind, maxConcurrentPreloads, positionUpdateIntervalMs, renderMode, cache, audio)
     }
   }
   fun toList(): List<Any?> {
@@ -261,6 +277,7 @@ data class FeedPlayerConfigMessage (
       preloadBehind,
       maxConcurrentPreloads,
       positionUpdateIntervalMs,
+      renderMode,
       cache,
       audio,
     )
@@ -794,96 +811,101 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         }
       }
       132.toByte() -> {
-        return (readValue(buffer) as? List<Any?>)?.let {
-          FeedSourceMessage.fromList(it)
+        return (readValue(buffer) as Long?)?.let {
+          RenderModeMessage.ofRaw(it.toInt())
         }
       }
       133.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CachePolicyMessage.fromList(it)
+          FeedSourceMessage.fromList(it)
         }
       }
       134.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          AudioPolicyMessage.fromList(it)
+          CachePolicyMessage.fromList(it)
         }
       }
       135.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          FeedPlayerConfigMessage.fromList(it)
+          AudioPolicyMessage.fromList(it)
         }
       }
       136.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CreateControllerRequest.fromList(it)
+          FeedPlayerConfigMessage.fromList(it)
         }
       }
       137.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          ControllerRequest.fromList(it)
+          CreateControllerRequest.fromList(it)
         }
       }
       138.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          SeekRequest.fromList(it)
+          ControllerRequest.fromList(it)
         }
       }
       139.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          VisibleSourceRequest.fromList(it)
+          SeekRequest.fromList(it)
         }
       }
       140.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          ControllerDoubleRequest.fromList(it)
+          VisibleSourceRequest.fromList(it)
         }
       }
       141.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          ControllerFlagRequest.fromList(it)
+          ControllerDoubleRequest.fromList(it)
         }
       }
       142.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          AttachViewRequest.fromList(it)
+          ControllerFlagRequest.fromList(it)
         }
       }
       143.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          SourceIdsRequest.fromList(it)
+          AttachViewRequest.fromList(it)
         }
       }
       144.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CacheStatusMessage.fromList(it)
+          SourceIdsRequest.fromList(it)
         }
       }
       145.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          PlaybackErrorMessage.fromList(it)
+          CacheStatusMessage.fromList(it)
         }
       }
       146.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          PlaybackStateEvent.fromList(it)
+          PlaybackErrorMessage.fromList(it)
         }
       }
       147.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          PositionEvent.fromList(it)
+          PlaybackStateEvent.fromList(it)
         }
       }
       148.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          MetricsEvent.fromList(it)
+          PositionEvent.fromList(it)
         }
       }
       149.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          VideoSizeEvent.fromList(it)
+          MetricsEvent.fromList(it)
         }
       }
       150.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          VideoSizeEvent.fromList(it)
+        }
+      }
+      151.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           ControllerLifecycleEvent.fromList(it)
         }
@@ -905,80 +927,84 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(131)
         writeValue(stream, value.raw.toLong())
       }
-      is FeedSourceMessage -> {
+      is RenderModeMessage -> {
         stream.write(132)
-        writeValue(stream, value.toList())
+        writeValue(stream, value.raw.toLong())
       }
-      is CachePolicyMessage -> {
+      is FeedSourceMessage -> {
         stream.write(133)
         writeValue(stream, value.toList())
       }
-      is AudioPolicyMessage -> {
+      is CachePolicyMessage -> {
         stream.write(134)
         writeValue(stream, value.toList())
       }
-      is FeedPlayerConfigMessage -> {
+      is AudioPolicyMessage -> {
         stream.write(135)
         writeValue(stream, value.toList())
       }
-      is CreateControllerRequest -> {
+      is FeedPlayerConfigMessage -> {
         stream.write(136)
         writeValue(stream, value.toList())
       }
-      is ControllerRequest -> {
+      is CreateControllerRequest -> {
         stream.write(137)
         writeValue(stream, value.toList())
       }
-      is SeekRequest -> {
+      is ControllerRequest -> {
         stream.write(138)
         writeValue(stream, value.toList())
       }
-      is VisibleSourceRequest -> {
+      is SeekRequest -> {
         stream.write(139)
         writeValue(stream, value.toList())
       }
-      is ControllerDoubleRequest -> {
+      is VisibleSourceRequest -> {
         stream.write(140)
         writeValue(stream, value.toList())
       }
-      is ControllerFlagRequest -> {
+      is ControllerDoubleRequest -> {
         stream.write(141)
         writeValue(stream, value.toList())
       }
-      is AttachViewRequest -> {
+      is ControllerFlagRequest -> {
         stream.write(142)
         writeValue(stream, value.toList())
       }
-      is SourceIdsRequest -> {
+      is AttachViewRequest -> {
         stream.write(143)
         writeValue(stream, value.toList())
       }
-      is CacheStatusMessage -> {
+      is SourceIdsRequest -> {
         stream.write(144)
         writeValue(stream, value.toList())
       }
-      is PlaybackErrorMessage -> {
+      is CacheStatusMessage -> {
         stream.write(145)
         writeValue(stream, value.toList())
       }
-      is PlaybackStateEvent -> {
+      is PlaybackErrorMessage -> {
         stream.write(146)
         writeValue(stream, value.toList())
       }
-      is PositionEvent -> {
+      is PlaybackStateEvent -> {
         stream.write(147)
         writeValue(stream, value.toList())
       }
-      is MetricsEvent -> {
+      is PositionEvent -> {
         stream.write(148)
         writeValue(stream, value.toList())
       }
-      is VideoSizeEvent -> {
+      is MetricsEvent -> {
         stream.write(149)
         writeValue(stream, value.toList())
       }
-      is ControllerLifecycleEvent -> {
+      is VideoSizeEvent -> {
         stream.write(150)
+        writeValue(stream, value.toList())
+      }
+      is ControllerLifecycleEvent -> {
+        stream.write(151)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -1018,6 +1044,9 @@ interface NativeFeedPlayerHostApi {
   fun cacheUsageBytes(): Long
   fun attachView(request: AttachViewRequest)
   fun detachView(request: ControllerRequest)
+  /** Binds the controller to a Flutter texture and returns its id. */
+  fun attachTexture(request: ControllerRequest): Long
+  fun detachTexture(request: ControllerRequest)
   fun disposeAll()
 
   companion object {
@@ -1390,6 +1419,41 @@ interface NativeFeedPlayerHostApi {
             val requestArg = args[0] as ControllerRequest
             val wrapped: List<Any?> = try {
               api.detachView(requestArg)
+              listOf(null)
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.attachTexture$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val requestArg = args[0] as ControllerRequest
+            val wrapped: List<Any?> = try {
+              listOf(api.attachTexture(requestArg))
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachTexture$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val requestArg = args[0] as ControllerRequest
+            val wrapped: List<Any?> = try {
+              api.detachTexture(requestArg)
               listOf(null)
             } catch (exception: Throwable) {
               MessagesPigeonUtils.wrapError(exception)

@@ -99,6 +99,11 @@ abstract class FeedPlayerPlatform extends PlatformInterface {
 
   Future<void> detachView({required int controllerId});
 
+  /// Binds the controller to a Flutter texture and returns its id.
+  Future<int> attachTexture(int controllerId);
+
+  Future<void> detachTexture(int controllerId);
+
   Future<void> dispose();
 }
 

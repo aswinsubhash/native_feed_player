@@ -145,6 +145,12 @@ class FakeFeedPlayerPlatform
   Future<void> detachView({required int controllerId}) async {}
 
   @override
+  Future<int> attachTexture(int controllerId) async => controllerId + 1000;
+
+  @override
+  Future<void> detachTexture(int controllerId) async {}
+
+  @override
   Future<void> dispose() async {}
 }
 

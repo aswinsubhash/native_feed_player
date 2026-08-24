@@ -19,6 +19,15 @@ enum PlaybackStatusMessage {
 /// Why a controller stopped existing.
 enum ReleaseReasonMessage { disposed, evicted, error, engineDetached }
 
+/// How native video output reaches the Flutter scene.
+enum RenderModeMessage {
+  /// A native view composited by Flutter's platform-view layer.
+  platformView,
+
+  /// Frames copied into a Flutter texture, drawn by the Flutter renderer.
+  texture,
+}
+
 class FeedSourceMessage {
   FeedSourceMessage({
     required this.id,
@@ -64,6 +73,7 @@ class FeedPlayerConfigMessage {
     required this.preloadBehind,
     required this.maxConcurrentPreloads,
     required this.positionUpdateIntervalMs,
+    required this.renderMode,
     required this.cache,
     required this.audio,
   });
@@ -73,6 +83,7 @@ class FeedPlayerConfigMessage {
   final int preloadBehind;
   final int maxConcurrentPreloads;
   final int positionUpdateIntervalMs;
+  final RenderModeMessage renderMode;
   final CachePolicyMessage cache;
   final AudioPolicyMessage audio;
 }
@@ -282,6 +293,11 @@ abstract class NativeFeedPlayerHostApi {
   void attachView(AttachViewRequest request);
 
   void detachView(ControllerRequest request);
+
+  /// Binds the controller to a Flutter texture and returns its id.
+  int attachTexture(ControllerRequest request);
+
+  void detachTexture(ControllerRequest request);
 
   void disposeAll();
 }
