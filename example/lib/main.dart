@@ -85,8 +85,12 @@ class _MyAppState extends State<MyApp> {
 
   Future<VideoController> _ensureController(int index) async {
     final VideoController? cached = _controllers[index];
-    if (cached != null) {
+    if (cached != null && !cached.isReleased) {
       return cached;
+    }
+    if (cached != null) {
+      // Native reclaimed this player; drop the dead handle and rebuild.
+      _controllers.remove(index);
     }
     final VideoController controller = await _player.getController(
       url: _urls[index],
@@ -264,7 +268,10 @@ class _MyAppState extends State<MyApp> {
   }
 
   Widget _buildFeedPage(int index) {
-    final VideoController? controller = _controllers[index];
+    final VideoController? cached = _controllers[index];
+    final VideoController? controller = (cached != null && !cached.isReleased)
+        ? cached
+        : null;
     final String label = _urls[index].split('/').last;
     return Stack(
       fit: StackFit.expand,

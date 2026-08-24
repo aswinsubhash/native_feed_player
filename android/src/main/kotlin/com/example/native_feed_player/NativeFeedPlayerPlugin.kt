@@ -6,11 +6,20 @@ import android.content.res.Configuration
 import android.view.TextureView
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
+import java.util.concurrent.atomic.AtomicInteger
 
 /** NativeFeedPlayerPlugin */
 class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPlayerHostApi {
     private companion object {
         private const val VIDEO_VIEW_TYPE = "native_feed_player/video_view"
+
+        /**
+         * Controller ids must stay unique for the life of the process, not the
+         * life of one engine attachment. Restarting the counter on detach lets
+         * a second engine (or a hot restart) mint ids that collide with handles
+         * Dart still holds.
+         */
+        private val controllerIdSeed = AtomicInteger(0)
     }
 
     private lateinit var stateChannel: EventChannel
@@ -25,7 +34,6 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private val textureViewPool = TextureViewPool(maxPoolSize = 8)
     private val videoViews = mutableMapOf<Int, NativeVideoPlatformView>()
     private val attachedControllerByViewId = mutableMapOf<Int, Int>()
-    private var nextControllerId = 1
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         appContext = flutterPluginBinding.applicationContext
@@ -94,6 +102,15 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
                     )
                 )
             },
+            onReleased = { controllerId, reason ->
+                stateSink?.success(
+                    mapOf(
+                        "controllerId" to controllerId,
+                        "state" to "disposed",
+                        "reason" to reason
+                    )
+                )
+            },
             onPosition = { controllerId, positionMs ->
                 positionSink?.success(
                     mapOf(
@@ -121,7 +138,6 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         videoViews.clear()
         attachedControllerByViewId.clear()
         textureViewPool.clear()
-        nextControllerId = 1
         stateSink = null
         positionSink = null
         metricsSink = null
@@ -161,7 +177,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             )
         }
 
-        val controllerId = nextControllerId++
+        val controllerId = controllerIdSeed.incrementAndGet()
         managerOrThrow().createController(
             controllerId = controllerId,
             url = url,

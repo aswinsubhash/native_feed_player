@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'native_feed_player_platform_interface.dart';
+import 'src/controller_release.dart';
+import 'src/feed_player_exception.dart';
 import 'src/messages.g.dart';
 import 'src/video_metrics.dart';
 import 'src/video_models.dart';
@@ -53,7 +55,22 @@ class MethodChannelNativeFeedPlayer extends NativeFeedPlayerPlatform {
       <int, Stream<VideoMetrics>>{};
 
   @override
+  late final Stream<ControllerReleaseEvent> releaseEvents = _rawStateEvents
+      .where(
+        (Map<dynamic, dynamic> event) =>
+            event['state']?.toString() == 'disposed',
+      )
+      .map((Map<dynamic, dynamic> event) {
+        return ControllerReleaseEvent(
+          controllerId: _asInt(event['controllerId']),
+          reason: releaseReasonFromString(event['reason']?.toString()),
+        );
+      })
+      .asBroadcastStream();
+
+  @override
   Future<void> initialize({required NativeFeedConfig config}) async {
+    _ensureSupportedPlatform();
     await hostApi.initialize(
       InitializeRequest(
         maxCachedPlayers: config.maxCachedPlayers,
@@ -196,6 +213,19 @@ class MethodChannelNativeFeedPlayer extends NativeFeedPlayerPlatform {
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();
+  }
+
+  void _ensureSupportedPlatform() {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+        return;
+      case TargetPlatform.fuchsia:
+      case TargetPlatform.linux:
+      case TargetPlatform.macOS:
+      case TargetPlatform.windows:
+        throw UnsupportedPlatformError(defaultTargetPlatform.name);
+    }
   }
 
   int _asInt(Object? value) {

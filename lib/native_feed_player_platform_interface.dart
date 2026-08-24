@@ -1,6 +1,7 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'native_feed_player_method_channel.dart';
+import 'src/controller_release.dart';
 import 'src/video_metrics.dart';
 import 'src/video_models.dart';
 import 'src/video_playback_state.dart';
@@ -50,6 +51,10 @@ abstract class NativeFeedPlayerPlatform extends PlatformInterface {
   Stream<VideoPlaybackState> stateStream(int controllerId);
 
   Stream<VideoMetrics> metricsStream(int controllerId);
+
+  /// Fires whenever native code releases a controller, including releases the
+  /// Dart side did not request.
+  Stream<ControllerReleaseEvent> get releaseEvents;
 
   Future<void> clearCache();
 

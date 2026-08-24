@@ -4,8 +4,23 @@ import Foundation
 /// AVPlayer lifecycle and event orchestration for native feed playback.
 final class AVPlayerManager {
   typealias StateCallback = (_ controllerId: Int, _ state: String) -> Void
+  typealias ReleasedCallback = (_ controllerId: Int, _ reason: String) -> Void
   typealias PositionCallback = (_ controllerId: Int, _ positionMs: Int64) -> Void
   typealias MetricsCallback = (_ controllerId: Int, _ metrics: [String: Any]) -> Void
+
+  enum ReleaseReason: String {
+    case disposed
+    case evicted
+    case engineDetached = "engine_detached"
+  }
+
+  /// Structured failure surfaced to Dart instead of a blanket `create_failed`.
+  struct PlaybackSetupError: LocalizedError {
+    let code: String
+    let message: String
+
+    var errorDescription: String? { message }
+  }
 
   private struct PreloadedAsset {
     let url: String
@@ -26,20 +41,33 @@ final class AVPlayerManager {
     let index: Int
     let player: AVPlayer
     let looping: Bool
+    /// Value of `visibleGeneration` when this controller was created. Window
+    /// eviction ignores controllers created since the last visible-index
+    /// update, because they have not been measured against a current window.
+    let createdAtVisibleGeneration: Int
     var itemStatusObservation: NSKeyValueObservation?
     var timeControlObservation: NSKeyValueObservation?
     var endObserver: NSObjectProtocol?
 
-    init(id: Int, url: String, index: Int, player: AVPlayer, looping: Bool) {
+    init(
+      id: Int,
+      url: String,
+      index: Int,
+      player: AVPlayer,
+      looping: Bool,
+      createdAtVisibleGeneration: Int
+    ) {
       self.id = id
       self.url = url
       self.index = index
       self.player = player
       self.looping = looping
+      self.createdAtVisibleGeneration = createdAtVisibleGeneration
     }
   }
 
   private let onState: StateCallback
+  private let onReleased: ReleasedCallback
   private let onPosition: PositionCallback
   private let onMetrics: MetricsCallback
 
@@ -55,15 +83,26 @@ final class AVPlayerManager {
   private var preloadCount: Int = 2
   private var activeWindowRadius: Int = 2
   private var visibleIndex: Int = 0
+  private var visibleGeneration: Int = 0
   private var preloadGeneration: Int = 0
   private var positionTimer: Timer?
 
+  /// Ceiling on every AVPlayer kept alive across the active and pooled
+  /// buckets combined; capping each bucket alone lets their sum grow freely.
+  private var maxTotalPlayers: Int = 8
+
+  private func totalLivePlayers() -> Int {
+    controllers.count + pooledPlayers.count
+  }
+
   init(
     onState: @escaping StateCallback,
+    onReleased: @escaping ReleasedCallback,
     onPosition: @escaping PositionCallback,
     onMetrics: @escaping MetricsCallback
   ) {
     self.onState = onState
+    self.onReleased = onReleased
     self.onPosition = onPosition
     self.onMetrics = onMetrics
   }
@@ -77,6 +116,7 @@ final class AVPlayerManager {
     self.maxPooledPlayers = max(1, self.maxCachedPlayers)
     self.preloadCount = max(0, preloadCount)
     self.activeWindowRadius = max(1, self.preloadCount)
+    self.maxTotalPlayers = self.maxCachedPlayers + self.preloadCount + 1
     preloadGeneration += 1
     preloadedAssets.removeAll()
     drainPooledPlayers(keep: maxPooledPlayers)
@@ -112,14 +152,13 @@ final class AVPlayerManager {
     looping: Bool
   ) throws {
     guard let sourceURL = URL(string: url) else {
-      throw NSError(
-        domain: "native_feed_player",
-        code: 1001,
-        userInfo: [NSLocalizedDescriptionKey: "Invalid URL for createController: \(url)"]
+      throw PlaybackSetupError(
+        code: "invalid_url",
+        message: "Invalid URL for createController: \(url)"
       )
     }
 
-    evictToPoolSizeIfNeeded()
+    evictToPoolSizeIfNeeded(protectedIndex: index)
 
     let item: AVPlayerItem
     if let preloaded = preloadedAssets[index], preloaded.url == url {
@@ -139,7 +178,8 @@ final class AVPlayerManager {
       url: url,
       index: index,
       player: player,
-      looping: looping
+      looping: looping,
+      createdAtVisibleGeneration: visibleGeneration
     )
     attachObservers(to: managed, playerItem: item)
 
@@ -155,7 +195,11 @@ final class AVPlayerManager {
       player.play()
     }
 
+    // Runs after registration and skips this generation's new controllers, so
+    // a controller requested ahead of setVisibleIndex is never torn down by a
+    // window it has not been measured against yet.
     enforceVisibleWindowEviction()
+    enforceTotalPlayerBudget(protectedControllerId: controllerId)
     schedulePreloadWindow()
   }
 
@@ -177,7 +221,11 @@ final class AVPlayerManager {
   }
 
   func disposeController(controllerId: Int) {
-    disposeControllerInternal(controllerId: controllerId, emitDisposed: true, shouldReschedule: true)
+    disposeControllerInternal(
+      controllerId: controllerId,
+      reason: .disposed,
+      shouldReschedule: true
+    )
   }
 
   func clearCache() {
@@ -188,7 +236,9 @@ final class AVPlayerManager {
 
   func setVisibleIndex(index: Int) {
     visibleIndex = index
+    visibleGeneration += 1
     enforceVisibleWindowEviction()
+    enforceTotalPlayerBudget()
     schedulePreloadWindow()
   }
 
@@ -219,7 +269,11 @@ final class AVPlayerManager {
     preloadGeneration += 1
     let ids = Array(controllers.keys)
     for controllerId in ids {
-      disposeControllerInternal(controllerId: controllerId, emitDisposed: true, shouldReschedule: false)
+      disposeControllerInternal(
+        controllerId: controllerId,
+        reason: .engineDetached,
+        shouldReschedule: false
+      )
     }
     for (_, renderView) in attachedRenderViews {
       renderView.setPlayer(nil)
@@ -236,7 +290,7 @@ final class AVPlayerManager {
 
   private func disposeControllerInternal(
     controllerId: Int,
-    emitDisposed: Bool,
+    reason: ReleaseReason,
     shouldReschedule: Bool
   ) {
     guard let managed = controllers.removeValue(forKey: controllerId) else {
@@ -252,9 +306,7 @@ final class AVPlayerManager {
     attachedRenderViews.removeValue(forKey: controllerId)?.setPlayer(nil)
     metricsByController.removeValue(forKey: controllerId)
     recycleOrReleasePlayer(managed.player)
-    if emitDisposed {
-      onState(controllerId, "disposed")
-    }
+    onReleased(controllerId, reason.rawValue)
     stopPositionTimerIfNeeded()
     if shouldReschedule {
       schedulePreloadWindow()
@@ -341,40 +393,82 @@ final class AVPlayerManager {
     let end = visibleIndex + radius
     let toEvict = controllers
       .filter { (_, managed) in
-        managed.index >= 0 && (managed.index < start || managed.index > end)
+        let outsideWindow = managed.index >= 0
+          && (managed.index < start || managed.index > end)
+        let measurable = forceAggressive
+          || managed.createdAtVisibleGeneration != visibleGeneration
+        return outsideWindow && measurable
       }
       .keys
 
     for controllerId in toEvict {
       disposeControllerInternal(
         controllerId: controllerId,
-        emitDisposed: true,
+        reason: .evicted,
         shouldReschedule: false
       )
     }
   }
 
-  private func evictToPoolSizeIfNeeded() {
-    while controllers.count >= maxCachedPlayers {
-      guard let candidate = evictionCandidateId() else {
+  /// Trims the combined player count back under `maxTotalPlayers`, draining
+  /// the stateless pool before touching live controllers.
+  private func enforceTotalPlayerBudget(protectedControllerId: Int? = nil) {
+    while totalLivePlayers() > maxTotalPlayers, !pooledPlayers.isEmpty {
+      _ = pooledPlayers.popLast()
+    }
+
+    while totalLivePlayers() > maxTotalPlayers {
+      let candidate = controllers.keys
+        .filter { $0 != protectedControllerId }
+        .max(by: { lhs, rhs in
+          distanceFromViewport(lhs) < distanceFromViewport(rhs)
+        })
+      guard let candidate else {
         break
       }
-      disposeControllerInternal(controllerId: candidate, emitDisposed: true, shouldReschedule: false)
+      disposeControllerInternal(
+        controllerId: candidate,
+        reason: .evicted,
+        shouldReschedule: false
+      )
     }
   }
 
-  private func evictionCandidateId() -> Int? {
-    if let outsideWindowId = creationOrder.first(where: { id in
+  private func distanceFromViewport(_ controllerId: Int) -> Int {
+    guard let index = controllers[controllerId]?.index, index >= 0 else {
+      return Int.max / 4
+    }
+    return abs(index - visibleIndex)
+  }
+
+  private func evictToPoolSizeIfNeeded(protectedIndex: Int? = nil) {
+    while controllers.count >= maxCachedPlayers {
+      guard let candidate = evictionCandidateId(protectedIndex: protectedIndex) else {
+        break
+      }
+      disposeControllerInternal(
+        controllerId: candidate,
+        reason: .evicted,
+        shouldReschedule: false
+      )
+    }
+  }
+
+  /// Picks an eviction victim, never choosing the position a controller is
+  /// about to be created for.
+  private func evictionCandidateId(protectedIndex: Int? = nil) -> Int? {
+    let eligible = creationOrder.filter { controllers[$0]?.index != protectedIndex }
+
+    if let outsideWindowId = eligible.first(where: { id in
       guard let managed = controllers[id], managed.index >= 0 else {
         return false
       }
-      let distance = abs(managed.index - visibleIndex)
-      return distance > activeWindowRadius
+      return abs(managed.index - visibleIndex) > activeWindowRadius
     }) {
       return outsideWindowId
     }
 
-    return creationOrder.first
+    return eligible.first
   }
 
   private func attachObservers(to managed: ManagedController, playerItem: AVPlayerItem) {

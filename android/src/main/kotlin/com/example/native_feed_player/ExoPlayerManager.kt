@@ -19,6 +19,7 @@ import kotlin.math.abs
 internal class ExoPlayerManager(
     context: Context,
     private val onState: (controllerId: Int, state: String) -> Unit,
+    private val onReleased: (controllerId: Int, reason: String) -> Unit,
     private val onPosition: (controllerId: Int, positionMs: Long) -> Unit,
     private val onMetrics: (controllerId: Int, metrics: Map<String, Any?>) -> Unit
 ) {
@@ -26,7 +27,15 @@ internal class ExoPlayerManager(
         val player: ExoPlayer,
         val listener: Player.Listener,
         val analyticsListener: AnalyticsListener,
-        val index: Int
+        val index: Int,
+        /**
+         * Value of [visibleGeneration] when this controller was created.
+         *
+         * Window eviction ignores controllers created since the last
+         * setVisibleIndex call, because their position cannot be judged
+         * against a visible index the app has not published yet.
+         */
+        val createdAtVisibleGeneration: Long
     )
 
     private data class PreloadedPlayer(
@@ -57,8 +66,19 @@ internal class ExoPlayerManager(
     private var preloadCount = 2
     private var activeWindowRadius = 2
     private var visibleIndex = 0
+    private var visibleGeneration = 0L
     private var preloadGeneration = 0
     private var tickerRunning = false
+
+    /**
+     * Ceiling on every ExoPlayer this manager keeps alive, across the managed,
+     * preloaded, and recycled buckets combined. Capping each bucket separately
+     * still allows their sum to grow without bound.
+     */
+    private var maxTotalPlayers = 8
+
+    private fun totalLivePlayers(): Int =
+        managedPlayers.size + preloadedPlayers.size + recycledPlayers.size
 
     private val positionTicker = object : Runnable {
         override fun run() {
@@ -76,6 +96,7 @@ internal class ExoPlayerManager(
         this.maxPooledPlayers = maxOf(1, this.maxCachedPlayers)
         this.preloadCount = maxOf(0, preloadCount)
         this.activeWindowRadius = maxOf(1, this.preloadCount)
+        this.maxTotalPlayers = this.maxCachedPlayers + this.preloadCount + 1
         releaseAllPreloadedPlayers()
         releaseAllPooledPlayers()
         enforceVisibleWindowEviction()
@@ -108,7 +129,7 @@ internal class ExoPlayerManager(
         autoPlay: Boolean,
         looping: Boolean
     ) {
-        evictToPoolSizeIfNeeded()
+        evictToPoolSizeIfNeeded(protectedIndex = index)
 
         val player = obtainPlayerFor(url = url, index = index)
         val metrics = PlaybackMetrics()
@@ -127,7 +148,8 @@ internal class ExoPlayerManager(
             player = player,
             listener = listener,
             analyticsListener = analyticsListener,
-            index = index
+            index = index,
+            createdAtVisibleGeneration = visibleGeneration
         )
         creationOrder.addLast(controllerId)
         attachedTextureByController[controllerId]?.let { texture ->
@@ -147,7 +169,11 @@ internal class ExoPlayerManager(
 
         emitMetrics(controllerId)
         startTickerIfNeeded()
+        // Runs after registration and skips this generation's new controllers,
+        // so a controller requested ahead of setVisibleIndex is never torn
+        // down by the window it has not been measured against yet.
         enforceVisibleWindowEviction()
+        enforceTotalPlayerBudget(protectedControllerId = controllerId)
         schedulePreloadWindow()
     }
 
@@ -164,7 +190,7 @@ internal class ExoPlayerManager(
     }
 
     fun disposeController(controllerId: Int) {
-        releaseController(controllerId = controllerId, emitDisposed = true)
+        releaseController(controllerId = controllerId, reason = RELEASE_DISPOSED)
         schedulePreloadWindow()
     }
 
@@ -176,7 +202,9 @@ internal class ExoPlayerManager(
 
     fun setVisibleIndex(index: Int) {
         visibleIndex = index
+        visibleGeneration += 1
         enforceVisibleWindowEviction()
+        enforceTotalPlayerBudget()
         schedulePreloadWindow()
     }
 
@@ -193,17 +221,25 @@ internal class ExoPlayerManager(
         managedPlayers[controllerId]?.player?.clearVideoTextureView(textureView)
     }
 
+    /**
+     * Maps a trim level to a pressure response.
+     *
+     * The levels are not ordered by severity: TRIM_MEMORY_UI_HIDDEN (20) sits
+     * numerically above TRIM_MEMORY_RUNNING_CRITICAL (15) but only means the
+     * app was backgrounded. Comparing with `>=` therefore treats an ordinary
+     * background transition as a critical event and destroys the whole pool.
+     * Each level is matched explicitly instead.
+     */
     fun onTrimMemory(level: Int) {
-        when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE ||
-                level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
-                handleCriticalMemoryPressure()
-            }
+        when (level) {
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
+            ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> handleCriticalMemoryPressure()
 
-            level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
-                level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
-                handleModerateMemoryPressure()
-            }
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW,
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE,
+            ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN,
+            ComponentCallbacks2.TRIM_MEMORY_BACKGROUND,
+            ComponentCallbacks2.TRIM_MEMORY_MODERATE -> handleModerateMemoryPressure()
         }
     }
 
@@ -215,7 +251,7 @@ internal class ExoPlayerManager(
         preloadGeneration += 1
         val ids = managedPlayers.keys.toList()
         for (id in ids) {
-            releaseController(controllerId = id, emitDisposed = true)
+            releaseController(controllerId = id, reason = RELEASE_ENGINE_DETACHED)
         }
         attachedTextureByController.clear()
         metricsByController.clear()
@@ -269,6 +305,11 @@ internal class ExoPlayerManager(
                 if (preloadedPlayers.containsKey(index)) {
                     return@post
                 }
+                // Preloading is best-effort: never let it push the process
+                // past the global player budget.
+                if (totalLivePlayers() >= maxTotalPlayers) {
+                    return@post
+                }
 
                 val player = obtainReusablePlayer()
                 player.repeatMode = Player.REPEAT_MODE_OFF
@@ -305,13 +346,46 @@ internal class ExoPlayerManager(
         val maxIndex = visibleIndex + radius
         val toEvict = managedPlayers
             .filterValues { managed ->
-                managed.index >= 0 && (managed.index < minIndex || managed.index > maxIndex)
+                val outsideWindow = managed.index >= 0 &&
+                    (managed.index < minIndex || managed.index > maxIndex)
+                // Controllers created since the last setVisibleIndex have not
+                // been measured against a current window yet.
+                val measurable = forceAggressive ||
+                    managed.createdAtVisibleGeneration != visibleGeneration
+                outsideWindow && measurable
             }
             .keys
             .toList()
 
         for (controllerId in toEvict) {
-            releaseController(controllerId = controllerId, emitDisposed = true)
+            releaseController(controllerId = controllerId, reason = RELEASE_EVICTED)
+        }
+    }
+
+    /**
+     * Trims the combined player count back under [maxTotalPlayers], cheapest
+     * bucket first: recycled players hold no state, preloaded players can be
+     * rebuilt, managed players are last resort.
+     */
+    private fun enforceTotalPlayerBudget(protectedControllerId: Int? = null) {
+        while (totalLivePlayers() > maxTotalPlayers && recycledPlayers.isNotEmpty()) {
+            recycledPlayers.removeFirst().release()
+        }
+
+        while (totalLivePlayers() > maxTotalPlayers && preloadedPlayers.isNotEmpty()) {
+            val farthest = preloadedPlayers.keys.maxByOrNull { abs(it - visibleIndex) } ?: break
+            val preloaded = preloadedPlayers.remove(farthest) ?: break
+            preloaded.player.release()
+        }
+
+        while (totalLivePlayers() > maxTotalPlayers) {
+            val candidate = managedPlayers.keys
+                .filter { it != protectedControllerId }
+                .maxByOrNull { id ->
+                    val idx = managedPlayers[id]?.index ?: return@maxByOrNull Int.MAX_VALUE / 4
+                    if (idx < 0) Int.MAX_VALUE / 4 else abs(idx - visibleIndex)
+                } ?: break
+            releaseController(controllerId = candidate, reason = RELEASE_EVICTED)
         }
     }
 
@@ -352,31 +426,41 @@ internal class ExoPlayerManager(
         }
     }
 
-    private fun evictToPoolSizeIfNeeded() {
+    private fun evictToPoolSizeIfNeeded(protectedIndex: Int? = null) {
         while (managedPlayers.size >= maxCachedPlayers) {
-            val candidateId = evictionCandidateControllerId()
-            if (candidateId == null) {
-                break
-            }
-            releaseController(controllerId = candidateId, emitDisposed = true)
+            val candidateId = evictionCandidateControllerId(protectedIndex) ?: break
+            releaseController(controllerId = candidateId, reason = RELEASE_EVICTED)
         }
     }
 
-    private fun evictionCandidateControllerId(): Int? {
+    /**
+     * Picks the controller furthest from the viewport.
+     *
+     * [protectedIndex] is the index a controller is about to be created for.
+     * Ranking distance against it as well as the visible index stops a
+     * just-requested position from being chosen as its own eviction victim
+     * when the app requests neighbours before publishing a new visible index.
+     */
+    private fun evictionCandidateControllerId(protectedIndex: Int? = null): Int? {
         if (managedPlayers.isEmpty()) {
             return null
         }
 
-        val candidate = managedPlayers.maxByOrNull { entry ->
-            val idx = entry.value.index
-            if (idx < 0) {
-                Int.MAX_VALUE / 4
-            } else {
-                abs(idx - visibleIndex)
-            }
-        }?.key
+        val candidate = managedPlayers
+            .filterValues { it.index != protectedIndex }
+            .maxByOrNull { entry ->
+                val idx = entry.value.index
+                if (idx < 0) {
+                    Int.MAX_VALUE / 4
+                } else {
+                    minOf(
+                        abs(idx - visibleIndex),
+                        protectedIndex?.let { abs(idx - it) } ?: Int.MAX_VALUE
+                    )
+                }
+            }?.key
 
-        return candidate ?: creationOrder.firstOrNull()
+        return candidate ?: creationOrder.firstOrNull { managedPlayers[it]?.index != protectedIndex }
     }
 
     private fun playerListener(controllerId: Int, player: ExoPlayer): Player.Listener {
@@ -490,7 +574,7 @@ internal class ExoPlayerManager(
 
     private fun releaseController(
         controllerId: Int,
-        emitDisposed: Boolean
+        reason: String
     ) {
         val managedPlayer = managedPlayers.remove(controllerId) ?: return
         creationOrder.remove(controllerId)
@@ -501,9 +585,7 @@ internal class ExoPlayerManager(
         }
         metricsByController.remove(controllerId)
         recycleOrReleasePlayer(managedPlayer.player)
-        if (emitDisposed) {
-            onState(controllerId, "disposed")
-        }
+        onReleased(controllerId, reason)
     }
 
     private fun releasePreloadedPlayer(index: Int) {
@@ -541,7 +623,11 @@ internal class ExoPlayerManager(
         shrinkPooledPlayers(targetSize = 0)
     }
 
-    private companion object {
+    internal companion object {
         private const val POSITION_TICK_MS = 250L
+
+        const val RELEASE_DISPOSED = "disposed"
+        const val RELEASE_EVICTED = "evicted"
+        const val RELEASE_ENGINE_DETACHED = "engine_detached"
     }
 }

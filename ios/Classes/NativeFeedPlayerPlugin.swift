@@ -117,6 +117,12 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
         autoPlay: request.autoPlay,
         looping: request.looping
       )
+    } catch let setupError as AVPlayerManager.PlaybackSetupError {
+      throw PigeonError(
+        code: setupError.code,
+        message: setupError.message,
+        details: nil
+      )
     } catch {
       throw PigeonError(
         code: "create_failed",
@@ -218,6 +224,9 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
       onState: { [weak self] controllerId, state in
         self?.emitState(controllerId: controllerId, state: state)
       },
+      onReleased: { [weak self] controllerId, reason in
+        self?.emitState(controllerId: controllerId, state: "disposed", reason: reason)
+      },
       onPosition: { [weak self] controllerId, positionMs in
         self?.emitPosition(controllerId: controllerId, positionMs: positionMs)
       },
@@ -243,11 +252,14 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
   }
 
-  private func emitState(controllerId: Int, state: String) {
-    let payload: [String: Any] = [
+  private func emitState(controllerId: Int, state: String, reason: String? = nil) {
+    var payload: [String: Any] = [
       "controllerId": controllerId,
       "state": state,
     ]
+    if let reason {
+      payload["reason"] = reason
+    }
     if Thread.isMainThread {
       stateStreamHandler.sink?(payload)
     } else {
