@@ -88,6 +88,20 @@ final class AVPlayerManager {
   private var preloadGeneration: Int = 0
   private var positionTimer: Timer?
 
+  /// Shrinks the preload window when the device cannot keep up.
+  ///
+  /// Preloading competes with playback for bandwidth and memory, so under
+  /// sustained rebuffering or memory pressure the cheapest correction is to
+  /// prepare fewer items rather than to keep thrashing.
+  private var windowScale: Double = 1.0
+  private var rebuffersSinceLastRecovery: Int = 0
+
+  /// Consecutive stalls tolerated before the window is halved.
+  private static let rebuffersBeforeDegrade = 3
+
+  /// Floor for `windowScale`; below this preloading stops helping.
+  private static let minWindowScale = 0.25
+
   /// Ceiling on every AVPlayer kept alive across the active and pooled buckets
   /// combined; capping each bucket alone lets their sum grow freely.
   private var maxTotalPlayers: Int = 6
@@ -269,9 +283,35 @@ final class AVPlayerManager {
 
   func onMemoryWarning() {
     preloadGeneration += 1
+    windowScale = AVPlayerManager.minWindowScale
     preparedItems.removeAll()
     drainPooledPlayers(keep: 0)
     enforceVisibleWindowEviction(forceAggressive: true)
+  }
+
+  /// Halves the preload window after repeated stalls, down to a floor that
+  /// still keeps the immediate neighbour prepared.
+  private func noteRebuffer() {
+    rebuffersSinceLastRecovery += 1
+    guard rebuffersSinceLastRecovery >= AVPlayerManager.rebuffersBeforeDegrade else {
+      return
+    }
+    rebuffersSinceLastRecovery = 0
+    let next = max(windowScale / 2, AVPlayerManager.minWindowScale)
+    if next != windowScale {
+      windowScale = next
+      schedulePreloadWindow()
+    }
+  }
+
+  /// Restores the window one step at a time once playback settles.
+  private func noteSteadyPlayback() {
+    rebuffersSinceLastRecovery = 0
+    guard windowScale < 1.0 else {
+      return
+    }
+    windowScale = min(windowScale * 2, 1.0)
+    schedulePreloadWindow()
   }
 
   func disposeAll() {
@@ -303,7 +343,11 @@ final class AVPlayerManager {
   private func schedulePreloadWindow() {
     preloadGeneration += 1
     let generation = preloadGeneration
-    let window = registry.preloadWindow(ahead: preloadAhead, behind: preloadBehind)
+    let window = registry.preloadWindow(
+      ahead: preloadAhead,
+      behind: preloadBehind,
+      scale: windowScale
+    )
     let windowIds = Set(window.map(\.id))
 
     for sourceId in preparedItems.keys where !windowIds.contains(sourceId) {
@@ -577,6 +621,7 @@ final class AVPlayerManager {
         if var metrics = self.metricsByController[managed.id], metrics.hasBeenReady {
           metrics.rebufferCount += 1
           self.metricsByController[managed.id] = metrics
+          self.noteRebuffer()
           self.emitMetrics(managed.id)
         }
         self.onState(managed.id, .buffering, nil)
@@ -585,6 +630,7 @@ final class AVPlayerManager {
           metrics.hasBeenReady = true
           self.metricsByController[managed.id] = metrics
         }
+        self.noteSteadyPlayback()
         self.onState(managed.id, .playing, nil)
       @unknown default:
         self.onState(

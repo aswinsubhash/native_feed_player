@@ -52,6 +52,80 @@ internal class FeedSourceRegistryTest {
     }
 
     @Test
+    fun direction_isInferredFromSuccessiveViewportUpdates() {
+        val registry = registry(5)
+        assertEquals(ScrollDirection.UNKNOWN, registry.direction)
+
+        registry.setVisible("s1")
+        assertEquals(ScrollDirection.FORWARD, registry.direction)
+
+        registry.setVisible("s0")
+        assertEquals(ScrollDirection.BACKWARD, registry.direction)
+    }
+
+    @Test
+    fun direction_isUnchangedWhenReselectingTheSamePosition() {
+        val registry = registry(5)
+        registry.setVisible("s2")
+        assertEquals(ScrollDirection.FORWARD, registry.direction)
+
+        registry.setVisible("s2")
+        assertEquals(ScrollDirection.FORWARD, registry.direction)
+    }
+
+    @Test
+    fun window_followsTravelWhenScrollingBackwards() {
+        val registry = registry(10)
+        registry.setVisible("s5")
+        registry.setVisible("s4")
+
+        val ids = registry.preloadWindow(ahead = 2, behind = 1).map { it.id }
+
+        // Travelling backwards, so the larger budget lands on lower ranks.
+        assertEquals(listOf("s4", "s3", "s5", "s2"), ids)
+    }
+
+    @Test
+    fun window_collapsesDuplicateUris() {
+        val registry = FeedSourceRegistry()
+        val repeated = "https://example.test/repeat.mp4"
+        registry.replaceAll(
+            listOf(
+                source("a", 0),
+                RegisteredSource("b", repeated, 1, FeedMediaKindMessage.AUTO, emptyMap()),
+                RegisteredSource("c", repeated, 2, FeedMediaKindMessage.AUTO, emptyMap())
+            )
+        )
+        registry.setVisible("a")
+
+        val ids = registry.preloadWindow(ahead = 3, behind = 0).map { it.id }
+
+        // The nearer occurrence wins; the clip is not prepared twice.
+        assertEquals(listOf("a", "b"), ids)
+    }
+
+    @Test
+    fun window_shrinksWithScale() {
+        val registry = registry(10, visible = "s5")
+
+        val full = registry.preloadWindow(ahead = 4, behind = 2, scale = 1.0)
+        val halved = registry.preloadWindow(ahead = 4, behind = 2, scale = 0.5)
+
+        assertTrue(halved.size < full.size)
+        // The visible item always survives degradation.
+        assertEquals("s5", halved.first().id)
+    }
+
+    @Test
+    fun window_atMinimumScaleStillIncludesVisibleSource() {
+        val registry = registry(10, visible = "s5")
+
+        val ids = registry.preloadWindow(ahead = 2, behind = 1, scale = 0.25).map { it.id }
+
+        assertTrue(ids.contains("s5"))
+    }
+
+    @Test
     fun window_clampsAtFeedBounds() {
         val registry = registry(3, visible = "s0")
 

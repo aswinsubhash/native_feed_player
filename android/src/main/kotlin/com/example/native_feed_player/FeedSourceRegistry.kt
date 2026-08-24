@@ -1,6 +1,7 @@
 package com.example.native_feed_player
 
 import kotlin.math.abs
+import kotlin.math.max
 
 /**
  * A source the feed can play, addressed by a caller-owned stable id.
@@ -12,6 +13,9 @@ internal data class RegisteredSource(
     val kind: FeedMediaKindMessage,
     val headers: Map<String, String>
 )
+
+/** Which way the viewport is travelling through the feed. */
+internal enum class ScrollDirection { UNKNOWN, FORWARD, BACKWARD }
 
 /**
  * Ordered set of feed sources plus the window arithmetic over them.
@@ -26,10 +30,19 @@ internal class FeedSourceRegistry {
     var visibleSourceId: String? = null
         private set
 
+    /**
+     * Inferred from successive viewport updates. Feeds are overwhelmingly
+     * consumed in one direction, so the preload budget should follow travel
+     * rather than spend half of itself behind the user.
+     */
+    var direction: ScrollDirection = ScrollDirection.UNKNOWN
+        private set
+
     val size: Int get() = sourcesById.size
 
     fun replaceAll(sources: List<RegisteredSource>) {
         sourcesById.clear()
+        direction = ScrollDirection.UNKNOWN
         append(sources)
         if (visibleSourceId !in sourcesById.keys) {
             visibleSourceId = lowestRankedId()
@@ -54,17 +67,26 @@ internal class FeedSourceRegistry {
         }
         if (visibleSourceId !in sourcesById.keys) {
             visibleSourceId = lowestRankedId()
+            direction = ScrollDirection.UNKNOWN
         }
     }
 
     fun clear() {
         sourcesById.clear()
         visibleSourceId = null
+        direction = ScrollDirection.UNKNOWN
     }
 
     fun setVisible(sourceId: String) {
-        if (sourcesById.containsKey(sourceId)) {
-            visibleSourceId = sourceId
+        val target = sourcesById[sourceId] ?: return
+        val previousRank = visibleRank()
+        visibleSourceId = sourceId
+        direction = when {
+            previousRank == null -> ScrollDirection.UNKNOWN
+            target.rank > previousRank -> ScrollDirection.FORWARD
+            target.rank < previousRank -> ScrollDirection.BACKWARD
+            // Re-selecting the same position tells us nothing new.
+            else -> direction
         }
     }
 
@@ -84,17 +106,38 @@ internal class FeedSourceRegistry {
     /**
      * Sources that should be prepared, nearest first.
      *
-     * The window is asymmetric because feeds travel forward: [ahead] positions
-     * past the viewport are worth more than [behind] positions already seen.
+     * [ahead] and [behind] are expressed relative to travel, not to rank: when
+     * the user scrolls backwards they are swapped so the budget still lands in
+     * front of the viewport.
+     *
+     * [scale] shrinks the window under sustained stress; 1.0 is the configured
+     * size. Sources sharing a URI are collapsed to the nearest one so a feed
+     * that repeats a clip does not prepare it twice.
      */
-    fun preloadWindow(ahead: Int, behind: Int): List<RegisteredSource> {
+    fun preloadWindow(ahead: Int, behind: Int, scale: Double = 1.0): List<RegisteredSource> {
         val visibleRank = visibleRank() ?: return emptyList()
+
+        val forwardBudget = if (direction == ScrollDirection.BACKWARD) behind else ahead
+        val backwardBudget = if (direction == ScrollDirection.BACKWARD) ahead else behind
+        val scaledForward = scaleBudget(forwardBudget, scale)
+        val scaledBackward = scaleBudget(backwardBudget, scale)
+
+        val seenUris = mutableSetOf<String>()
         return sourcesById.values
             .filter { source ->
                 val delta = source.rank - visibleRank
-                delta in -behind..ahead
+                delta in -scaledBackward..scaledForward
             }
             .sortedBy { source -> abs(source.rank - visibleRank) }
+            .filter { source -> seenUris.add(source.uri) }
+    }
+
+    /** Keeps at least the visible item in the window while scaling down. */
+    private fun scaleBudget(budget: Int, scale: Double): Int {
+        if (budget <= 0) {
+            return 0
+        }
+        return max(0, Math.round(budget * scale).toInt())
     }
 
     private fun lowestRankedId(): String? =

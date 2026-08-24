@@ -77,6 +77,16 @@ internal class ExoPlayerManager(
     private var tickerRunning = false
 
     /**
+     * Shrinks the preload window when the device cannot keep up.
+     *
+     * Preloading competes with playback for bandwidth and memory, so under
+     * sustained rebuffering or memory pressure the cheapest correction is to
+     * prepare fewer items rather than to keep thrashing.
+     */
+    private var windowScale = 1.0
+    private var rebuffersSinceLastRecovery = 0
+
+    /**
      * Ceiling on every ExoPlayer kept alive across the managed, preloaded, and
      * recycled buckets combined. Capping each bucket separately still allows
      * their sum to grow without bound.
@@ -272,6 +282,33 @@ internal class ExoPlayerManager(
         tickerRunning = false
     }
 
+    /**
+     * Halves the preload window after repeated stalls, down to a floor that
+     * still keeps the immediate neighbour prepared.
+     */
+    private fun noteRebuffer() {
+        rebuffersSinceLastRecovery += 1
+        if (rebuffersSinceLastRecovery < REBUFFERS_BEFORE_DEGRADE) {
+            return
+        }
+        rebuffersSinceLastRecovery = 0
+        val next = (windowScale / 2).coerceAtLeast(MIN_WINDOW_SCALE)
+        if (next != windowScale) {
+            windowScale = next
+            schedulePreloadWindow()
+        }
+    }
+
+    /** Restores the window one step at a time once playback settles. */
+    private fun noteSteadyPlayback() {
+        rebuffersSinceLastRecovery = 0
+        if (windowScale >= 1.0) {
+            return
+        }
+        windowScale = (windowScale * 2).coerceAtMost(1.0)
+        schedulePreloadWindow()
+    }
+
     private fun handleModerateMemoryPressure() {
         preloadGeneration += 1
         releaseAllPreloadedPlayers()
@@ -281,15 +318,28 @@ internal class ExoPlayerManager(
 
     private fun handleCriticalMemoryPressure() {
         preloadGeneration += 1
+        windowScale = MIN_WINDOW_SCALE
         releaseAllPreloadedPlayers()
         shrinkPooledPlayers(targetSize = 0)
         enforceVisibleWindowEviction(forceAggressive = true)
     }
 
+    private companion object {
+        /** Consecutive stalls tolerated before the window is halved. */
+        const val REBUFFERS_BEFORE_DEGRADE = 3
+
+        /** Floor for [windowScale]; below this preloading stops helping. */
+        const val MIN_WINDOW_SCALE = 0.25
+    }
+
     private fun schedulePreloadWindow() {
         preloadGeneration += 1
         val generation = preloadGeneration
-        val window = registry.preloadWindow(ahead = preloadAhead, behind = preloadBehind)
+        val window = registry.preloadWindow(
+            ahead = preloadAhead,
+            behind = preloadBehind,
+            scale = windowScale
+        )
         val windowIds = window.map { it.id }.toSet()
 
         for (sourceId in preloadedPlayers.keys.toList()) {
@@ -469,12 +519,14 @@ internal class ExoPlayerManager(
                     Player.STATE_BUFFERING -> {
                         if (metrics?.hasBeenReady == true) {
                             metrics.rebufferCount += 1
+                            noteRebuffer()
                             emitMetrics(controllerId)
                         }
                         onState(controllerId, PlaybackStatusMessage.BUFFERING, null)
                     }
                     Player.STATE_READY -> {
                         metrics?.hasBeenReady = true
+                        noteSteadyPlayback()
                         emitMetrics(controllerId)
                         onState(
                             controllerId,
