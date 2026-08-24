@@ -38,8 +38,10 @@ final class AVPlayerManager {
   private final class ManagedController {
     let id: Int
     let sourceId: String
-    let player: AVPlayer
+    let player: AVQueuePlayer
     let looping: Bool
+    /// Retained for gapless looping; AVPlayerLooper stops working if released.
+    var looper: AVPlayerLooper?
     /// Value of `visibleGeneration` when this controller was created. Window
     /// eviction ignores controllers created since the last visible-source
     /// update, because they have not been measured against a current window.
@@ -52,7 +54,7 @@ final class AVPlayerManager {
     init(
       id: Int,
       sourceId: String,
-      player: AVPlayer,
+      player: AVQueuePlayer,
       looping: Bool,
       createdAtVisibleGeneration: Int
     ) {
@@ -70,11 +72,15 @@ final class AVPlayerManager {
   private let onMetrics: MetricsCallback
 
   private let registry = FeedSourceRegistry()
+  private let resourceLoader = CachingResourceLoader()
+  private let resourceLoaderQueue = DispatchQueue(label: "native_feed_player.loader.delegate")
   private var controllers: [Int: ManagedController] = [:]
   private var creationOrder: [Int] = []
   private var preparedItems: [String: PreparedItem] = [:]
   private var metricsByController: [Int: PlaybackMetrics] = [:]
-  private var pooledPlayers: [AVPlayer] = []
+  /// AVQueuePlayer is required by AVPlayerLooper, which provides gapless
+  /// repeats; a plain AVPlayer can only seek back to zero, which shows a gap.
+  private var pooledPlayers: [AVQueuePlayer] = []
   private var attachedRenderViews: [Int: NativeVideoRenderView] = [:]
 
   private var maxActivePlayers: Int = 3
@@ -136,6 +142,11 @@ final class AVPlayerManager {
     volume = min(max(Float(config.audio.volume), 0), 1)
     maxTotalPlayers = maxActivePlayers + preloadAhead + preloadBehind + 1
 
+    MediaDiskCache.shared.configure(
+      enabled: config.cache.enabled,
+      maxBytes: config.cache.maxBytes
+    )
+
     preloadGeneration += 1
     preparedItems.removeAll()
     drainPooledPlayers(keep: 0)
@@ -195,8 +206,8 @@ final class AVPlayerManager {
 
     let item = takePreparedItem(for: source) ?? makePlayerItem(for: source)
     let player = obtainReusablePlayer()
-    player.replaceCurrentItem(with: item)
-    player.actionAtItemEnd = looping ? .none : .pause
+    player.removeAllItems()
+    player.insert(item, after: nil)
     player.automaticallyWaitsToMinimizeStalling = true
     player.volume = muted ? 0 : volume
 
@@ -207,6 +218,16 @@ final class AVPlayerManager {
       looping: looping,
       createdAtVisibleGeneration: visibleGeneration
     )
+
+    if looping {
+      // AVPlayerLooper cross-schedules the next cycle before the current one
+      // ends, so there is no seek gap between repeats.
+      managed.looper = AVPlayerLooper(player: player, templateItem: item)
+      player.actionAtItemEnd = .advance
+    } else {
+      player.actionAtItemEnd = .pause
+    }
+
     attachObservers(to: managed, playerItem: item)
 
     controllers[controllerId] = managed
@@ -316,6 +337,7 @@ final class AVPlayerManager {
 
   func disposeAll() {
     preloadGeneration += 1
+    resourceLoader.cancelAll()
     for controllerId in Array(controllers.keys) {
       disposeControllerInternal(
         controllerId: controllerId,
@@ -386,7 +408,23 @@ final class AVPlayerManager {
           uri: fresh.uri,
           item: item
         )
+        if distance <= 1 {
+          self.prerollImmediateNeighbour(item)
+        }
       }
+    }
+  }
+
+  /// Warms the render pipeline for the item most likely to be shown next.
+  ///
+  /// Preparing an item only loads media; `preroll` also primes decoding, which
+  /// is what removes the visible hitch on the first frame after a swipe. It
+  /// needs a player, so a throwaway muted one is used and discarded.
+  private func prerollImmediateNeighbour(_ item: AVPlayerItem) {
+    let warmupPlayer = AVQueuePlayer(items: [item])
+    warmupPlayer.volume = 0
+    warmupPlayer.preroll(atRate: 1.0) { [weak warmupPlayer] _ in
+      warmupPlayer?.removeAllItems()
     }
   }
 
@@ -399,20 +437,96 @@ final class AVPlayerManager {
     return prepared.item
   }
 
+  /// Builds a player item, routed through the disk cache when possible.
+  ///
+  /// HLS is deliberately excluded: AVFoundation resolves playlist and segment
+  /// URLs internally, so a resource-loader shim cannot cache segments the way
+  /// it can a single progressive file. HLS therefore plays straight from the
+  /// network with a tuned forward buffer.
   private func makePlayerItem(for source: RegisteredSource) -> AVPlayerItem {
     guard let url = URL(string: source.uri) else {
       return AVPlayerItem(asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")))
     }
-    var options: [String: Any] = [:]
-    if !source.headers.isEmpty {
-      // Undocumented but long-standing key; the only way to attach headers to a
-      // remote AVURLAsset without a resource-loader shim.
-      options["AVURLAssetHTTPHeaderFieldsKey"] = source.headers
+
+    let asset: AVURLAsset
+    if shouldCache(source),
+      let interceptURL = CachingResourceLoader.interceptURL(for: source.uri)
+    {
+      resourceLoader.setHeaders(source.headers, for: source.uri)
+      asset = AVURLAsset(url: interceptURL)
+      asset.resourceLoader.setDelegate(resourceLoader, queue: resourceLoaderQueue)
+    } else {
+      var options: [String: Any] = [:]
+      if !source.headers.isEmpty {
+        // Undocumented but long-standing key; the only way to attach headers to
+        // a remote AVURLAsset without going through the resource loader.
+        options["AVURLAssetHTTPHeaderFieldsKey"] = source.headers
+      }
+      asset = AVURLAsset(url: url, options: options)
     }
-    let asset = AVURLAsset(url: url, options: options)
+
     let item = AVPlayerItem(asset: asset)
     item.preferredForwardBufferDuration = 4
     return item
+  }
+
+  private func shouldCache(_ source: RegisteredSource) -> Bool {
+    guard MediaDiskCache.shared.isEnabled else {
+      return false
+    }
+    switch source.kind {
+    case .hls:
+      return false
+    case .progressive:
+      return true
+    case .auto:
+      // Playlist extensions are the only reliable signal without a probe.
+      let lowered = source.uri.lowercased()
+      return !lowered.contains(".m3u8") && !lowered.contains(".mpd")
+    }
+  }
+
+  // MARK: - Cache
+
+  func clearMediaCache() {
+    MediaDiskCache.shared.evictAll()
+  }
+
+  /// Evicts the given sources, or everything when `sourceIds` is empty.
+  func evictCachedMedia(_ sourceIds: [String]) {
+    guard !sourceIds.isEmpty else {
+      MediaDiskCache.shared.evictAll()
+      return
+    }
+    for sourceId in sourceIds {
+      guard let uri = registry.source(id: sourceId)?.uri else {
+        continue
+      }
+      MediaDiskCache.shared.evict(uri: uri)
+    }
+  }
+
+  func cacheStatus(sourceId: String) -> CacheStatusMessage {
+    guard let uri = registry.source(id: sourceId)?.uri else {
+      return CacheStatusMessage(
+        sourceId: sourceId,
+        cachedBytes: 0,
+        totalBytes: 0,
+        isComplete: false
+      )
+    }
+    // Entries are whole files, so anything present is complete.
+    let bytes = MediaDiskCache.shared.cachedBytes(for: uri)
+    return CacheStatusMessage(
+      sourceId: sourceId,
+      cachedBytes: bytes,
+      totalBytes: bytes,
+      isComplete: bytes > 0
+    )
+  }
+
+  func cacheUsageBytes() -> Int64 {
+    MediaDiskCache.shared.usageBytes()
   }
 
   private func releaseOrphanedPreparedItems() {
@@ -526,6 +640,10 @@ final class AVPlayerManager {
     managed.itemStatusObservation?.invalidate()
     managed.timeControlObservation?.invalidate()
     managed.readyForDisplayObservation?.invalidate()
+    // Disable before releasing, otherwise the looper keeps re-queuing items on
+    // a player that is about to be recycled.
+    managed.looper?.disableLooping()
+    managed.looper = nil
     attachedRenderViews.removeValue(forKey: controllerId)?.setPlayer(nil)
     metricsByController.removeValue(forKey: controllerId)
     recycleOrReleasePlayer(managed.player)
@@ -641,21 +759,17 @@ final class AVPlayerManager {
       }
     }
 
+    // Looping is handled by AVPlayerLooper, which recycles the item behind the
+    // scenes; only non-looping playback has a meaningful end.
+    guard !managed.looping else {
+      return
+    }
     managed.endObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemDidPlayToEndTime,
       object: playerItem,
       queue: .main
-    ) { [weak self, weak player = managed.player] _ in
-      guard let self else {
-        return
-      }
-      if managed.looping {
-        player?.seek(to: .zero)
-        player?.play()
-        self.onState(managed.id, .playing, nil)
-      } else {
-        self.onState(managed.id, .completed, nil)
-      }
+    ) { [weak self] _ in
+      self?.onState(managed.id, .completed, nil)
     }
   }
 
@@ -775,16 +889,16 @@ final class AVPlayerManager {
 
   // MARK: - Player pooling
 
-  private func obtainReusablePlayer() -> AVPlayer {
+  private func obtainReusablePlayer() -> AVQueuePlayer {
     if let player = pooledPlayers.popLast() {
       return player
     }
-    return AVPlayer()
+    return AVQueuePlayer()
   }
 
-  private func recycleOrReleasePlayer(_ player: AVPlayer) {
+  private func recycleOrReleasePlayer(_ player: AVQueuePlayer) {
     player.pause()
-    player.replaceCurrentItem(with: nil)
+    player.removeAllItems()
     player.actionAtItemEnd = .pause
     if pooledPlayers.count < maxActivePlayers {
       pooledPlayers.append(player)

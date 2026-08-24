@@ -247,24 +247,19 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   }
 
   func evictCachedMedia(request: SourceIdsRequest) throws {
-    // Wired to the disk cache in a later phase.
+    try managerOrThrow().evictCachedMedia(request.sourceIds)
   }
 
   func clearMediaCache() throws {
-    // No persistent cache yet; see docs/ARCHITECTURE.md for the roadmap.
+    try managerOrThrow().clearMediaCache()
   }
 
   func cacheStatus(request: VisibleSourceRequest) throws -> CacheStatusMessage {
-    CacheStatusMessage(
-      sourceId: request.sourceId,
-      cachedBytes: 0,
-      totalBytes: 0,
-      isComplete: false
-    )
+    try managerOrThrow().cacheStatus(sourceId: request.sourceId)
   }
 
   func cacheUsageBytes() throws -> Int64 {
-    0
+    try managerOrThrow().cacheUsageBytes()
   }
 
   func attachView(request: AttachViewRequest) throws {
