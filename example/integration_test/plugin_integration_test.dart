@@ -13,10 +13,10 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-import 'package:native_reels_player/native_reels_player.dart';
+import 'package:native_feed_player/native_feed_player.dart';
 
 void _emitBenchmarkSummary(Map<String, Object?> payload) {
-  debugPrint('NRP_BENCHMARK_SUMMARY ${jsonEncode(payload)}');
+  debugPrint('NFP_BENCHMARK_SUMMARY ${jsonEncode(payload)}');
 }
 
 int _percentile(List<int> values, double percentile) {
@@ -88,7 +88,7 @@ void main() {
   const String unreachableUrl = 'https://127.0.0.1:9/offline.mp4';
 
   testWidgets('initialize and create controller', (WidgetTester tester) async {
-    final NativeReelsPlayer plugin = NativeReelsPlayer();
+    final NativeFeedPlayer plugin = NativeFeedPlayer();
     await plugin.initialize();
     await plugin.preload(<String>[goodUrlA]);
     final VideoController controller = await plugin.getController(
@@ -103,7 +103,7 @@ void main() {
     WidgetTester tester,
   ) async {
     final _BenchmarkCollector collector = _BenchmarkCollector('fast_fling');
-    final NativeReelsPlayer plugin = NativeReelsPlayer();
+    final NativeFeedPlayer plugin = NativeFeedPlayer();
     await plugin.initialize(maxCachedPlayers: 5, preloadCount: 2);
     final List<String> urls = <String>[
       goodUrlA,
@@ -140,7 +140,7 @@ void main() {
     WidgetTester tester,
   ) async {
     final _BenchmarkCollector collector = _BenchmarkCollector('pause_resume');
-    final NativeReelsPlayer plugin = NativeReelsPlayer();
+    final NativeFeedPlayer plugin = NativeFeedPlayer();
     await plugin.initialize();
     await plugin.preload(<String>[goodUrlA]);
     final VideoController controller = await plugin.getController(
@@ -169,7 +169,7 @@ void main() {
       final _BenchmarkCollector collector = _BenchmarkCollector(
         'network_recovery',
       );
-      final NativeReelsPlayer plugin = NativeReelsPlayer();
+      final NativeFeedPlayer plugin = NativeFeedPlayer();
       await plugin.initialize();
       await plugin.preload(<String>[unreachableUrl, goodUrlB]);
 

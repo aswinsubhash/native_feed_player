@@ -1,11 +1,11 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:native_reels_player/native_reels_player_method_channel.dart';
-import 'package:native_reels_player/src/messages.g.dart';
-import 'package:native_reels_player/src/video_metrics.dart';
-import 'package:native_reels_player/src/video_models.dart';
+import 'package:native_feed_player/native_feed_player_method_channel.dart';
+import 'package:native_feed_player/src/messages.g.dart';
+import 'package:native_feed_player/src/video_metrics.dart';
+import 'package:native_feed_player/src/video_models.dart';
 
-class FakeNativeReelsPlayerHostApi extends NativeReelsPlayerHostApi {
+class FakeNativeFeedPlayerHostApi extends NativeFeedPlayerHostApi {
   int nextControllerId = 7;
   InitializeRequest? initializeRequest;
   PreloadRequest? preloadRequest;
@@ -59,17 +59,17 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const MethodChannel metricsChannel = MethodChannel(
-    'native_reels_player/metrics',
+    'native_feed_player/metrics',
   );
   const StandardMethodCodec codec = StandardMethodCodec();
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-  late FakeNativeReelsPlayerHostApi fakeHostApi;
-  late MethodChannelNativeReelsPlayer platform;
+  late FakeNativeFeedPlayerHostApi fakeHostApi;
+  late MethodChannelNativeFeedPlayer platform;
 
   setUp(() {
-    fakeHostApi = FakeNativeReelsPlayerHostApi();
-    platform = MethodChannelNativeReelsPlayer(hostApi: fakeHostApi);
+    fakeHostApi = FakeNativeFeedPlayerHostApi();
+    platform = MethodChannelNativeFeedPlayer(hostApi: fakeHostApi);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(metricsChannel, (
           MethodCall methodCall,
@@ -84,7 +84,7 @@ void main() {
   });
 
   test('initialize', () async {
-    await platform.initialize(config: const NativeReelsConfig());
+    await platform.initialize(config: const NativeFeedConfig());
 
     expect(fakeHostApi.initializeRequest, isNotNull);
     expect(fakeHostApi.initializeRequest!.maxCachedPlayers, 5);
@@ -110,7 +110,7 @@ void main() {
   test('metrics stream maps native payload', () async {
     final Future<VideoMetrics> nextMetric = platform.metricsStream(7).first;
     await messenger.handlePlatformMessage(
-      'native_reels_player/metrics',
+      'native_feed_player/metrics',
       codec.encodeSuccessEnvelope(<String, Object?>{
         'controllerId': 7,
         'rebufferCount': 2,

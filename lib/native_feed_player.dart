@@ -1,4 +1,4 @@
-export 'src/native_reels_player_api.dart';
+export 'src/native_feed_player_api.dart';
 export 'src/video_controller.dart';
 export 'src/video_metrics.dart';
 export 'src/video_models.dart';

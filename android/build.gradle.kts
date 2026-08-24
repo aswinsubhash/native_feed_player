@@ -1,4 +1,4 @@
-group = "com.example.native_reels_player"
+group = "com.example.native_feed_player"
 version = "1.0-SNAPSHOT"
 
 buildscript {
@@ -27,7 +27,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.native_reels_player"
+    namespace = "com.example.native_feed_player"
 
     compileSdk = 36
 

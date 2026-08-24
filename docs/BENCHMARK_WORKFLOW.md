@@ -4,7 +4,7 @@ This workflow produces reproducible scenario metrics for the release device matr
 
 ## 1. Run integration benchmark on a physical device
 
-From `/Users/aswinsubhash/Documents/New project/native_reels_player/example`:
+From the `example/` directory of this repository:
 
 ```bash
 flutter test integration_test/plugin_integration_test.dart -d <device-id> | tee benchmark_<device-id>.log
@@ -12,11 +12,11 @@ flutter test integration_test/plugin_integration_test.dart -d <device-id> | tee 
 
 The integration tests emit structured lines like:
 
-`NRP_BENCHMARK_SUMMARY {"scenario":"fast_fling", ...}`
+`NFP_BENCHMARK_SUMMARY {"scenario":"fast_fling", ...}`
 
 ## 2. Convert log to markdown summary
 
-From `/Users/aswinsubhash/Documents/New project/native_reels_player`:
+From the repository root:
 
 ```bash
 dart run tool/benchmark_report.dart \

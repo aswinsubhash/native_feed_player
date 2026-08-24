@@ -1,17 +1,17 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:native_reels_player/native_reels_player.dart';
-import 'package:native_reels_player/native_reels_player_platform_interface.dart';
-import 'package:native_reels_player/native_reels_player_method_channel.dart';
+import 'package:native_feed_player/native_feed_player.dart';
+import 'package:native_feed_player/native_feed_player_platform_interface.dart';
+import 'package:native_feed_player/native_feed_player_method_channel.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
-class MockNativeReelsPlayerPlatform
+class MockNativeFeedPlayerPlatform
     with MockPlatformInterfaceMixin
-    implements NativeReelsPlayerPlatform {
+    implements NativeFeedPlayerPlatform {
   bool initializeCalled = false;
   List<NativeVideoSource> preloadSources = <NativeVideoSource>[];
 
   @override
-  Future<void> initialize({required NativeReelsConfig config}) async {
+  Future<void> initialize({required NativeFeedConfig config}) async {
     initializeCalled = true;
   }
 
@@ -72,17 +72,17 @@ class MockNativeReelsPlayerPlatform
 }
 
 void main() {
-  final NativeReelsPlayerPlatform initialPlatform =
-      NativeReelsPlayerPlatform.instance;
+  final NativeFeedPlayerPlatform initialPlatform =
+      NativeFeedPlayerPlatform.instance;
 
-  test('$MethodChannelNativeReelsPlayer is the default instance', () {
-    expect(initialPlatform, isInstanceOf<MethodChannelNativeReelsPlayer>());
+  test('$MethodChannelNativeFeedPlayer is the default instance', () {
+    expect(initialPlatform, isInstanceOf<MethodChannelNativeFeedPlayer>());
   });
 
   test('initialize and preload', () async {
-    final MockNativeReelsPlayerPlatform fakePlatform =
-        MockNativeReelsPlayerPlatform();
-    final NativeReelsPlayer player = NativeReelsPlayer(platform: fakePlatform);
+    final MockNativeFeedPlayerPlatform fakePlatform =
+        MockNativeFeedPlayerPlatform();
+    final NativeFeedPlayer player = NativeFeedPlayer(platform: fakePlatform);
 
     await player.initialize();
     await player.preload(<String>['u1', 'u2']);

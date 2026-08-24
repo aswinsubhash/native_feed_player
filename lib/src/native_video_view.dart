@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../native_reels_player_platform_interface.dart';
+import '../native_feed_player_platform_interface.dart';
 import 'video_controller.dart';
 
 /// Platform view widget for rendering native video output.
@@ -18,7 +18,7 @@ class NativeVideoView extends StatefulWidget {
 }
 
 class _NativeVideoViewState extends State<NativeVideoView> {
-  static const String _viewType = 'native_reels_player/video_view';
+  static const String _viewType = 'native_feed_player/video_view';
   int? _viewId;
 
   @override
@@ -31,12 +31,12 @@ class _NativeVideoViewState extends State<NativeVideoView> {
       return;
     }
     unawaited(
-      NativeReelsPlayerPlatform.instance.detachView(
+      NativeFeedPlayerPlatform.instance.detachView(
         controllerId: oldWidget.controller.controllerId,
       ),
     );
     unawaited(
-      NativeReelsPlayerPlatform.instance.attachView(
+      NativeFeedPlayerPlatform.instance.attachView(
         controllerId: widget.controller.controllerId,
         viewId: _viewId!,
       ),
@@ -46,7 +46,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
   @override
   void dispose() {
     unawaited(
-      NativeReelsPlayerPlatform.instance.detachView(
+      NativeFeedPlayerPlatform.instance.detachView(
         controllerId: widget.controller.controllerId,
       ),
     );
@@ -55,7 +55,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
 
   Future<void> _onPlatformViewCreated(int viewId) async {
     _viewId = viewId;
-    await NativeReelsPlayerPlatform.instance.attachView(
+    await NativeFeedPlayerPlatform.instance.attachView(
       controllerId: widget.controller.controllerId,
       viewId: viewId,
     );

@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-/// AVPlayer lifecycle and event orchestration for native reels playback.
+/// AVPlayer lifecycle and event orchestration for native feed playback.
 final class AVPlayerManager {
   typealias StateCallback = (_ controllerId: Int, _ state: String) -> Void
   typealias PositionCallback = (_ controllerId: Int, _ positionMs: Int64) -> Void
@@ -113,7 +113,7 @@ final class AVPlayerManager {
   ) throws {
     guard let sourceURL = URL(string: url) else {
       throw NSError(
-        domain: "native_reels_player",
+        domain: "native_feed_player",
         code: 1001,
         userInfo: [NSLocalizedDescriptionKey: "Invalid URL for createController: \(url)"]
       )

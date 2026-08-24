@@ -428,7 +428,7 @@ class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
 }
 
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
-protocol NativeReelsPlayerHostApi {
+protocol NativeFeedPlayerHostApi {
   func initialize(request: InitializeRequest) throws
   func preload(request: PreloadRequest) throws
   func createController(request: CreateControllerRequest) throws -> Int64
@@ -444,12 +444,12 @@ protocol NativeReelsPlayerHostApi {
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
-class NativeReelsPlayerHostApiSetup {
+class NativeFeedPlayerHostApiSetup {
   static var codec: FlutterStandardMessageCodec { MessagesPigeonCodec.shared }
-  /// Sets up an instance of `NativeReelsPlayerHostApi` to handle messages through the `binaryMessenger`.
-  static func setUp(binaryMessenger: FlutterBinaryMessenger, api: NativeReelsPlayerHostApi?, messageChannelSuffix: String = "") {
+  /// Sets up an instance of `NativeFeedPlayerHostApi` to handle messages through the `binaryMessenger`.
+  static func setUp(binaryMessenger: FlutterBinaryMessenger, api: NativeFeedPlayerHostApi?, messageChannelSuffix: String = "") {
     let channelSuffix = messageChannelSuffix.count > 0 ? ".\(messageChannelSuffix)" : ""
-    let initializeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.initialize\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let initializeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.initialize\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       initializeChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -464,7 +464,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       initializeChannel.setMessageHandler(nil)
     }
-    let preloadChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.preload\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let preloadChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.preload\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       preloadChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -479,7 +479,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       preloadChannel.setMessageHandler(nil)
     }
-    let createControllerChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.createController\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let createControllerChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.createController\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       createControllerChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -494,7 +494,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       createControllerChannel.setMessageHandler(nil)
     }
-    let disposeControllerChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.disposeController\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let disposeControllerChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeController\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       disposeControllerChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -509,7 +509,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       disposeControllerChannel.setMessageHandler(nil)
     }
-    let playChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.play\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let playChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.play\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       playChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -524,7 +524,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       playChannel.setMessageHandler(nil)
     }
-    let pauseChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.pause\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let pauseChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.pause\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       pauseChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -539,7 +539,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       pauseChannel.setMessageHandler(nil)
     }
-    let seekToChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.seekTo\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let seekToChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.seekTo\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       seekToChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -554,7 +554,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       seekToChannel.setMessageHandler(nil)
     }
-    let setVisibleIndexChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.setVisibleIndex\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let setVisibleIndexChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleIndex\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       setVisibleIndexChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -569,7 +569,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       setVisibleIndexChannel.setMessageHandler(nil)
     }
-    let clearCacheChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.clearCache\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let clearCacheChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearCache\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       clearCacheChannel.setMessageHandler { _, reply in
         do {
@@ -582,7 +582,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       clearCacheChannel.setMessageHandler(nil)
     }
-    let attachViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.attachView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let attachViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.attachView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       attachViewChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -597,7 +597,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       attachViewChannel.setMessageHandler(nil)
     }
-    let detachViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.detachView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let detachViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       detachViewChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
@@ -612,7 +612,7 @@ class NativeReelsPlayerHostApiSetup {
     } else {
       detachViewChannel.setMessageHandler(nil)
     }
-    let disposeAllChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.disposeAll\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    let disposeAllChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeAll\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       disposeAllChannel.setMessageHandler { _, reply in
         do {

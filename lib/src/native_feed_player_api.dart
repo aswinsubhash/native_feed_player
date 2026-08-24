@@ -1,23 +1,23 @@
-import '../native_reels_player_platform_interface.dart';
+import '../native_feed_player_platform_interface.dart';
 import 'video_controller.dart';
 import 'video_models.dart';
 
-/// Main Dart API for reels-style native playback with pre-buffering.
-class NativeReelsPlayer {
-  NativeReelsPlayer({NativeReelsPlayerPlatform? platform})
-    : _platform = platform ?? NativeReelsPlayerPlatform.instance;
+/// Main Dart API for feed-oriented native playback with pre-buffering.
+class NativeFeedPlayer {
+  NativeFeedPlayer({NativeFeedPlayerPlatform? platform})
+    : _platform = platform ?? NativeFeedPlayerPlatform.instance;
 
-  final NativeReelsPlayerPlatform _platform;
+  final NativeFeedPlayerPlatform _platform;
   final Map<String, VideoController> _controllersByKey =
       <String, VideoController>{};
-  NativeReelsConfig _config = const NativeReelsConfig();
+  NativeFeedConfig _config = const NativeFeedConfig();
   bool _initialized = false;
 
   Future<void> initialize({
     int maxCachedPlayers = 5,
     int preloadCount = 2,
   }) async {
-    _config = NativeReelsConfig(
+    _config = NativeFeedConfig(
       maxCachedPlayers: maxCachedPlayers,
       preloadCount: preloadCount,
     );
@@ -85,7 +85,7 @@ class NativeReelsPlayer {
   void _ensureInitialized() {
     if (!_initialized) {
       throw StateError(
-        'NativeReelsPlayer must be initialized before calling this method.',
+        'NativeFeedPlayer must be initialized before calling this method.',
       );
     }
   }

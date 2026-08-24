@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-import '../native_reels_player_platform_interface.dart';
+import '../native_feed_player_platform_interface.dart';
 import 'video_metrics.dart';
 import 'video_playback_state.dart';
 
@@ -10,14 +10,14 @@ class VideoController {
     required this.controllerId,
     required this.url,
     required this.index,
-    required NativeReelsPlayerPlatform platform,
+    required NativeFeedPlayerPlatform platform,
   }) : _platform = platform;
 
   final int controllerId;
   final String url;
   final int index;
 
-  final NativeReelsPlayerPlatform _platform;
+  final NativeFeedPlayerPlatform _platform;
 
   Stream<Duration> get positionStream => _platform.positionStream(controllerId);
 
@@ -42,5 +42,5 @@ class VideoController {
   }
 
   @visibleForTesting
-  NativeReelsPlayerPlatform get platform => _platform;
+  NativeFeedPlayerPlatform get platform => _platform;
 }

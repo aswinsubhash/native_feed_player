@@ -1,32 +1,32 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
-import 'native_reels_player_method_channel.dart';
+import 'native_feed_player_method_channel.dart';
 import 'src/video_metrics.dart';
 import 'src/video_models.dart';
 import 'src/video_playback_state.dart';
 
-abstract class NativeReelsPlayerPlatform extends PlatformInterface {
-  /// Constructs a NativeReelsPlayerPlatform.
-  NativeReelsPlayerPlatform() : super(token: _token);
+abstract class NativeFeedPlayerPlatform extends PlatformInterface {
+  /// Constructs a NativeFeedPlayerPlatform.
+  NativeFeedPlayerPlatform() : super(token: _token);
 
   static final Object _token = Object();
 
-  static NativeReelsPlayerPlatform _instance = MethodChannelNativeReelsPlayer();
+  static NativeFeedPlayerPlatform _instance = MethodChannelNativeFeedPlayer();
 
-  /// The default instance of [NativeReelsPlayerPlatform] to use.
+  /// The default instance of [NativeFeedPlayerPlatform] to use.
   ///
-  /// Defaults to [MethodChannelNativeReelsPlayer].
-  static NativeReelsPlayerPlatform get instance => _instance;
+  /// Defaults to [MethodChannelNativeFeedPlayer].
+  static NativeFeedPlayerPlatform get instance => _instance;
 
   /// Platform-specific implementations should set this with their own
-  /// platform-specific class that extends [NativeReelsPlayerPlatform] when
+  /// platform-specific class that extends [NativeFeedPlayerPlatform] when
   /// they register themselves.
-  static set instance(NativeReelsPlayerPlatform instance) {
+  static set instance(NativeFeedPlayerPlatform instance) {
     PlatformInterface.verifyToken(instance, _token);
     _instance = instance;
   }
 
-  Future<void> initialize({required NativeReelsConfig config});
+  Future<void> initialize({required NativeFeedConfig config});
 
   Future<void> preload(List<NativeVideoSource> sources);
 

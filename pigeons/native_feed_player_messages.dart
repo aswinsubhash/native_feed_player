@@ -64,7 +64,7 @@ class AttachViewRequest {
 }
 
 @HostApi()
-abstract class NativeReelsPlayerHostApi {
+abstract class NativeFeedPlayerHostApi {
   void initialize(InitializeRequest request);
 
   void preload(PreloadRequest request);

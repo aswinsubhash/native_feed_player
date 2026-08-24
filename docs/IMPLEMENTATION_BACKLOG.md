@@ -1,4 +1,4 @@
-# Native Reels Player Backlog
+# Native Feed Player Backlog
 
 ## Milestone 1: Baseline Plugin and API
 

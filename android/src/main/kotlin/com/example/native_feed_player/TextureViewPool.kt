@@ -1,4 +1,4 @@
-package com.example.native_reels_player
+package com.example.native_feed_player
 
 import android.content.Context
 import android.view.TextureView

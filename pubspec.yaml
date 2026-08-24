@@ -1,5 +1,5 @@
-name: native_reels_player
-description: "Flutter plugin scaffold for reels-style native video playback with planned pre-buffering."
+name: native_feed_player
+description: "Flutter plugin for feed-oriented native video playback with pre-buffering."
 version: 0.0.1
 homepage:
 
@@ -36,10 +36,10 @@ flutter:
   plugin:
     platforms:
       android:
-        package: com.example.native_reels_player
-        pluginClass: NativeReelsPlayerPlugin
+        package: com.example.native_feed_player
+        pluginClass: NativeFeedPlayerPlugin
       ios:
-        pluginClass: NativeReelsPlayerPlugin
+        pluginClass: NativeFeedPlayerPlugin
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:

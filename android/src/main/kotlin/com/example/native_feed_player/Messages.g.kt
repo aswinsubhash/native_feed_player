@@ -2,7 +2,7 @@
 // See also: https://pub.dev/packages/pigeon
 @file:Suppress("UNCHECKED_CAST", "ArrayInDataClass")
 
-package com.example.native_reels_player
+package com.example.native_feed_player
 
 import android.util.Log
 import io.flutter.plugin.common.BasicMessageChannel
@@ -408,7 +408,7 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
 }
 
 /** Generated interface from Pigeon that represents a handler of messages from Flutter. */
-interface NativeReelsPlayerHostApi {
+interface NativeFeedPlayerHostApi {
   fun initialize(request: InitializeRequest)
   fun preload(request: PreloadRequest)
   fun createController(request: CreateControllerRequest): Long
@@ -423,16 +423,16 @@ interface NativeReelsPlayerHostApi {
   fun disposeAll()
 
   companion object {
-    /** The codec used by NativeReelsPlayerHostApi. */
+    /** The codec used by NativeFeedPlayerHostApi. */
     val codec: MessageCodec<Any?> by lazy {
       MessagesPigeonCodec()
     }
-    /** Sets up an instance of `NativeReelsPlayerHostApi` to handle messages through the `binaryMessenger`. */
+    /** Sets up an instance of `NativeFeedPlayerHostApi` to handle messages through the `binaryMessenger`. */
     @JvmOverloads
-    fun setUp(binaryMessenger: BinaryMessenger, api: NativeReelsPlayerHostApi?, messageChannelSuffix: String = "") {
+    fun setUp(binaryMessenger: BinaryMessenger, api: NativeFeedPlayerHostApi?, messageChannelSuffix: String = "") {
       val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.initialize$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.initialize$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -450,7 +450,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.preload$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.preload$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -468,7 +468,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.createController$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.createController$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -485,7 +485,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.disposeController$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeController$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -503,7 +503,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.play$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.play$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -521,7 +521,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.pause$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.pause$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -539,7 +539,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.seekTo$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.seekTo$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -557,7 +557,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.setVisibleIndex$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleIndex$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -575,7 +575,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.clearCache$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearCache$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { _, reply ->
             val wrapped: List<Any?> = try {
@@ -591,7 +591,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.attachView$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.attachView$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -609,7 +609,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.detachView$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachView$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
@@ -627,7 +627,7 @@ interface NativeReelsPlayerHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.disposeAll$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeAll$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { _, reply ->
             val wrapped: List<Any?> = try {

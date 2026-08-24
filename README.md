@@ -1,6 +1,6 @@
-# native_reels_player
+# native_feed_player
 
-Flutter plugin for reels-style video playback with native playback control,
+Flutter plugin for feed-oriented video playback with native playback control,
 state/position streams, and pre-buffering scaffolding on iOS and Android.
 
 ## Status
@@ -25,9 +25,9 @@ See `docs/IMPLEMENTATION_BACKLOG.md` for the full roadmap.
 ## Quick Start
 
 ```dart
-import 'package:native_reels_player/native_reels_player.dart';
+import 'package:native_feed_player/native_feed_player.dart';
 
-final player = NativeReelsPlayer();
+final player = NativeFeedPlayer();
 
 await player.initialize(maxCachedPlayers: 5, preloadCount: 2);
 await player.preload(<String>[
@@ -45,12 +45,12 @@ await controller.play();
 
 ## API Surface
 
-- `NativeReelsPlayer.initialize(...)`
-- `NativeReelsPlayer.preload(List<String>)`
-- `NativeReelsPlayer.getController(...)`
-- `NativeReelsPlayer.setVisibleIndex(int)`
-- `NativeReelsPlayer.clearCache()`
-- `NativeReelsPlayer.dispose()`
+- `NativeFeedPlayer.initialize(...)`
+- `NativeFeedPlayer.preload(List<String>)`
+- `NativeFeedPlayer.getController(...)`
+- `NativeFeedPlayer.setVisibleIndex(int)`
+- `NativeFeedPlayer.clearCache()`
+- `NativeFeedPlayer.dispose()`
 
 `VideoController`:
 
@@ -77,19 +77,19 @@ Detailed architecture: `docs/ARCHITECTURE.md`
 
 ## Pigeon Contracts
 
-- Source schema: `pigeons/native_reels_player_messages.dart`
+- Source schema: `pigeons/native_feed_player_messages.dart`
 - Generated outputs:
   - Dart: `lib/src/messages.g.dart`
-  - Android: `android/src/main/kotlin/com/example/native_reels_player/Messages.g.kt`
+  - Android: `android/src/main/kotlin/com/example/native_feed_player/Messages.g.kt`
   - iOS: `ios/Classes/Messages.g.swift`
 - Regenerate after schema edits:
 
 ```bash
 dart run pigeon \
-  --input pigeons/native_reels_player_messages.dart \
+  --input pigeons/native_feed_player_messages.dart \
   --dart_out lib/src/messages.g.dart \
-  --kotlin_out android/src/main/kotlin/com/example/native_reels_player/Messages.g.kt \
-  --kotlin_package com.example.native_reels_player \
+  --kotlin_out android/src/main/kotlin/com/example/native_feed_player/Messages.g.kt \
+  --kotlin_package com.example.native_feed_player \
   --swift_out ios/Classes/Messages.g.swift
 ```
 
@@ -99,7 +99,7 @@ dart run pigeon \
   - Start at `5` for mid/high devices.
   - Reduce to `3` for low-memory devices.
 - `preloadCount`:
-  - Start at `2` for reels feed.
+  - Start at `2` for a video feed.
   - Increase to `3` only after measuring memory and startup latency impact.
 - Use `setVisibleIndex(...)` on scroll settle (or throttled scroll updates) so native eviction/preload policy can stay in sync with the feed.
 

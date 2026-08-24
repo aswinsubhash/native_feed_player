@@ -3,7 +3,7 @@ import UIKit
 import XCTest
 
 
-@testable import native_reels_player
+@testable import native_feed_player
 
 // This demonstrates a simple unit test of the Swift portion of this plugin's implementation.
 //
@@ -12,7 +12,7 @@ import XCTest
 class RunnerTests: XCTestCase {
 
   func testGetPlatformVersion() {
-    let plugin = NativeReelsPlayerPlugin()
+    let plugin = NativeFeedPlayerPlugin()
 
     let call = FlutterMethodCall(methodName: "getPlatformVersion", arguments: [])
 

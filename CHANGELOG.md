@@ -1,10 +1,10 @@
 ## 0.0.1
 
 * Scaffolded Flutter plugin for iOS and Android.
-* Added reels-oriented Dart API:
-  * `NativeReelsPlayer.initialize`
-  * `NativeReelsPlayer.preload`
-  * `NativeReelsPlayer.getController`
+* Added feed-oriented Dart API:
+  * `NativeFeedPlayer.initialize`
+  * `NativeFeedPlayer.preload`
+  * `NativeFeedPlayer.getController`
   * controller playback/lifecycle commands
 * Implemented native single-controller playback:
   * iOS: `AVPlayer`
@@ -23,7 +23,7 @@
   * Dart `NativeVideoView` widget with attach/detach lifecycle wiring
 * Implemented milestone 6 production hardening:
   * Added `metricsStream` to `VideoController`
-  * Added native metrics channel (`native_reels_player/metrics`) on Android/iOS
+  * Added native metrics channel (`native_feed_player/metrics`) on Android/iOS
   * Added first-frame latency, rebuffer count, and dropped-frame estimate payloads
   * Added integration test scenarios for:
     * fast fling index churn
@@ -38,7 +38,7 @@
   * Added iOS `RenderViewPool` for `AVPlayerLayer` view reuse
   * Updated platform view factories to acquire/release pooled render views
 * Added release benchmark workflow assets:
-  * Integration tests now emit structured `NRP_BENCHMARK_SUMMARY` lines
+  * Integration tests now emit structured `NFP_BENCHMARK_SUMMARY` lines
   * Added `tool/benchmark_report.dart` for log-to-markdown summaries
   * Added device matrix report template and benchmark runbook docs
 * Added architecture and implementation backlog docs.

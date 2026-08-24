@@ -14,20 +14,24 @@ PlatformException _createConnectionError(String channelName) {
     message: 'Unable to establish connection on channel: "$channelName".',
   );
 }
+
 bool _deepEquals(Object? a, Object? b) {
   if (a is List && b is List) {
     return a.length == b.length &&
-        a.indexed
-        .every(((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]));
+        a.indexed.every(
+          ((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]),
+        );
   }
   if (a is Map && b is Map) {
-    return a.length == b.length && a.entries.every((MapEntry<Object?, Object?> entry) =>
-        (b as Map<Object?, Object?>).containsKey(entry.key) &&
-        _deepEquals(entry.value, b[entry.key]));
+    return a.length == b.length &&
+        a.entries.every(
+          (MapEntry<Object?, Object?> entry) =>
+              (b as Map<Object?, Object?>).containsKey(entry.key) &&
+              _deepEquals(entry.value, b[entry.key]),
+        );
   }
   return a == b;
 }
-
 
 class InitializeRequest {
   InitializeRequest({
@@ -40,14 +44,12 @@ class InitializeRequest {
   int preloadCount;
 
   List<Object?> _toList() {
-    return <Object?>[
-      maxCachedPlayers,
-      preloadCount,
-    ];
+    return <Object?>[maxCachedPlayers, preloadCount];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static InitializeRequest decode(Object result) {
     result as List<Object?>;
@@ -71,29 +73,23 @@ class InitializeRequest {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
 class VideoSourceMessage {
-  VideoSourceMessage({
-    required this.url,
-    required this.index,
-  });
+  VideoSourceMessage({required this.url, required this.index});
 
   String url;
 
   int index;
 
   List<Object?> _toList() {
-    return <Object?>[
-      url,
-      index,
-    ];
+    return <Object?>[url, index];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static VideoSourceMessage decode(Object result) {
     result as List<Object?>;
@@ -117,25 +113,21 @@ class VideoSourceMessage {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
 class PreloadRequest {
-  PreloadRequest({
-    required this.sources,
-  });
+  PreloadRequest({required this.sources});
 
   List<VideoSourceMessage> sources;
 
   List<Object?> _toList() {
-    return <Object?>[
-      sources,
-    ];
+    return <Object?>[sources];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static PreloadRequest decode(Object result) {
     result as List<Object?>;
@@ -158,8 +150,7 @@ class PreloadRequest {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
 class CreateControllerRequest {
@@ -179,16 +170,12 @@ class CreateControllerRequest {
   bool looping;
 
   List<Object?> _toList() {
-    return <Object?>[
-      url,
-      index,
-      autoPlay,
-      looping,
-    ];
+    return <Object?>[url, index, autoPlay, looping];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static CreateControllerRequest decode(Object result) {
     result as List<Object?>;
@@ -214,31 +201,25 @@ class CreateControllerRequest {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
 class ControllerRequest {
-  ControllerRequest({
-    required this.controllerId,
-  });
+  ControllerRequest({required this.controllerId});
 
   int controllerId;
 
   List<Object?> _toList() {
-    return <Object?>[
-      controllerId,
-    ];
+    return <Object?>[controllerId];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static ControllerRequest decode(Object result) {
     result as List<Object?>;
-    return ControllerRequest(
-      controllerId: result[0]! as int,
-    );
+    return ControllerRequest(controllerId: result[0]! as int);
   }
 
   @override
@@ -255,29 +236,23 @@ class ControllerRequest {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
 class SeekRequest {
-  SeekRequest({
-    required this.controllerId,
-    required this.positionMs,
-  });
+  SeekRequest({required this.controllerId, required this.positionMs});
 
   int controllerId;
 
   int positionMs;
 
   List<Object?> _toList() {
-    return <Object?>[
-      controllerId,
-      positionMs,
-    ];
+    return <Object?>[controllerId, positionMs];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static SeekRequest decode(Object result) {
     result as List<Object?>;
@@ -301,31 +276,25 @@ class SeekRequest {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
 class VisibleIndexRequest {
-  VisibleIndexRequest({
-    required this.index,
-  });
+  VisibleIndexRequest({required this.index});
 
   int index;
 
   List<Object?> _toList() {
-    return <Object?>[
-      index,
-    ];
+    return <Object?>[index];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static VisibleIndexRequest decode(Object result) {
     result as List<Object?>;
-    return VisibleIndexRequest(
-      index: result[0]! as int,
-    );
+    return VisibleIndexRequest(index: result[0]! as int);
   }
 
   @override
@@ -342,29 +311,23 @@ class VisibleIndexRequest {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
 class AttachViewRequest {
-  AttachViewRequest({
-    required this.controllerId,
-    required this.viewId,
-  });
+  AttachViewRequest({required this.controllerId, required this.viewId});
 
   int controllerId;
 
   int viewId;
 
   List<Object?> _toList() {
-    return <Object?>[
-      controllerId,
-      viewId,
-    ];
+    return <Object?>[controllerId, viewId];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static AttachViewRequest decode(Object result) {
     result as List<Object?>;
@@ -388,10 +351,8 @@ class AttachViewRequest {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
-
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -400,28 +361,28 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    }    else if (value is InitializeRequest) {
+    } else if (value is InitializeRequest) {
       buffer.putUint8(129);
       writeValue(buffer, value.encode());
-    }    else if (value is VideoSourceMessage) {
+    } else if (value is VideoSourceMessage) {
       buffer.putUint8(130);
       writeValue(buffer, value.encode());
-    }    else if (value is PreloadRequest) {
+    } else if (value is PreloadRequest) {
       buffer.putUint8(131);
       writeValue(buffer, value.encode());
-    }    else if (value is CreateControllerRequest) {
+    } else if (value is CreateControllerRequest) {
       buffer.putUint8(132);
       writeValue(buffer, value.encode());
-    }    else if (value is ControllerRequest) {
+    } else if (value is ControllerRequest) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    }    else if (value is SeekRequest) {
+    } else if (value is SeekRequest) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    }    else if (value is VisibleIndexRequest) {
+    } else if (value is VisibleIndexRequest) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
-    }    else if (value is AttachViewRequest) {
+    } else if (value is AttachViewRequest) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
     } else {
@@ -432,21 +393,21 @@ class _PigeonCodec extends StandardMessageCodec {
   @override
   Object? readValueOfType(int type, ReadBuffer buffer) {
     switch (type) {
-      case 129: 
+      case 129:
         return InitializeRequest.decode(readValue(buffer)!);
-      case 130: 
+      case 130:
         return VideoSourceMessage.decode(readValue(buffer)!);
-      case 131: 
+      case 131:
         return PreloadRequest.decode(readValue(buffer)!);
-      case 132: 
+      case 132:
         return CreateControllerRequest.decode(readValue(buffer)!);
-      case 133: 
+      case 133:
         return ControllerRequest.decode(readValue(buffer)!);
-      case 134: 
+      case 134:
         return SeekRequest.decode(readValue(buffer)!);
-      case 135: 
+      case 135:
         return VisibleIndexRequest.decode(readValue(buffer)!);
-      case 136: 
+      case 136:
         return AttachViewRequest.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -454,13 +415,17 @@ class _PigeonCodec extends StandardMessageCodec {
   }
 }
 
-class NativeReelsPlayerHostApi {
-  /// Constructor for [NativeReelsPlayerHostApi].  The [binaryMessenger] named argument is
+class NativeFeedPlayerHostApi {
+  /// Constructor for [NativeFeedPlayerHostApi].  The [binaryMessenger] named argument is
   /// available for dependency injection.  If it is left null, the default
   /// BinaryMessenger will be used which routes to the host platform.
-  NativeReelsPlayerHostApi({BinaryMessenger? binaryMessenger, String messageChannelSuffix = ''})
-      : pigeonVar_binaryMessenger = binaryMessenger,
-        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+  NativeFeedPlayerHostApi({
+    BinaryMessenger? binaryMessenger,
+    String messageChannelSuffix = '',
+  }) : pigeonVar_binaryMessenger = binaryMessenger,
+       pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty
+           ? '.$messageChannelSuffix'
+           : '';
   final BinaryMessenger? pigeonVar_binaryMessenger;
 
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
@@ -468,13 +433,16 @@ class NativeReelsPlayerHostApi {
   final String pigeonVar_messageChannelSuffix;
 
   Future<void> initialize(InitializeRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.initialize$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.initialize$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -490,13 +458,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> preload(PreloadRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.preload$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.preload$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -512,13 +483,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<int> createController(CreateControllerRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.createController$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.createController$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -539,13 +513,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> disposeController(ControllerRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.disposeController$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeController$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -561,13 +538,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> play(ControllerRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.play$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.play$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -583,13 +563,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> pause(ControllerRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.pause$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.pause$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -605,13 +588,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> seekTo(SeekRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.seekTo$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.seekTo$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -627,13 +613,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> setVisibleIndex(VisibleIndexRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.setVisibleIndex$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.setVisibleIndex$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -649,7 +638,8 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> clearCache() async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.clearCache$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearCache$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -671,13 +661,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> attachView(AttachViewRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.attachView$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.attachView$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -693,13 +686,16 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> detachView(ControllerRequest request) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.detachView$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.detachView$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
@@ -715,7 +711,8 @@ class NativeReelsPlayerHostApi {
   }
 
   Future<void> disposeAll() async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_reels_player.NativeReelsPlayerHostApi.disposeAll$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.disposeAll$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,

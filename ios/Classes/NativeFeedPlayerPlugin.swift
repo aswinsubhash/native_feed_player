@@ -16,8 +16,8 @@ private final class EventSinkStreamHandler: NSObject, FlutterStreamHandler {
   }
 }
 
-public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReelsPlayerHostApi {
-  private static let videoViewType = "native_reels_player/video_view"
+public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPlayerHostApi {
+  private static let videoViewType = "native_feed_player/video_view"
 
   private let stateStreamHandler = EventSinkStreamHandler()
   private let positionStreamHandler = EventSinkStreamHandler()
@@ -33,19 +33,19 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReels
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let stateChannel = FlutterEventChannel(
-      name: "native_reels_player/state",
+      name: "native_feed_player/state",
       binaryMessenger: registrar.messenger()
     )
     let positionChannel = FlutterEventChannel(
-      name: "native_reels_player/position",
+      name: "native_feed_player/position",
       binaryMessenger: registrar.messenger()
     )
     let metricsChannel = FlutterEventChannel(
-      name: "native_reels_player/metrics",
+      name: "native_feed_player/metrics",
       binaryMessenger: registrar.messenger()
     )
 
-    let instance = NativeReelsPlayerPlugin()
+    let instance = NativeFeedPlayerPlugin()
     instance.binaryMessenger = registrar.messenger()
     instance.configureChannels(
       stateChannel: stateChannel,
@@ -62,7 +62,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReels
       }
     )
     registrar.register(viewFactory, withId: videoViewType)
-    NativeReelsPlayerHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: instance)
+    NativeFeedPlayerHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: instance)
   }
 
   deinit {
@@ -71,7 +71,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReels
       memoryWarningObserver = nil
     }
     if let binaryMessenger {
-      NativeReelsPlayerHostApiSetup.setUp(binaryMessenger: binaryMessenger, api: nil)
+      NativeFeedPlayerHostApiSetup.setUp(binaryMessenger: binaryMessenger, api: nil)
     }
     videoViews.removeAll()
     attachedControllerByViewId.removeAll()
@@ -297,7 +297,7 @@ public final class NativeReelsPlayerPlugin: NSObject, FlutterPlugin, NativeReels
     guard let manager else {
       throw PigeonError(
         code: "not_attached",
-        message: "NativeReelsPlayerPlugin is not attached to a Flutter engine.",
+        message: "NativeFeedPlayerPlugin is not attached to a Flutter engine.",
         details: nil
       )
     }

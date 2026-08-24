@@ -1,4 +1,4 @@
-package com.example.native_reels_player
+package com.example.native_feed_player
 
 import android.content.ComponentCallbacks2
 import android.content.Context
@@ -7,10 +7,10 @@ import android.view.TextureView
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 
-/** NativeReelsPlayerPlugin */
-class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsPlayerHostApi {
+/** NativeFeedPlayerPlugin */
+class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPlayerHostApi {
     private companion object {
-        private const val VIDEO_VIEW_TYPE = "native_reels_player/video_view"
+        private const val VIDEO_VIEW_TYPE = "native_feed_player/video_view"
     }
 
     private lateinit var stateChannel: EventChannel
@@ -31,9 +31,9 @@ class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsP
         appContext = flutterPluginBinding.applicationContext
         appContext?.registerComponentCallbacks(this)
 
-        stateChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/state")
-        positionChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/position")
-        metricsChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_reels_player/metrics")
+        stateChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_feed_player/state")
+        positionChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_feed_player/position")
+        metricsChannel = EventChannel(flutterPluginBinding.binaryMessenger, "native_feed_player/metrics")
 
         flutterPluginBinding.platformViewRegistry.registerViewFactory(
             VIDEO_VIEW_TYPE,
@@ -107,7 +107,7 @@ class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsP
             }
         )
 
-        NativeReelsPlayerHostApi.setUp(
+        NativeFeedPlayerHostApi.setUp(
             binaryMessenger = flutterPluginBinding.binaryMessenger,
             api = this
         )
@@ -125,7 +125,7 @@ class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsP
         stateSink = null
         positionSink = null
         metricsSink = null
-        NativeReelsPlayerHostApi.setUp(
+        NativeFeedPlayerHostApi.setUp(
             binaryMessenger = binding.binaryMessenger,
             api = null
         )
@@ -267,7 +267,7 @@ class NativeReelsPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeReelsP
         return exoPlayerManager
             ?: throw FlutterError(
                 "not_attached",
-                "NativeReelsPlayerPlugin is not attached to a Flutter engine.",
+                "NativeFeedPlayerPlugin is not attached to a Flutter engine.",
                 null
             )
     }

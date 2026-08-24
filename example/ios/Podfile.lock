@@ -2,26 +2,26 @@ PODS:
   - Flutter (1.0.0)
   - integration_test (0.0.1):
     - Flutter
-  - native_reels_player (0.0.1):
+  - native_feed_player (0.0.1):
     - Flutter
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
   - integration_test (from `.symlinks/plugins/integration_test/ios`)
-  - native_reels_player (from `.symlinks/plugins/native_reels_player/ios`)
+  - native_feed_player (from `.symlinks/plugins/native_feed_player/ios`)
 
 EXTERNAL SOURCES:
   Flutter:
     :path: Flutter
   integration_test:
     :path: ".symlinks/plugins/integration_test/ios"
-  native_reels_player:
-    :path: ".symlinks/plugins/native_reels_player/ios"
+  native_feed_player:
+    :path: ".symlinks/plugins/native_feed_player/ios"
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
-  native_reels_player: ea11cca689976afa4174320de1c7af8d792d2735
+  native_feed_player: 5f84dc6ba0bf357a7a123382c983abcd2776b0e6
 
 PODFILE CHECKSUM: 3c63482e143d1b91d2d2560aee9fb04ecc74ac7e
 

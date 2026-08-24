@@ -3,29 +3,29 @@
 ## Package Layout
 
 ```
-native_reels_player/
+native_feed_player/
 ├── pigeons/
-│   └── native_reels_player_messages.dart
+│   └── native_feed_player_messages.dart
 ├── lib/
-│   ├── native_reels_player.dart
-│   ├── native_reels_player_method_channel.dart
-│   ├── native_reels_player_platform_interface.dart
+│   ├── native_feed_player.dart
+│   ├── native_feed_player_method_channel.dart
+│   ├── native_feed_player_platform_interface.dart
 │   └── src/
 │       ├── messages.g.dart
-│       ├── native_reels_player_api.dart
+│       ├── native_feed_player_api.dart
 │       ├── video_controller.dart
 │       ├── video_metrics.dart
 │       ├── video_models.dart
 │       └── video_playback_state.dart
-├── android/src/main/kotlin/com/example/native_reels_player/
+├── android/src/main/kotlin/com/example/native_feed_player/
 │   ├── Messages.g.kt
-│   ├── NativeReelsPlayerPlugin.kt
+│   ├── NativeFeedPlayerPlugin.kt
 │   ├── TextureViewPool.kt
 │   ├── ExoPlayerManager.kt
 │   └── VideoPool.kt
 └── ios/Classes/
     ├── Messages.g.swift
-    ├── NativeReelsPlayerPlugin.swift
+    ├── NativeFeedPlayerPlugin.swift
     ├── RenderViewPool.swift
     ├── AVPlayerManager.swift
     └── VideoPool.swift
@@ -33,20 +33,20 @@ native_reels_player/
 
 ## Dart Layer
 
-- `NativeReelsPlayer`
+- `NativeFeedPlayer`
   - package entry point for configure/preload/controller lifecycle.
   - caches `VideoController` by `(index, url)` key.
 - `VideoController`
   - control object for play/pause/seek/dispose.
   - exposes `stateStream`, `positionStream`, and `metricsStream`.
-- `NativeReelsPlayerPlatform`
+- `NativeFeedPlayerPlatform`
   - contract for platform implementations.
-- `MethodChannelNativeReelsPlayer`
+- `MethodChannelNativeFeedPlayer`
   - Pigeon-generated host API commands + shared event stream fan-out per controller.
 
 ## Native Layer (Current)
 
-- `NativeReelsPlayerPlugin`
+- `NativeFeedPlayerPlugin`
   - implements generated Pigeon host API and owns event channel sinks.
   - reuses pooled platform render targets for view lifecycle churn.
   - creates per-controller IDs and delegates to platform manager.

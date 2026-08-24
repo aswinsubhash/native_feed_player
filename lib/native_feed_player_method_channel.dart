@@ -1,30 +1,30 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-import 'native_reels_player_platform_interface.dart';
+import 'native_feed_player_platform_interface.dart';
 import 'src/messages.g.dart';
 import 'src/video_metrics.dart';
 import 'src/video_models.dart';
 import 'src/video_playback_state.dart';
 
-/// An implementation of [NativeReelsPlayerPlatform] that uses Pigeon host APIs.
-class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
+/// An implementation of [NativeFeedPlayerPlatform] that uses Pigeon host APIs.
+class MethodChannelNativeFeedPlayer extends NativeFeedPlayerPlatform {
   @visibleForTesting
-  final NativeReelsPlayerHostApi hostApi;
+  final NativeFeedPlayerHostApi hostApi;
 
-  MethodChannelNativeReelsPlayer({NativeReelsPlayerHostApi? hostApi})
-    : hostApi = hostApi ?? NativeReelsPlayerHostApi();
+  MethodChannelNativeFeedPlayer({NativeFeedPlayerHostApi? hostApi})
+    : hostApi = hostApi ?? NativeFeedPlayerHostApi();
 
   @visibleForTesting
-  final stateEventChannel = const EventChannel('native_reels_player/state');
+  final stateEventChannel = const EventChannel('native_feed_player/state');
 
   @visibleForTesting
   final positionEventChannel = const EventChannel(
-    'native_reels_player/position',
+    'native_feed_player/position',
   );
 
   @visibleForTesting
-  final metricsEventChannel = const EventChannel('native_reels_player/metrics');
+  final metricsEventChannel = const EventChannel('native_feed_player/metrics');
 
   late final Stream<Map<dynamic, dynamic>> _rawStateEvents = stateEventChannel
       .receiveBroadcastStream()
@@ -53,7 +53,7 @@ class MethodChannelNativeReelsPlayer extends NativeReelsPlayerPlatform {
       <int, Stream<VideoMetrics>>{};
 
   @override
-  Future<void> initialize({required NativeReelsConfig config}) async {
+  Future<void> initialize({required NativeFeedConfig config}) async {
     await hostApi.initialize(
       InitializeRequest(
         maxCachedPlayers: config.maxCachedPlayers,
