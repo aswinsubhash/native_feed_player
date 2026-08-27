@@ -31,6 +31,10 @@ final class BufferedEventSink<T> {
     pending.removeAll()
   }
 
+  func clearPending() {
+    pending.removeAll()
+  }
+
   func emit(_ event: T) {
     if let sink {
       sink.success(event)
@@ -145,7 +149,7 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   private var manager: AVPlayerManager?
   private var memoryWarningObserver: NSObjectProtocol?
   private let renderViewPool = RenderViewPool(maxPoolSize: 8)
-  private var videoViews: [Int64: NativeVideoPlatformView] = [:]
+  private let videoViews = PlatformViewRegistry<Int64, NativeVideoPlatformView>()
   private var attachedControllerByViewId: [Int64: Int] = [:]
   private var binaryMessenger: FlutterBinaryMessenger?
   private var textureOutputs: TextureOutputRegistry?
@@ -159,10 +163,10 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     let viewFactory = NativeVideoViewFactory(
       renderViewPool: instance.renderViewPool,
       onCreate: { [weak instance] viewId, view in
-        instance?.videoViews[viewId] = view
+        instance?.handleVideoViewCreated(viewId: viewId, view: view)
       },
-      onDispose: { [weak instance] viewId, renderView in
-        instance?.handleVideoViewDisposed(viewId: viewId, renderView: renderView)
+      onDispose: { [weak instance] viewId, view in
+        instance?.handleVideoViewDisposed(viewId: viewId, view: view)
       }
     )
     registrar.register(viewFactory, withId: videoViewType)
@@ -186,7 +190,14 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   // MARK: - Host API
 
   func initialize(config: FeedPlayerConfigMessage) throws {
+    textureOutputs?.clear()
+    attachedControllerByViewId.removeAll()
     try managerOrThrow().initialize(config: config)
+    stateEvents.clearPending()
+    positionEvents.clearPending()
+    metricsEvents.clearPending()
+    videoSizeEvents.clearPending()
+    lifecycleEvents.clearPending()
   }
 
   func setSources(sources: [FeedSourceMessage]) throws {
@@ -449,12 +460,22 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
   }
 
-  private func handleVideoViewDisposed(viewId: Int64, renderView: NativeVideoRenderView) {
+  private func handleVideoViewCreated(viewId: Int64, view: NativeVideoPlatformView) {
+    if let previousControllerId = attachedControllerByViewId.removeValue(forKey: viewId) {
+      manager?.detach(controllerId: previousControllerId)
+    }
+    videoViews.register(view, for: viewId)
+  }
+
+  private func handleVideoViewDisposed(viewId: Int64, view: NativeVideoPlatformView) {
+    guard videoViews.removeIfCurrent(view, for: viewId) else {
+      renderViewPool.release(view.renderView)
+      return
+    }
     if let controllerId = attachedControllerByViewId.removeValue(forKey: viewId) {
       manager?.detach(controllerId: controllerId)
     }
-    videoViews.removeValue(forKey: viewId)
-    renderViewPool.release(renderView)
+    renderViewPool.release(view.renderView)
   }
 
   private func managerOrThrow() throws -> AVPlayerManager {

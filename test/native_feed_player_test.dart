@@ -289,6 +289,18 @@ void main() {
       expect(player.config.cache.maxBytes, 256 * 1024 * 1024);
     });
 
+    test('initialize replaces the previous session', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController controller = await player.controllerFor('a');
+
+      await player.initialize();
+
+      expect(controller.isReleased, isTrue);
+      expect(controller.releaseReason, ControllerReleaseReason.disposed);
+      expect(player.sources, isEmpty);
+      expect(player.activeControllers, isEmpty);
+    });
+
     test('uninitialized use is rejected', () {
       final FeedPlayer fresh = FeedPlayer(platform: FakeFeedPlayerPlatform());
       expect(() => fresh.setSources(<FeedSource>[]), throwsStateError);

@@ -26,6 +26,10 @@ internal class BufferedStreamHandler<T>(private val maxBuffered: Int = 64) {
         pending.clear()
     }
 
+    fun clearPending() {
+        pending.clear()
+    }
+
     fun emit(event: T) {
         val target = sink
         if (target != null) {

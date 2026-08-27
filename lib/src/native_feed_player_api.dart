@@ -42,9 +42,21 @@ class FeedPlayer {
   Iterable<FeedController> get activeControllers =>
       List<FeedController>.unmodifiable(_controllersBySourceId.values);
 
+  /// Starts a native playback session for this engine.
+  ///
+  /// Only one session is active at a time. Initializing another [FeedPlayer]
+  /// releases controllers and outputs owned by the previous session.
   Future<void> initialize({
     FeedPlayerConfig config = const FeedPlayerConfig(),
   }) async {
+    for (final FeedController controller
+        in _controllersBySourceId.values.toList()) {
+      controller.markReleased(ControllerReleaseReason.disposed);
+    }
+    _controllersBySourceId.clear();
+    _sourceIdsByControllerId.clear();
+    _sources.clear();
+    _initialized = false;
     _config = config;
     await _platform.initialize(config);
     _initialized = true;

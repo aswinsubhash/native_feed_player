@@ -4,12 +4,12 @@ import UIKit
 final class NativeVideoPlatformView: NSObject, FlutterPlatformView {
   let renderView: NativeVideoRenderView
   private let containerView: UIView
-  private let onDispose: (NativeVideoRenderView) -> Void
+  private let onDispose: (NativeVideoPlatformView) -> Void
 
   init(
     frame: CGRect,
     renderView: NativeVideoRenderView,
-    onDispose: @escaping (NativeVideoRenderView) -> Void
+    onDispose: @escaping (NativeVideoPlatformView) -> Void
   ) {
     self.renderView = renderView
     containerView = UIView(frame: frame)
@@ -24,6 +24,6 @@ final class NativeVideoPlatformView: NSObject, FlutterPlatformView {
   }
 
   func dispose() {
-    onDispose(renderView)
+    onDispose(self)
   }
 }

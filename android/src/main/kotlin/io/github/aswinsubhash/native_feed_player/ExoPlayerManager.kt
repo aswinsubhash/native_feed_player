@@ -112,6 +112,7 @@ internal class ExoPlayerManager(
     }
 
     fun initialize(config: FeedPlayerConfigMessage) {
+        resetSession(ReleaseReasonMessage.DISPOSED)
         maxActivePlayers = maxOf(1, config.maxActivePlayers.toInt())
         preloadAhead = maxOf(0, config.preloadAhead.toInt())
         preloadBehind = maxOf(0, config.preloadBehind.toInt())
@@ -378,13 +379,17 @@ internal class ExoPlayerManager(
     }
 
     fun disposeAll() {
+        resetSession(ReleaseReasonMessage.ENGINE_DETACHED)
+    }
+
+    private fun resetSession(reason: ReleaseReasonMessage) {
         preloadGeneration += 1
         // The preload manager shares components with every player it built, so
         // it has to go first.
         preloadManager?.release()
         preloadManager = null
         for (id in managedPlayers.keys.toList()) {
-            releaseController(id, ReleaseReasonMessage.ENGINE_DETACHED)
+            releaseController(id, reason)
         }
         attachedTextureByController.clear()
         surfaceByController.clear()
@@ -392,6 +397,10 @@ internal class ExoPlayerManager(
         releaseAllPooledPlayers()
         registry.clear()
         creationOrder.clear()
+        autoPausedControllerIds.clear()
+        visibleGeneration = 0
+        windowScale = 1.0
+        rebuffersSinceLastRecovery = 0
         handler.removeCallbacks(positionTicker)
         tickerRunning = false
     }
@@ -784,6 +793,7 @@ internal class ExoPlayerManager(
             managed.player.setVideoSurface(null)
         }
         metricsByController.remove(controllerId)
+        autoPausedControllerIds.remove(controllerId)
         recycleOrReleasePlayer(managed.player)
         onReleased(controllerId, reason)
     }

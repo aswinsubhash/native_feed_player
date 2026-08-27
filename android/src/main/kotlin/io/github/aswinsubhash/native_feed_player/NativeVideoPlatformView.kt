@@ -10,7 +10,7 @@ import io.flutter.plugin.platform.PlatformView
 internal class NativeVideoPlatformView(
     context: Context,
     val textureView: TextureView,
-    private val onDispose: (TextureView) -> Unit
+    private val onDispose: (NativeVideoPlatformView) -> Unit
 ) : PlatformView {
     private val containerView: FrameLayout = FrameLayout(context).apply {
         addView(
@@ -27,6 +27,6 @@ internal class NativeVideoPlatformView(
     }
 
     override fun dispose() {
-        onDispose(textureView)
+        onDispose(this)
     }
 }

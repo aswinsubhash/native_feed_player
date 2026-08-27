@@ -4,12 +4,12 @@ import UIKit
 final class NativeVideoViewFactory: NSObject, FlutterPlatformViewFactory {
   private let renderViewPool: RenderViewPool
   private let onCreate: (_ viewId: Int64, _ view: NativeVideoPlatformView) -> Void
-  private let onDispose: (_ viewId: Int64, _ renderView: NativeVideoRenderView) -> Void
+  private let onDispose: (_ viewId: Int64, _ view: NativeVideoPlatformView) -> Void
 
   init(
     renderViewPool: RenderViewPool,
     onCreate: @escaping (_ viewId: Int64, _ view: NativeVideoPlatformView) -> Void,
-    onDispose: @escaping (_ viewId: Int64, _ renderView: NativeVideoRenderView) -> Void
+    onDispose: @escaping (_ viewId: Int64, _ view: NativeVideoPlatformView) -> Void
   ) {
     self.renderViewPool = renderViewPool
     self.onCreate = onCreate
@@ -26,8 +26,8 @@ final class NativeVideoViewFactory: NSObject, FlutterPlatformViewFactory {
     arguments args: Any?
   ) -> FlutterPlatformView {
     let renderView = renderViewPool.acquire(frame: frame)
-    let view = NativeVideoPlatformView(frame: frame, renderView: renderView) { [weak self] releasedRenderView in
-      self?.onDispose(viewId, releasedRenderView)
+    let view = NativeVideoPlatformView(frame: frame, renderView: renderView) { [weak self] disposedView in
+      self?.onDispose(viewId, disposedView)
     }
     onCreate(viewId, view)
     return view

@@ -75,6 +75,10 @@ they fall outside the active window or memory gets tight, so a controller can
 die without you asking. This is the single most important thing to understand
 about the API.
 
+Only one native playback session is active per Flutter engine. Initializing a
+new `FeedPlayer` releases controllers and outputs from the previous session,
+including after a Flutter hot restart.
+
 Controllers therefore fail loudly rather than silently:
 
 ```dart

@@ -186,3 +186,105 @@ final class CachingResourceLoaderTests: XCTestCase {
     XCTAssertEqual(a.count, 64, "SHA-256 hex digest")
   }
 }
+
+final class PlatformViewRegistryTests: XCTestCase {
+  func testStaleDisposalDoesNotRemoveReplacementView() {
+    let registry = PlatformViewRegistry<Int64, NSObject>()
+    let oldView = NSObject()
+    let newView = NSObject()
+
+    registry.register(oldView, for: 7)
+    registry.register(newView, for: 7)
+
+    XCTAssertFalse(registry.removeIfCurrent(oldView, for: 7))
+    XCTAssertTrue(registry[7] === newView)
+  }
+
+  func testCurrentViewIsRemovedExactlyOnce() {
+    let registry = PlatformViewRegistry<Int64, NSObject>()
+    let view = NSObject()
+
+    registry.register(view, for: 7)
+
+    XCTAssertTrue(registry.removeIfCurrent(view, for: 7))
+    XCTAssertNil(registry[7])
+    XCTAssertFalse(registry.removeIfCurrent(view, for: 7))
+  }
+}
+
+final class BufferedEventSinkTests: XCTestCase {
+  func testReplacementSessionDropsBufferedEvents() {
+    let holder = BufferedEventSink<String>()
+    var events: [String] = []
+
+    holder.emit("old")
+    holder.clearPending()
+    holder.attach(PigeonEventSink<String> { event in
+      if let event = event as? String {
+        events.append(event)
+      }
+    })
+    holder.emit("new")
+
+    XCTAssertEqual(events, ["new"])
+  }
+
+  func testReplacementListenerReceivesNewEvents() {
+    let holder = BufferedEventSink<String>()
+    var oldEvents: [String] = []
+    var newEvents: [String] = []
+
+    holder.attach(PigeonEventSink<String> { event in
+      if let event = event as? String {
+        oldEvents.append(event)
+      }
+    })
+    holder.detach()
+    holder.attach(PigeonEventSink<String> { event in
+      if let event = event as? String {
+        newEvents.append(event)
+      }
+    })
+    holder.emit("new")
+
+    XCTAssertTrue(oldEvents.isEmpty)
+    XCTAssertEqual(newEvents, ["new"])
+  }
+}
+
+final class AVPlayerManagerSessionTests: XCTestCase {
+  func testInitializeReplacesPreviousSession() throws {
+    var released: [(Int, ReleaseReasonMessage)] = []
+    let manager = AVPlayerManager(
+      onState: { _, _, _ in },
+      onReleased: { released.append(($0, $1)) },
+      onPosition: { _ in },
+      onMetrics: { _ in },
+      onVideoSize: { _ in }
+    )
+    let config = FeedPlayerConfigMessage(
+      maxActivePlayers: 3,
+      preloadAhead: 2,
+      preloadBehind: 1,
+      maxConcurrentPreloads: 2,
+      positionUpdateIntervalMs: 200,
+      renderMode: .platformView,
+      cache: CachePolicyMessage(enabled: false, maxBytes: 0),
+      audio: AudioPolicyMessage(muted: true, volume: 1, handleAudioFocus: false)
+    )
+
+    manager.initialize(config: config)
+    manager.setSources([
+      RegisteredSource(id: "clip", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:])
+    ])
+    try manager.createController(controllerId: 1, sourceId: "clip", autoPlay: false, looping: false)
+    XCTAssertNotNil(manager.player(for: 1))
+
+    manager.initialize(config: config)
+
+    XCTAssertNil(manager.player(for: 1))
+    XCTAssertEqual(released.count, 1)
+    XCTAssertEqual(released.first?.0, 1)
+    XCTAssertEqual(released.first?.1, .disposed)
+  }
+}

@@ -147,6 +147,7 @@ final class AVPlayerManager {
   }
 
   func initialize(config: FeedPlayerConfigMessage) {
+    resetSession(reason: .disposed)
     maxActivePlayers = max(1, Int(config.maxActivePlayers))
     preloadAhead = max(0, Int(config.preloadAhead))
     preloadBehind = max(0, Int(config.preloadBehind))
@@ -472,12 +473,16 @@ final class AVPlayerManager {
   }
 
   func disposeAll() {
+    resetSession(reason: .engineDetached)
+  }
+
+  private func resetSession(reason: ReleaseReasonMessage) {
     preloadGeneration += 1
     resourceLoader.cancelAll()
     for controllerId in Array(controllers.keys) {
       disposeControllerInternal(
         controllerId: controllerId,
-        reason: .engineDetached,
+        reason: reason,
         shouldReschedule: false
       )
     }
@@ -489,6 +494,11 @@ final class AVPlayerManager {
     preparedItems.removeAll()
     metricsByController.removeAll()
     creationOrder.removeAll()
+    autoPausedControllerIds.removeAll()
+    pendingRateByController.removeAll()
+    visibleGeneration = 0
+    windowScale = 1.0
+    rebuffersSinceLastRecovery = 0
     drainPooledPlayers(keep: 0)
     positionTimer?.invalidate()
     positionTimer = nil

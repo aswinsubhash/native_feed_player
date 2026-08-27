@@ -12,6 +12,8 @@
 - [ ] CocoaPods-mode `flutter build ios --simulator --no-codesign` passes in `example/`.
 - [ ] SwiftPM-mode `flutter build ios --simulator --no-codesign` passes in `example/`.
 - [ ] Swift plugin unit tests pass through both CocoaPods and SwiftPM integration.
+- [ ] Hot restart at least three consecutive times on Android and iOS; after each restart, scroll every source and verify visible video, matching audio, advancing position, and state transitions out of `preparing`.
+- [ ] Repeat the hot-restart check once with `RenderMode.texture`.
 - [ ] Strict `pod lib lint` passes without allowing warnings.
 - [ ] `example/pubspec.lock` and `example/ios/Podfile.lock` are current.
 - [ ] Run integration tests on at least one Android and one iOS physical device:
