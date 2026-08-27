@@ -116,7 +116,7 @@ final class MediaDiskCache {
         key: key,
         uri: uri,
         contentType: contentType,
-        byteCount: size ?? 0,
+        byteCount: size,
         lastAccess: Date().timeIntervalSince1970
       )
       saveIndexLocked()

@@ -13,6 +13,7 @@ concurrency:
 env:
   # Pinned so a Flutter release cannot turn CI red without a commit here.
   FLUTTER_VERSION: 3.44.1
+  FLUTTER_MIN_VERSION: 3.41.0
 
 jobs:
   dart:
@@ -45,6 +46,12 @@ jobs:
         working-directory: example
         run: flutter test
 
+      - name: Verify example lockfile is up to date
+        run: git diff --exit-code -- example/pubspec.lock
+
+      - name: Generate documentation
+        run: dart doc
+
       - name: Verify Pigeon output is up to date
         # A stale generated file is a silent source of platform drift, so the
         # generator is re-run and the tree must come back unchanged.
@@ -54,12 +61,12 @@ jobs:
             --dart_out lib/src/messages.g.dart \
             --kotlin_out android/src/main/kotlin/io/github/aswinsubhash/native_feed_player/Messages.g.kt \
             --kotlin_package io.github.aswinsubhash.native_feed_player \
-            --swift_out ios/Classes/Messages.g.swift
+            --swift_out ios/native_feed_player/Sources/native_feed_player/Messages.g.swift
           dart format lib/src/messages.g.dart
           git diff --exit-code -- \
             lib/src/messages.g.dart \
             android/src/main/kotlin/io/github/aswinsubhash/native_feed_player/Messages.g.kt \
-            ios/Classes/Messages.g.swift
+            ios/native_feed_player/Sources/native_feed_player/Messages.g.swift
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -67,6 +74,22 @@ jobs:
           name: coverage
           path: coverage/lcov.info
           if-no-files-found: ignore
+
+  minimum-flutter:
+    name: Test minimum Flutter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_MIN_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
 
   android:
     name: Build and test (Android)
@@ -96,8 +119,12 @@ jobs:
         run: flutter build apk --debug
 
   ios:
-    name: Build and test (iOS)
+    name: Build and test (iOS, ${{ matrix.package-manager }})
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package-manager: [cocoapods, swiftpm]
     steps:
       - uses: actions/checkout@v4
 
@@ -107,7 +134,23 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Configure package manager
+        run: |
+          if [ "${{ matrix.package-manager }}" = "swiftpm" ]; then
+            flutter config --enable-swift-package-manager
+          else
+            flutter config --no-enable-swift-package-manager
+          fi
+
       - run: flutter pub get
+
+      - name: Strict CocoaPods validation
+        if: matrix.package-manager == 'cocoapods'
+        run: |
+          pod lib lint ios/native_feed_player.podspec \
+            --configuration=Debug --skip-tests --use-modular-headers --use-libraries
+          pod lib lint ios/native_feed_player.podspec \
+            --configuration=Debug --skip-tests --use-modular-headers
 
       - name: Simulator build
         working-directory: example

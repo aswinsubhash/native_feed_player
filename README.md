@@ -211,7 +211,7 @@ dart run pigeon \
   --dart_out lib/src/messages.g.dart \
   --kotlin_out android/src/main/kotlin/io/github/aswinsubhash/native_feed_player/Messages.g.kt \
   --kotlin_package io.github.aswinsubhash.native_feed_player \
-  --swift_out ios/Classes/Messages.g.swift
+  --swift_out ios/native_feed_player/Sources/native_feed_player/Messages.g.swift
 dart format lib/src/messages.g.dart
 ```
 
@@ -228,6 +228,6 @@ silent source of platform drift.
 
 ## Requirements
 
-- Flutter 3.3+, Dart 3.11+
+- Flutter 3.41+, Dart 3.11+
 - Android: minSdk 24, Media3 1.11
-- iOS: 13.0+
+- iOS: 13.0+, with CocoaPods and Swift Package Manager support

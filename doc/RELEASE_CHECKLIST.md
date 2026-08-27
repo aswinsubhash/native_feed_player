@@ -2,10 +2,18 @@
 
 ## Pre-Release Validation
 
+- [ ] `dart format --output=none --set-exit-if-changed` passes for committed Dart sources.
 - [ ] `flutter analyze` passes at package root.
-- [ ] `flutter test` passes at package root.
+- [ ] `flutter test` passes at package root and in `example/`.
+- [ ] Pigeon regeneration leaves all committed Dart, Kotlin, and Swift bindings unchanged.
+- [ ] `dart doc` completes without warnings.
 - [ ] `flutter build apk --debug` passes in `example/`.
-- [ ] `flutter build ios --no-codesign` passes in `example/`.
+- [ ] Android plugin unit tests pass.
+- [ ] CocoaPods-mode `flutter build ios --simulator --no-codesign` passes in `example/`.
+- [ ] SwiftPM-mode `flutter build ios --simulator --no-codesign` passes in `example/`.
+- [ ] Swift plugin unit tests pass through both CocoaPods and SwiftPM integration.
+- [ ] Strict `pod lib lint` passes without allowing warnings.
+- [ ] `example/pubspec.lock` and `example/ios/Podfile.lock` are current.
 - [ ] Run integration tests on at least one Android and one iOS physical device:
   - fast fling churn
   - app pause/resume
@@ -30,11 +38,15 @@
   - tuning guidance
   - limitations and known caveats
 - [ ] Confirm iOS and Android platform requirements are explicit.
+- [ ] Confirm `LICENSE` contains the intended canonical license text and is recognized by package tooling.
+- [ ] Confirm native builds contain no package-owned compiler warnings.
+- [ ] Confirm CocoaPods and SwiftPM bundle `PrivacyInfo.xcprivacy`.
 
 ## Pub.dev Publishing
 
 - [ ] Set `homepage`, `repository`, and issue tracker links in `pubspec.yaml`.
 - [ ] Set semantic `version` in `pubspec.yaml`.
+- [ ] Confirm the matching `v<version>` repository tag exists for the CocoaPods source declaration.
 - [ ] Ensure example app has version/build values for iOS archive compliance.
-- [ ] Run `flutter pub publish --dry-run`.
+- [ ] Run `flutter pub publish --dry-run` and inspect the archive contents.
 - [ ] Publish when all gates above are green.

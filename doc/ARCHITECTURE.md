@@ -45,17 +45,20 @@ native_feed_player/
 │   ├── TextureViewPool.kt
 │   ├── EventSinks.kt
 │   └── Messages.g.kt                       # generated
-└── ios/Classes/
-    ├── NativeFeedPlayerPlugin.swift        # host API + event sinks
-    ├── AVPlayerManager.swift               # playback, eviction, budget
-    ├── FeedSourceRegistry.swift            # ids, ranks, window arithmetic
-    ├── MediaDiskCache.swift                # LRU file store
-    ├── CachingResourceLoader.swift         # resource loader + download
-    ├── PlaybackErrorMapper.swift
-    ├── VideoOutputTexture.swift            # FlutterTexture output
-    ├── RenderViewPool.swift
-    ├── FileHandleCompat.swift
-    └── Messages.g.swift                    # generated
+└── ios/native_feed_player/
+    ├── Package.swift                       # SwiftPM manifest
+    └── Sources/native_feed_player/         # shared by SwiftPM and CocoaPods
+        ├── NativeFeedPlayerPlugin.swift    # host API + event sinks
+        ├── AVPlayerManager.swift           # playback, eviction, budget
+        ├── FeedSourceRegistry.swift        # ids, ranks, window arithmetic
+        ├── MediaDiskCache.swift            # LRU file store
+        ├── CachingResourceLoader.swift     # resource loader + download
+        ├── PlaybackErrorMapper.swift
+        ├── VideoOutputTexture.swift        # FlutterTexture output
+        ├── RenderViewPool.swift
+        ├── FileHandleCompat.swift
+        ├── PrivacyInfo.xcprivacy
+        └── Messages.g.swift                # generated
 ```
 
 ## Layers

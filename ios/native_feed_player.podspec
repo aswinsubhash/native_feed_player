@@ -12,11 +12,11 @@ Android, with direction-aware prebuffering, disk caching, player pooling, and
 playback quality metrics.
                        DESC
   s.homepage         = 'https://github.com/aswinsubhash/native_feed_player'
-  s.license          = { :file => '../LICENSE' }
+  s.license          = { :type => 'BSD-3-Clause', :file => '../LICENSE' }
   s.author           = { 'Aswin Subhash' => 'https://github.com/aswinsubhash' }
-  s.source           = { :http => 'https://github.com/aswinsubhash/native_feed_player' }
+  s.source           = { :git => 'https://github.com/aswinsubhash/native_feed_player.git', :tag => "v#{s.version}" }
   s.documentation_url = 'https://pub.dev/packages/native_feed_player'
-  s.source_files = 'Classes/**/*'
+  s.source_files = 'native_feed_player/Sources/native_feed_player/**/*.swift'
   s.dependency 'Flutter'
   s.platform = :ios, '13.0'
 
@@ -29,5 +29,5 @@ playback quality metrics.
   # media cache: it uses ordinary file I/O and per-file size lookups, none of
   # which are required-reason APIs. Re-audit if the cache starts reading free
   # disk space or file timestamps.
-  s.resource_bundles = {'native_feed_player_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
+  s.resource_bundles = {'native_feed_player_privacy' => ['native_feed_player/Sources/native_feed_player/PrivacyInfo.xcprivacy']}
 end

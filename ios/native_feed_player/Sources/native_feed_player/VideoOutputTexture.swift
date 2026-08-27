@@ -24,7 +24,7 @@ final class VideoOutputTexture: NSObject, FlutterTexture {
     // BGRA is what the Flutter engine expects to upload without conversion.
     output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
       kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-      kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+      kCVPixelBufferIOSurfacePropertiesKey as String: [String: String](),
     ])
     super.init()
     attach(to: player)
