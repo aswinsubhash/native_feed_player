@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'native_feed_player_platform_interface.dart';
@@ -11,10 +13,7 @@ import 'src/video_metrics.dart';
 import 'src/video_playback_state.dart';
 import 'src/video_size.dart';
 
-/// [FeedPlayerPlatform] implemented on top of the generated Pigeon contracts.
-///
-/// Commands use the host API; events use Pigeon event channels, so payloads are
-/// typed end to end instead of untyped maps filtered on the Dart side.
+/// Pigeon implementation of [FeedPlayerPlatform].
 class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   MethodChannelFeedPlayer({
     NativeFeedPlayerHostApi? hostApi,
@@ -49,7 +48,9 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       (_metricsEventStream ?? metricsEvents()).asBroadcastStream();
 
   late final Stream<VideoSizeEvent> _videoSizes =
-      (_videoSizeEventStream ?? videoSizeEvents()).asBroadcastStream();
+      (_videoSizeEventStream ?? videoSizeEvents())
+          .map(_cacheVideoSize)
+          .asBroadcastStream();
 
   late final Stream<ControllerLifecycleEvent> _lifecycle =
       (_lifecycleEventStream ?? lifecycleEvents()).asBroadcastStream();
@@ -62,20 +63,25 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       <int, Stream<VideoMetrics>>{};
   final Map<int, Stream<VideoSize>> _videoSizeStreams =
       <int, Stream<VideoSize>>{};
+  final Map<int, VideoSize> _latestVideoSizes = <int, VideoSize>{};
+  StreamSubscription<VideoSizeEvent>? _videoSizeCacheSubscription;
 
   @override
-  late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle
-      .map(
-        (ControllerLifecycleEvent event) => ControllerReleaseEvent(
-          controllerId: event.controllerId,
-          reason: releaseReasonFromMessage(event.reason),
-        ),
-      )
-      .asBroadcastStream();
+  late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle.map((
+    ControllerLifecycleEvent event,
+  ) {
+    _forgetStreams(event.controllerId);
+    return ControllerReleaseEvent(
+      controllerId: event.controllerId,
+      reason: releaseReasonFromMessage(event.reason),
+    );
+  }).asBroadcastStream();
 
   @override
   Future<void> initialize(FeedPlayerConfig config) async {
     _ensureSupportedPlatform();
+    _latestVideoSizes.clear();
+    _videoSizeCacheSubscription ??= _videoSizes.listen((_) {});
     await hostApi.initialize(config.toMessage());
   }
 
@@ -210,9 +216,21 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Stream<VideoSize> videoSizeStream(int controllerId) {
     return _videoSizeStreams.putIfAbsent(controllerId, () {
-      return _videoSizes
-          .where((VideoSizeEvent event) => event.controllerId == controllerId)
-          .map(VideoSize.fromMessage);
+      return Stream<VideoSize>.multi((MultiStreamController<VideoSize> output) {
+        final VideoSize? latest = _latestVideoSizes[controllerId];
+        if (latest != null) {
+          output.addSync(latest);
+        }
+        final StreamSubscription<VideoSizeEvent> subscription = _videoSizes
+            .where((VideoSizeEvent event) => event.controllerId == controllerId)
+            .listen(
+              (VideoSizeEvent event) =>
+                  output.add(VideoSize.fromMessage(event)),
+              onError: output.addError,
+              onDone: output.close,
+            );
+        output.onCancel = subscription.cancel;
+      }, isBroadcast: true);
     });
   }
 
@@ -270,10 +288,18 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Future<void> dispose() async {
     await hostApi.disposeAll();
+    await _videoSizeCacheSubscription?.cancel();
+    _videoSizeCacheSubscription = null;
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();
     _videoSizeStreams.clear();
+    _latestVideoSizes.clear();
+  }
+
+  VideoSizeEvent _cacheVideoSize(VideoSizeEvent event) {
+    _latestVideoSizes[event.controllerId] = VideoSize.fromMessage(event);
+    return event;
   }
 
   List<FeedSourceMessage> _toMessages(
@@ -291,6 +317,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _positionStreams.remove(controllerId);
     _metricsStreams.remove(controllerId);
     _videoSizeStreams.remove(controllerId);
+    _latestVideoSizes.remove(controllerId);
   }
 
   void _ensureSupportedPlatform() {
@@ -306,7 +333,3 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     }
   }
 }
-
-/// Former name of [MethodChannelFeedPlayer].
-@Deprecated('Renamed to MethodChannelFeedPlayer. Will be removed in 0.2.0.')
-typedef MethodChannelNativeFeedPlayer = MethodChannelFeedPlayer;

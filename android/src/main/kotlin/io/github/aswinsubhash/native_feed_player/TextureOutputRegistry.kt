@@ -3,15 +3,7 @@ package io.github.aswinsubhash.native_feed_player
 import android.view.Surface
 import io.flutter.view.TextureRegistry
 
-/**
- * Bridges ExoPlayer video output into Flutter textures.
- *
- * Platform views composite a native view into the Flutter scene, which costs a
- * synchronisation step per frame. Rendering into a SurfaceTexture instead lets
- * the Flutter renderer draw the video like any other layer, which is usually
- * cheaper while scrolling. Both paths are kept so the choice can be measured
- * rather than assumed.
- */
+/** Maps ExoPlayer surfaces to Flutter texture entries. */
 internal class TextureOutputRegistry(
     private val textureRegistry: TextureRegistry
 ) {

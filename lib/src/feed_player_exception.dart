@@ -1,12 +1,9 @@
 import 'controller_release.dart';
 
-/// Thrown when a controller command is issued after the native player backing
-/// it has been released.
+/// Thrown when a command targets a released native player.
 ///
-/// Native code can reclaim a controller on its own (window eviction, memory
-/// pressure), so this is a normal condition that callers should handle rather
-/// than a programming error alone. Check [VideoController.isReleased] or await
-/// [VideoController.onReleased] to react before issuing commands.
+/// Check [FeedController.isReleased] or await [FeedController.onReleased]
+/// before issuing another command.
 class ControllerReleasedError extends StateError {
   ControllerReleasedError({required this.controllerId, required this.reason})
     : super(

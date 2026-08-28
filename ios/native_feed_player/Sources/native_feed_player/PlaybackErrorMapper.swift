@@ -1,12 +1,7 @@
 import AVFoundation
 import Foundation
 
-/// Translates AVFoundation failures into the plugin's platform-independent
-/// codes.
-///
-/// Callers previously received a bare `error` state with no way to tell a
-/// transient network drop from permanently malformed media, so retry logic was
-/// impossible to write.
+/// Maps AVFoundation errors to platform-independent playback errors.
 enum PlaybackErrorMapper {
   static func map(_ error: Error?, sourceId: String) -> PlaybackErrorMessage {
     guard let nsError = error as NSError? else {

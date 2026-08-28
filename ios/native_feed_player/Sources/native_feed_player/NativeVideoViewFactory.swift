@@ -26,6 +26,8 @@ final class NativeVideoViewFactory: NSObject, FlutterPlatformViewFactory {
     arguments args: Any?
   ) -> FlutterPlatformView {
     let renderView = renderViewPool.acquire(frame: frame)
+    let fit = (args as? [String: Any])?["fit"] as? String
+    renderView.setFit(fit)
     let view = NativeVideoPlatformView(frame: frame, renderView: renderView) { [weak self] disposedView in
       self?.onDispose(viewId, disposedView)
     }

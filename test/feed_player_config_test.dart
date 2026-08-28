@@ -17,15 +17,11 @@ void main() {
       expect(config.positionUpdateInterval.inMilliseconds, 200);
     });
 
-    test('audio defaults to muted without grabbing focus', () {
+    test('audio defaults to audible with focus handling', () {
       const AudioPolicy audio = AudioPolicy();
 
-      expect(audio.muted, isTrue);
-      expect(
-        audio.handleAudioFocus,
-        isFalse,
-        reason: 'a silent feed must not duck other apps',
-      );
+      expect(audio.muted, isFalse);
+      expect(audio.handleAudioFocus, isTrue);
     });
 
     test('cache defaults to an enabled 256 MB budget', () {

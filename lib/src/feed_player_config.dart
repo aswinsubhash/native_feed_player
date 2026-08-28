@@ -5,7 +5,7 @@ class CachePolicy {
   const CachePolicy({this.enabled = true, this.maxBytes = defaultMaxBytes})
     : assert(maxBytes > 0, 'maxBytes must be positive');
 
-  /// Conservative default that stays safe on low-storage devices.
+  /// Default 256 MB cache limit.
   static const int defaultMaxBytes = 256 * 1024 * 1024;
 
   /// Disables caching entirely. Playback still buffers in memory.
@@ -23,18 +23,16 @@ class CachePolicy {
 /// Audio behaviour for the feed.
 class AudioPolicy {
   const AudioPolicy({
-    this.muted = true,
+    this.muted = false,
     this.volume = 1.0,
-    this.handleAudioFocus = false,
+    this.handleAudioFocus = true,
   }) : assert(volume >= 0.0 && volume <= 1.0, 'volume must be within 0..1');
 
-  /// Feeds conventionally start muted and unmute on explicit user intent, so
-  /// that is the default here too.
+  /// Whether playback starts without audible output.
   final bool muted;
   final double volume;
 
-  /// Whether playback should request audio focus and duck/pause other apps.
-  /// Leave false while muted.
+  /// Whether audible playback requests platform audio focus.
   final bool handleAudioFocus;
 
   AudioPolicy copyWith({bool? muted, double? volume, bool? handleAudioFocus}) {
@@ -52,17 +50,14 @@ class AudioPolicy {
   );
 }
 
-/// How native video output reaches the Flutter scene.
+/// Native video output mode.
 ///
-/// Both paths are supported so the choice can be measured per device class
-/// rather than assumed; see `doc/RENDERING_BENCHMARK.md`.
+/// See `doc/RENDERING_BENCHMARK.md` for performance guidance.
 enum RenderMode {
-  /// A native view composited by Flutter's platform-view layer. Most
-  /// compatible, but compositing costs a synchronisation step per frame.
+  /// Native compositing through a Flutter platform view.
   platformView,
 
-  /// Frames copied into a Flutter texture and drawn by the Flutter renderer.
-  /// Usually smoother while scrolling.
+  /// Flutter texture rendering.
   texture,
 }
 
@@ -96,20 +91,16 @@ class FeedPlayerConfig {
          'maxConcurrentPreloads must be at least 1',
        );
 
-  /// Controllers kept alive at once. Everything beyond this is evicted by
-  /// distance from the visible source.
+  /// Maximum active controllers. Distant controllers are evicted.
   final int maxActivePlayers;
 
-  /// How many sources past the visible one to prepare. Feeds travel forward,
-  /// so this is normally larger than [preloadBehind].
+  /// Sources to preload ahead of the visible source.
   final int preloadAhead;
 
-  /// How many sources before the visible one to keep prepared, for backwards
-  /// scrolling.
+  /// Sources to preload behind the visible source.
   final int preloadBehind;
 
-  /// Ceiling on simultaneous preload work, so a fling cannot saturate the
-  /// network with requests that are about to become stale.
+  /// Maximum concurrent preload operations.
   final int maxConcurrentPreloads;
 
   final Duration positionUpdateInterval;

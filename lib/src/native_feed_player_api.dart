@@ -7,14 +7,10 @@ import 'feed_source.dart';
 import 'playback_error.dart';
 import 'video_controller.dart';
 
-/// Entry point for feed-oriented native playback with pre-buffering.
+/// Coordinates feed sources and native playback controllers.
 ///
-/// Sources are registered up front and addressed by their stable id, so
-/// appending a page never renumbers or invalidates anything already loaded.
-///
-/// Native code owns controller lifetime and may reclaim players without being
-/// asked. This class subscribes to native release events so its controller
-/// cache can never hand out a handle whose native player is already gone.
+/// Source identifiers remain stable across pagination. Controllers may be
+/// released by the native scheduler.
 class FeedPlayer {
   FeedPlayer({FeedPlayerPlatform? platform})
     : _platform = platform ?? FeedPlayerPlatform.instance {
@@ -42,10 +38,9 @@ class FeedPlayer {
   Iterable<FeedController> get activeControllers =>
       List<FeedController>.unmodifiable(_controllersBySourceId.values);
 
-  /// Starts a native playback session for this engine.
+  /// Initializes this engine's playback session.
   ///
-  /// Only one session is active at a time. Initializing another [FeedPlayer]
-  /// releases controllers and outputs owned by the previous session.
+  /// Reinitialization releases the previous session.
   Future<void> initialize({
     FeedPlayerConfig config = const FeedPlayerConfig(),
   }) async {
@@ -72,7 +67,7 @@ class FeedPlayer {
     await _platform.setSources(sources);
   }
 
-  /// Appends a page without disturbing sources already registered.
+  /// Appends sources without renumbering existing entries.
   Future<void> appendSources(List<FeedSource> sources) async {
     _ensureInitialized();
     if (sources.isEmpty) {
@@ -138,8 +133,7 @@ class FeedPlayer {
     return controller;
   }
 
-  /// Tells the native scheduler which source is on screen. Drives preload
-  /// ranking, eviction, and scroll-direction inference.
+  /// Sets the visible source used for preload and eviction ranking.
   Future<void> setVisibleSource(String sourceId) {
     _ensureInitialized();
     return _platform.setVisibleSource(sourceId);
@@ -152,7 +146,7 @@ class FeedPlayer {
     await _platform.setAudioPolicy(policy);
   }
 
-  /// Convenience for the common "unmute on user intent" flow.
+  /// Mutes or unmutes current and future controllers.
   Future<void> setMuted(bool muted) =>
       setAudioPolicy(_config.audio.copyWith(muted: muted));
 
@@ -160,7 +154,7 @@ class FeedPlayer {
   Future<void> evictCachedMedia([List<String> sourceIds = const <String>[]]) =>
       _platform.evictCachedMedia(sourceIds);
 
-  /// Removes every byte this plugin has persisted.
+  /// Clears the persistent media cache.
   Future<void> clearMediaCache() => _platform.clearMediaCache();
 
   Future<CacheStatus> cacheStatus(String sourceId) =>
@@ -223,7 +217,3 @@ class FeedPlayer {
     }
   }
 }
-
-/// Former name of [FeedPlayer].
-@Deprecated('Renamed to FeedPlayer. Will be removed in 0.2.0.')
-typedef NativeFeedPlayer = FeedPlayer;

@@ -4,12 +4,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
-/*
- * Unit tests for the Kotlin portion of this plugin.
- *
- * Run from the `example/android/` directory with `./gradlew testDebugUnitTest`,
- * or from an IDE with JUnit support.
- */
 internal class NativeFeedPlayerPluginTest {
     private fun config() = FeedPlayerConfigMessage(
         maxActivePlayers = 3,

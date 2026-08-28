@@ -96,6 +96,7 @@ void main() {
   late StreamController<PlaybackStateEvent> states;
   late StreamController<PositionEvent> positions;
   late StreamController<MetricsEvent> metrics;
+  late StreamController<VideoSizeEvent> videoSizes;
   late StreamController<ControllerLifecycleEvent> lifecycle;
   late MethodChannelFeedPlayer platform;
 
@@ -104,12 +105,14 @@ void main() {
     states = StreamController<PlaybackStateEvent>.broadcast();
     positions = StreamController<PositionEvent>.broadcast();
     metrics = StreamController<MetricsEvent>.broadcast();
+    videoSizes = StreamController<VideoSizeEvent>.broadcast();
     lifecycle = StreamController<ControllerLifecycleEvent>.broadcast();
     platform = MethodChannelFeedPlayer(
       hostApi: hostApi,
       playbackStateEventStream: states.stream,
       positionEventStream: positions.stream,
       metricsEventStream: metrics.stream,
+      videoSizeEventStream: videoSizes.stream,
       lifecycleEventStream: lifecycle.stream,
     );
   });
@@ -118,6 +121,7 @@ void main() {
     await states.close();
     await positions.close();
     await metrics.close();
+    await videoSizes.close();
     await lifecycle.close();
   });
 
@@ -269,6 +273,50 @@ void main() {
     expect(metric.droppedFrames, 5);
     expect(metric.firstFrameLatency, const Duration(milliseconds: 140));
     expect(metric.timestamp, DateTime.fromMillisecondsSinceEpoch(1234));
+  });
+
+  test('video size stream is filtered per controller', () async {
+    await platform.initialize(const FeedPlayerConfig());
+    final Future<VideoSize> next = platform.videoSizeStream(7).first;
+
+    videoSizes.add(
+      VideoSizeEvent(
+        controllerId: 99,
+        width: 640,
+        height: 360,
+        rotationDegrees: 0,
+      ),
+    );
+    videoSizes.add(
+      VideoSizeEvent(
+        controllerId: 7,
+        width: 1920,
+        height: 1080,
+        rotationDegrees: 0,
+      ),
+    );
+
+    expect(await next, const VideoSize(width: 1920, height: 1080));
+  });
+
+  test('late video size subscriber receives the latest value', () async {
+    await platform.initialize(const FeedPlayerConfig());
+    videoSizes.add(
+      VideoSizeEvent(
+        controllerId: 7,
+        width: 1920,
+        height: 1080,
+        rotationDegrees: 0,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final VideoSize size = await platform
+        .videoSizeStream(7)
+        .first
+        .timeout(const Duration(seconds: 1));
+
+    expect(size, const VideoSize(width: 1920, height: 1080));
   });
 
   test('lifecycle events become release events', () async {

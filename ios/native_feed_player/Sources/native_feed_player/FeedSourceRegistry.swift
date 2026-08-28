@@ -9,11 +9,7 @@ struct RegisteredSource {
   let headers: [String: String]
 }
 
-/// Ordered set of feed sources plus the window arithmetic over them.
-///
-/// Sources are keyed by id rather than list position, so appending a page
-/// cannot renumber existing entries or invalidate the preload window. Rank is
-/// only an ordering hint used to compute distance from the viewport.
+/// Ordered sources keyed by stable ID with preload-window operations.
 /// Which way the viewport is travelling through the feed.
 enum ScrollDirection {
   case unknown
@@ -26,9 +22,7 @@ final class FeedSourceRegistry {
 
   private(set) var visibleSourceId: String?
 
-  /// Inferred from successive viewport updates. Feeds are overwhelmingly
-  /// consumed in one direction, so the preload budget should follow travel
-  /// rather than spend half of itself behind the user.
+  /// Inferred direction used to bias the preload window.
   private(set) var direction: ScrollDirection = .unknown
 
   var count: Int { sourcesById.count }
@@ -82,7 +76,7 @@ final class FeedSourceRegistry {
     } else if target.rank < previousRank {
       direction = .backward
     }
-    // Re-selecting the same position tells us nothing new.
+    // Preserve direction when the rank is unchanged.
   }
 
   func source(id: String) -> RegisteredSource? {
@@ -104,15 +98,8 @@ final class FeedSourceRegistry {
     return abs(rank - visible)
   }
 
-  /// Sources that should be prepared, nearest first.
-  ///
-  /// `ahead` and `behind` are expressed relative to travel, not to rank: when
-  /// the user scrolls backwards they are swapped so the budget still lands in
-  /// front of the viewport.
-  ///
-  /// `scale` shrinks the window under sustained stress; 1.0 is the configured
-  /// size. Sources sharing a URI are collapsed to the nearest one so a feed
-  /// that repeats a clip does not prepare it twice.
+  /// Returns the nearest unique sources in the travel-relative preload window.
+  /// `scale` applies runtime window degradation.
   func preloadWindow(ahead: Int, behind: Int, scale: Double = 1.0) -> [RegisteredSource] {
     guard let visible = visibleRank() else {
       return []
@@ -132,8 +119,7 @@ final class FeedSourceRegistry {
       .sorted { lhs, rhs in
         let lhsDistance = abs(lhs.rank - visible)
         let rhsDistance = abs(rhs.rank - visible)
-        // Rank breaks ties so ordering is deterministic across dictionary
-        // iteration order.
+        // Use rank as a deterministic tie-breaker.
         return lhsDistance == rhsDistance
           ? lhs.rank < rhs.rank
           : lhsDistance < rhsDistance

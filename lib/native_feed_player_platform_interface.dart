@@ -10,21 +10,16 @@ import 'src/video_playback_state.dart';
 import 'src/video_size.dart';
 
 abstract class FeedPlayerPlatform extends PlatformInterface {
-  /// Constructs a FeedPlayerPlatform.
   FeedPlayerPlatform() : super(token: _token);
 
   static final Object _token = Object();
 
   static FeedPlayerPlatform _instance = MethodChannelFeedPlayer();
 
-  /// The default instance of [FeedPlayerPlatform] to use.
-  ///
-  /// Defaults to [MethodChannelFeedPlayer].
+  /// The active platform implementation.
   static FeedPlayerPlatform get instance => _instance;
 
-  /// Platform-specific implementations should set this with their own
-  /// platform-specific class that extends [FeedPlayerPlatform] when they
-  /// register themselves.
+  /// Registers the active platform implementation.
   static set instance(FeedPlayerPlatform instance) {
     PlatformInterface.verifyToken(instance, _token);
     _instance = instance;
@@ -35,11 +30,7 @@ abstract class FeedPlayerPlatform extends PlatformInterface {
   /// Replaces the registered feed.
   Future<void> setSources(List<FeedSource> sources);
 
-  /// Appends a page.
-  ///
-  /// [rankOffset] is the absolute feed position of the first appended source,
-  /// so existing sources keep their ranks and pagination cannot invalidate the
-  /// preload window.
+  /// Appends sources beginning at absolute [rankOffset].
   Future<void> appendSources(
     List<FeedSource> sources, {
     required int rankOffset,
@@ -80,8 +71,7 @@ abstract class FeedPlayerPlatform extends PlatformInterface {
 
   Stream<VideoMetrics> metricsStream(int controllerId);
 
-  /// Fires whenever native code releases a controller, including releases the
-  /// Dart side did not request.
+  /// Native controller release events.
   Stream<ControllerReleaseEvent> get releaseEvents;
 
   Future<void> setVisibleSource(String sourceId);
@@ -106,7 +96,3 @@ abstract class FeedPlayerPlatform extends PlatformInterface {
 
   Future<void> dispose();
 }
-
-/// Former name of [FeedPlayerPlatform].
-@Deprecated('Renamed to FeedPlayerPlatform. Will be removed in 0.2.0.')
-typedef NativeFeedPlayerPlatform = FeedPlayerPlatform;

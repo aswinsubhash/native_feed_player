@@ -1,12 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// On-disk store for fully downloaded media, with an LRU budget.
-///
-/// Entries are whole files rather than sparse byte ranges. Feed clips are
-/// short and played start to finish, so a per-file model gives the same hit
-/// rate as range bookkeeping for a fraction of the complexity and none of the
-/// partial-range correctness hazards.
+/// LRU disk cache for complete media files.
 final class MediaDiskCache {
   private struct Entry: Codable {
     let key: String
@@ -176,7 +171,7 @@ final class MediaDiskCache {
       entries = [:]
       return
     }
-    // Drop index rows whose file vanished (manual clear, OS cache purge).
+    // Discard index entries whose files are missing.
     entries = decoded.filter { fileManager.fileExists(atPath: fileURL(forKey: $0.key).path) }
   }
 

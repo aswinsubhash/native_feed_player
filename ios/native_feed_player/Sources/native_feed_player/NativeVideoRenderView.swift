@@ -6,15 +6,24 @@ final class NativeVideoRenderView: UIView {
     AVPlayerLayer.self
   }
 
-  /// Exposed so the manager can observe `isReadyForDisplay`, which is the
-  /// genuine first-frame signal for the metrics pipeline.
+  /// Typed backing layer used for display-readiness observation.
   var playerLayer: AVPlayerLayer {
-    // Safe: layerClass guarantees the backing layer type.
+    // layerClass fixes the backing layer type.
     layer as! AVPlayerLayer
   }
 
   func setPlayer(_ player: AVPlayer?) {
     playerLayer.player = player
-    playerLayer.videoGravity = .resizeAspectFill
+  }
+
+  func setFit(_ fit: String?) {
+    switch fit {
+    case "contain", "scaleDown":
+      playerLayer.videoGravity = .resizeAspect
+    case "fill":
+      playerLayer.videoGravity = .resize
+    default:
+      playerLayer.videoGravity = .resizeAspectFill
+    }
   }
 }

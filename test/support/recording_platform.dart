@@ -4,8 +4,7 @@ import 'package:native_feed_player/native_feed_player.dart';
 import 'package:native_feed_player/native_feed_player_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
-/// In-memory [FeedPlayerPlatform] that records calls and lets tests push
-/// events, so Dart behaviour can be verified without a device.
+/// In-memory [FeedPlayerPlatform] for unit tests.
 class RecordingFeedPlayerPlatform
     with MockPlatformInterfaceMixin
     implements FeedPlayerPlatform {
@@ -40,8 +39,6 @@ class RecordingFeedPlayerPlatform
       await c.close();
     }
   }
-
-  // MARK: - Test triggers
 
   void emitRelease({
     required int controllerId,
@@ -103,8 +100,6 @@ class RecordingFeedPlayerPlatform
         id,
         () => StreamController<PlaybackStatusUpdate>.broadcast(),
       );
-
-  // MARK: - FeedPlayerPlatform
 
   @override
   Stream<ControllerReleaseEvent> get releaseEvents => _releases.stream;

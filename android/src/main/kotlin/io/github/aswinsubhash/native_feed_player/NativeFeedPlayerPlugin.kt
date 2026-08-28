@@ -10,17 +10,11 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 import java.util.concurrent.atomic.AtomicInteger
 
-/** NativeFeedPlayerPlugin */
 class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPlayerHostApi {
     private companion object {
         private const val VIDEO_VIEW_TYPE = "native_feed_player/video_view"
 
-        /**
-         * Controller ids must stay unique for the life of the process, not the
-         * life of one engine attachment. Restarting the counter on detach lets
-         * a second engine (or a hot restart) mint ids that collide with handles
-         * Dart still holds.
-         */
+        /** Process-wide IDs prevent collisions after engine reattachment. */
         private val controllerIdSeed = AtomicInteger(0)
     }
 
@@ -34,11 +28,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private val videoSizeEvents = BufferedStreamHandler<VideoSizeEvent>()
     private val lifecycleEvents = BufferedStreamHandler<ControllerLifecycleEvent>()
 
-    /**
-     * Foreground tracking so playback can be paused when the app leaves the
-     * screen. Counting started activities is enough and avoids pulling in the
-     * lifecycle-process artifact for one signal.
-     */
+    /** Started-activity count used for foreground playback state. */
     private var startedActivityCount = 0
     private var activityCallbacks: Application.ActivityLifecycleCallbacks? = null
 

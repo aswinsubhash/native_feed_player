@@ -8,15 +8,12 @@ import 'feed_player_config.dart';
 import 'video_controller.dart';
 import 'video_size.dart';
 
-/// Renders native video output for a [FeedController].
-///
-/// The native surface fills its box, so [fit] is applied by sizing the surface
-/// against the reported [VideoSize] rather than by scaling pixels.
+/// Renders a [FeedController] into a platform view or Flutter texture.
 class NativeVideoView extends StatefulWidget {
   const NativeVideoView({
     required this.controller,
     this.renderMode = RenderMode.platformView,
-    this.fit = BoxFit.cover,
+    this.fit,
     this.placeholder,
     this.backgroundColor = const Color(0xFF000000),
     super.key,
@@ -24,16 +21,14 @@ class NativeVideoView extends StatefulWidget {
 
   final FeedController controller;
 
-  /// Must match the mode the player was initialized with. Pass
-  /// `player.config.renderMode` rather than hard-coding it.
+  /// Must match the player's configured [RenderMode].
   final RenderMode renderMode;
 
-  /// How the video is sized inside the widget. Feeds normally want
-  /// [BoxFit.cover]; [BoxFit.contain] letterboxes instead of cropping.
-  final BoxFit fit;
+  /// Overrides adaptive sizing. By default, portrait and square videos use
+  /// [BoxFit.cover], while landscape videos use [BoxFit.contain].
+  final BoxFit? fit;
 
-  /// Shown until the first frame is rendered, hiding the black flash between
-  /// items.
+  /// Displayed until the first frame is rendered.
   final Widget? placeholder;
 
   final Color backgroundColor;
@@ -53,6 +48,13 @@ class _NativeVideoViewState extends State<NativeVideoView> {
   bool _hasFirstFrame = false;
 
   bool get _usesTexture => widget.renderMode == RenderMode.texture;
+
+  BoxFit get _effectiveFit =>
+      widget.fit ??
+      (_videoSize.aspectRatio > 1 ? BoxFit.contain : BoxFit.cover);
+
+  bool get _hasQuarterTurn =>
+      _videoSize.rotationDegrees == 90 || _videoSize.rotationDegrees == 270;
 
   @override
   void initState() {
@@ -79,9 +81,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
       );
       return;
     }
-    // The platform view may not exist yet. Attaching is retried from
-    // _onPlatformViewCreated once it does, so the new controller is never left
-    // permanently unbound.
+    // Attach after the platform view is created.
     unawaited(_rebind(previous: oldWidget.controller));
   }
 
@@ -115,7 +115,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
             }
           })
           .catchError((_) {
-            // Controller released before a frame appeared; the placeholder stays.
+            // Preserve the placeholder after a pre-frame release.
           }),
     );
   }
@@ -189,7 +189,9 @@ class _NativeVideoViewState extends State<NativeVideoView> {
         );
       case TargetPlatform.iOS:
         return UiKitView(
+          key: ValueKey<BoxFit>(_effectiveFit),
           viewType: _viewType,
+          creationParams: <String, Object>{'fit': _effectiveFit.name},
           creationParamsCodec: const StandardMessageCodec(),
           onPlatformViewCreated: _onPlatformViewCreated,
         );
@@ -205,15 +207,16 @@ class _NativeVideoViewState extends State<NativeVideoView> {
   Widget build(BuildContext context) {
     Widget video = _buildOutput();
 
-    // Until the size is known there is nothing to fit against, so the surface
-    // just fills the box.
+    // Fill the bounds until dimensions are available.
     if (_videoSize.isKnown) {
       video = FittedBox(
-        fit: widget.fit,
+        fit: _effectiveFit,
         clipBehavior: Clip.hardEdge,
         child: SizedBox(
-          width: _videoSize.width.toDouble(),
-          height: _videoSize.height.toDouble(),
+          width: (_hasQuarterTurn ? _videoSize.height : _videoSize.width)
+              .toDouble(),
+          height: (_hasQuarterTurn ? _videoSize.width : _videoSize.height)
+              .toDouble(),
           child: video,
         ),
       );

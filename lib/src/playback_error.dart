@@ -1,9 +1,6 @@
 import 'messages.g.dart';
 
-/// A native playback failure with enough detail to act on.
-///
-/// Replaces the previous bare `error` state, which told callers something went
-/// wrong but never what or whether retrying was worthwhile.
+/// A native playback failure with recoverability and platform details.
 class PlaybackError {
   const PlaybackError({
     required this.code,
@@ -17,8 +14,7 @@ class PlaybackError {
   final String code;
   final String message;
 
-  /// Whether retrying the same source could reasonably succeed. Network
-  /// failures are recoverable; malformed media is not.
+  /// Whether retrying the source may succeed.
   final bool isRecoverable;
 
   /// Underlying platform error code, when one was available.

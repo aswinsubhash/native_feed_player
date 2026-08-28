@@ -21,17 +21,14 @@ class _MyAppState extends State<MyApp> {
     preloadBehind: 1,
   );
 
-  /// Positions around the visible one that get a controller eagerly, so a
-  /// swipe in either direction has a player ready.
+  /// Controller retention radius around the visible source.
   static const int _controllerWindow = 1;
 
   final FeedPlayer _player = FeedPlayer();
   final PageController _pageController = PageController();
   final Map<String, FeedController> _controllers = <String, FeedController>{};
 
-  /// Hosts that answer range requests, which the iOS byte-range cache needs.
-  ///
-  /// The `gtv-videos-bucket` samples these once used now return 403.
+  /// Sample sources with HTTP range support.
   final List<FeedSource> _sources = <FeedSource>[
     const FeedSource(
       id: 'bee',
@@ -47,8 +44,12 @@ class _MyAppState extends State<MyApp> {
       id: 'sintel',
       uri: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
     ),
-    // Same clip as 'bee' under a different id, which exercises the scheduler's
-    // duplicate-URI collapsing.
+    const FeedSource(
+      id: 'hotel-pool',
+      uri:
+          'https://res.cloudinary.com/demo/video/upload/c_fill,h_1920,w_1080,g_auto/hotel_pool.mp4',
+    ),
+    // Duplicate URI used to exercise source collapsing.
     const FeedSource(
       id: 'bee-again',
       uri:
@@ -115,7 +116,7 @@ class _MyAppState extends State<MyApp> {
     if (cached != null && !cached.isReleased) {
       return cached;
     }
-    // Native may have reclaimed the player; drop the dead handle and rebuild.
+    // Replace a controller released by the native scheduler.
     _controllers.remove(sourceId);
 
     final FeedController controller = await _player.controllerFor(sourceId);
@@ -144,8 +145,7 @@ class _MyAppState extends State<MyApp> {
   Future<void> _activate(int index) async {
     final int token = ++_activationToken;
     try {
-      // Publish the viewport first so the native scheduler ranks preloading
-      // and eviction around the right position.
+      // Update scheduler ranking before creating controllers.
       await _player.setVisibleSource(_sources[index].id);
 
       final Set<int> window = _windowIndexes(index);
@@ -172,7 +172,7 @@ class _MyAppState extends State<MyApp> {
         setState(() {});
       }
     } on ControllerReleasedError {
-      // The player was reclaimed mid-activation; the next swipe rebuilds it.
+      // Released during activation.
     } catch (error) {
       if (!mounted || token != _activationToken) {
         return;
@@ -228,7 +228,7 @@ class _MyAppState extends State<MyApp> {
         await controller.play();
       }
     } on ControllerReleasedError {
-      // Reclaimed between the tap and the command; ignore.
+      // Released before command dispatch.
     }
   }
 

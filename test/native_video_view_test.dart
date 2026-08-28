@@ -1,11 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_feed_player/native_feed_player.dart';
 
 import 'support/recording_platform.dart';
 
-/// Widget tests use texture mode because it exercises the same attach/detach
-/// bookkeeping without needing a live platform-view host.
 void main() {
   late RecordingFeedPlayerPlatform platform;
   late FeedPlayer player;
@@ -24,11 +23,12 @@ void main() {
     await platform.close();
   });
 
-  Future<Widget> wrap(FeedController controller) async {
+  Future<Widget> wrap(FeedController controller, {BoxFit? fit}) async {
     return MaterialApp(
       home: NativeVideoView(
         controller: controller,
         renderMode: RenderMode.texture,
+        fit: fit,
         placeholder: const Text('poster'),
       ),
     );
@@ -80,7 +80,6 @@ void main() {
       width: 1080,
       height: 1920,
     );
-    // One pump delivers the stream event, the next rebuilds with it.
     await tester.pump();
     await tester.pump();
 
@@ -89,6 +88,7 @@ void main() {
       findsOneWidget,
       reason: 'a known size switches the surface to fit-based sizing',
     );
+    expect(tester.widget<FittedBox>(find.byType(FittedBox)).fit, BoxFit.cover);
     final Iterable<SizedBox> sized = tester.widgetList<SizedBox>(
       find.byType(SizedBox),
     );
@@ -97,6 +97,71 @@ void main() {
       isTrue,
       reason: 'the surface is sized to the reported video dimensions',
     );
+  });
+
+  testWidgets('adaptive fit contains landscape videos', (
+    WidgetTester tester,
+  ) async {
+    final FeedController controller = await player.controllerFor('a');
+    await tester.pumpWidget(await wrap(controller));
+    await tester.pump();
+
+    platform.emitVideoSize(
+      controllerId: controller.controllerId,
+      width: 1920,
+      height: 1080,
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      tester.widget<FittedBox>(find.byType(FittedBox)).fit,
+      BoxFit.contain,
+    );
+  });
+
+  testWidgets('adaptive fit accounts for rotated portrait videos', (
+    WidgetTester tester,
+  ) async {
+    final FeedController controller = await player.controllerFor('a');
+    await tester.pumpWidget(await wrap(controller));
+    await tester.pump();
+
+    platform.emitVideoSize(
+      controllerId: controller.controllerId,
+      width: 1920,
+      height: 1080,
+      rotationDegrees: 90,
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(tester.widget<FittedBox>(find.byType(FittedBox)).fit, BoxFit.cover);
+    final Iterable<SizedBox> sized = tester.widgetList<SizedBox>(
+      find.byType(SizedBox),
+    );
+    expect(
+      sized.any((SizedBox box) => box.width == 1080 && box.height == 1920),
+      isTrue,
+    );
+  });
+
+  testWidgets('explicit fit overrides adaptive landscape sizing', (
+    WidgetTester tester,
+  ) async {
+    final FeedController controller = await player.controllerFor('a');
+    await tester.pumpWidget(await wrap(controller, fit: BoxFit.cover));
+    await tester.pump();
+
+    platform.emitVideoSize(
+      controllerId: controller.controllerId,
+      width: 1920,
+      height: 1080,
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(tester.widget<FittedBox>(find.byType(FittedBox)).fit, BoxFit.cover);
   });
 
   testWidgets('swapping controllers detaches the old texture', (
@@ -145,6 +210,38 @@ void main() {
     await tester.pump();
 
     expect(platform.attachedTextureControllerIds, isEmpty);
+  });
+
+  testWidgets('adaptive fit is forwarded to the iOS platform view', (
+    WidgetTester tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      final FeedController controller = await player.controllerFor('a');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NativeVideoView(
+            controller: controller,
+            renderMode: RenderMode.platformView,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      platform.emitVideoSize(
+        controllerId: controller.controllerId,
+        width: 1920,
+        height: 1080,
+      );
+      await tester.pump();
+      await tester.pump();
+
+      final UiKitView view = tester.widget<UiKitView>(find.byType(UiKitView));
+      expect(view.creationParams, <String, Object>{'fit': 'contain'});
+      expect(view.key, const ValueKey<BoxFit>(BoxFit.contain));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 
   testWidgets('platform-view mode does not request a texture', (

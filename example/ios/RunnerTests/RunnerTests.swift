@@ -2,10 +2,6 @@ import XCTest
 
 @testable import native_feed_player
 
-/// Swift-side unit tests for the plugin's scheduling and cache logic.
-///
-/// These mirror the Kotlin FeedSourceRegistryTest cases so both platforms are
-/// held to the same windowing contract.
 final class FeedSourceRegistryTests: XCTestCase {
   private func source(_ id: String, rank: Int, uri: String? = nil) -> RegisteredSource {
     RegisteredSource(
@@ -34,7 +30,6 @@ final class FeedSourceRegistryTests: XCTestCase {
     let registry = self.registry(count: 2, visible: "s1")
     registry.append([source("page2", rank: 2), source("page3", rank: 3)])
 
-    // Appending must not disturb the viewport or renumber earlier sources.
     XCTAssertEqual(registry.visibleSourceId, "s1")
     XCTAssertEqual(registry.visibleRank(), 1)
     XCTAssertEqual(registry.count, 4)
@@ -82,7 +77,6 @@ final class FeedSourceRegistryTests: XCTestCase {
 
     let ids = registry.preloadWindow(ahead: 2, behind: 1).map(\.id)
 
-    // Travelling backwards, so the larger budget lands on lower ranks.
     XCTAssertEqual(ids, ["s4", "s3", "s5", "s2"])
   }
 
@@ -98,7 +92,6 @@ final class FeedSourceRegistryTests: XCTestCase {
 
     let ids = registry.preloadWindow(ahead: 3, behind: 0).map(\.id)
 
-    // The nearer occurrence wins; the clip is not prepared twice.
     XCTAssertEqual(ids, ["a", "b"])
   }
 
@@ -162,8 +155,6 @@ final class CachingResourceLoaderTests: XCTestCase {
       return XCTFail("expected an intercepted URL")
     }
 
-    // AVFoundation only delegates schemes it does not understand, so the real
-    // scheme has to be hidden and then restored.
     XCTAssertEqual(intercepted.scheme, "nfpcache-https")
     XCTAssertEqual(
       CachingResourceLoader.originalURL(from: intercepted)?.absoluteString,
@@ -286,5 +277,55 @@ final class AVPlayerManagerSessionTests: XCTestCase {
     XCTAssertEqual(released.count, 1)
     XCTAssertEqual(released.first?.0, 1)
     XCTAssertEqual(released.first?.1, .disposed)
+  }
+
+  func testStaleRenderViewDetachKeepsReplacementAttached() throws {
+    let manager = AVPlayerManager(
+      onState: { _, _, _ in },
+      onReleased: { _, _ in },
+      onPosition: { _ in },
+      onMetrics: { _ in },
+      onVideoSize: { _ in }
+    )
+    manager.initialize(
+      config: FeedPlayerConfigMessage(
+        maxActivePlayers: 3,
+        preloadAhead: 2,
+        preloadBehind: 1,
+        maxConcurrentPreloads: 2,
+        positionUpdateIntervalMs: 200,
+        renderMode: .platformView,
+        cache: CachePolicyMessage(enabled: false, maxBytes: 0),
+        audio: AudioPolicyMessage(muted: true, volume: 1, handleAudioFocus: false)
+      )
+    )
+    manager.setSources([
+      RegisteredSource(id: "clip", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:])
+    ])
+    try manager.createController(controllerId: 1, sourceId: "clip", autoPlay: false, looping: false)
+    let oldView = NativeVideoRenderView()
+    let newView = NativeVideoRenderView()
+
+    manager.attach(controllerId: 1, renderView: oldView)
+    manager.attach(controllerId: 1, renderView: newView)
+    manager.detach(controllerId: 1, renderView: oldView)
+
+    XCTAssertNil(oldView.playerLayer.player)
+    XCTAssertTrue(newView.playerLayer.player === manager.player(for: 1))
+  }
+}
+
+final class NativeVideoRenderViewTests: XCTestCase {
+  func testFitMapsToPlayerLayerGravity() {
+    let view = NativeVideoRenderView()
+
+    view.setFit("cover")
+    XCTAssertEqual(view.playerLayer.videoGravity, .resizeAspectFill)
+
+    view.setFit("contain")
+    XCTAssertEqual(view.playerLayer.videoGravity, .resizeAspect)
+
+    view.setFit("fill")
+    XCTAssertEqual(view.playerLayer.videoGravity, .resize)
   }
 }

@@ -110,7 +110,7 @@ await player.initialize(
     preloadBehind: 1,
     maxConcurrentPreloads: 2,
     cache: CachePolicy(maxBytes: 256 * 1024 * 1024),
-    audio: AudioPolicy(muted: true),
+    audio: AudioPolicy(muted: false),
   ),
 );
 ```
@@ -124,7 +124,8 @@ await player.initialize(
 | `positionUpdateInterval` | `200 ms` | Position events are only emitted for controllers that render or play. |
 | `renderMode` | `platformView` | See [Rendering](#rendering). |
 | `cache.maxBytes` | `256 MB` | LRU. Conservative so it stays safe on low-storage devices. |
-| `audio.muted` | `true` | Feeds conventionally start silent and unmute on user intent. |
+| `audio.muted` | `false` | Set to `true` for feeds that should start silently. |
+| `audio.handleAudioFocus` | `true` | Requests appropriate platform audio focus while playback is audible. |
 
 Call `setVisibleSource` on scroll settle (or throttled during scroll) so the
 scheduler can infer direction and rank work correctly.
@@ -173,6 +174,10 @@ FeedPlayerConfig(renderMode: RenderMode.texture)
 ```dart
 NativeVideoView(controller: controller, renderMode: player.config.renderMode);
 ```
+
+Sizing is adaptive by default: portrait and square videos use `BoxFit.cover`,
+while landscape videos use `BoxFit.contain` so the complete frame stays centered.
+Pass `fit: BoxFit.cover` or `fit: BoxFit.contain` to override that decision.
 
 `platformView` is the default because it is the exercised path, **not** because
 it won a benchmark. Which mode is faster depends on GPU bandwidth, refresh rate,

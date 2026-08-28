@@ -2,13 +2,7 @@ package io.github.aswinsubhash.native_feed_player
 
 import androidx.media3.common.PlaybackException
 
-/**
- * Translates Media3 failures into the plugin's platform-independent codes.
- *
- * Callers previously received a bare `error` state with no way to tell a
- * transient network drop from permanently malformed media, so retry logic was
- * impossible to write.
- */
+/** Maps Media3 failures to platform-independent playback errors. */
 internal object PlaybackErrorMapper {
     fun map(exception: PlaybackException): PlaybackErrorMessage {
         val code = codeFor(exception.errorCode)
@@ -53,11 +47,7 @@ internal object PlaybackErrorMapper {
         else -> "playback_failed"
     }
 
-    /**
-     * Whether retrying the same source could plausibly succeed. Transport and
-     * live-window problems are worth retrying; malformed or unsupported media
-     * is not.
-     */
+    /** Whether retrying the same source may succeed. */
     private fun isRecoverable(errorCode: Int): Boolean = when (errorCode) {
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,

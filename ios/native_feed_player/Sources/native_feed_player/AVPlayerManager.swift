@@ -2,10 +2,7 @@ import AVFoundation
 import Foundation
 import UIKit
 
-/// AVPlayer lifecycle and event orchestration for native feed playback.
-///
-/// Controllers are addressed by id and bound to a `RegisteredSource`; feed
-/// position is only used to rank preload priority and eviction distance.
+/// Owns `AVPlayer` instances, preload scheduling, and eviction.
 final class AVPlayerManager {
   typealias StateCallback = (
     _ controllerId: Int, _ status: PlaybackStatusMessage, _ error: PlaybackErrorMessage?
@@ -15,7 +12,7 @@ final class AVPlayerManager {
   typealias MetricsCallback = (_ event: MetricsEvent) -> Void
   typealias VideoSizeCallback = (_ event: VideoSizeEvent) -> Void
 
-  /// Structured failure surfaced to Dart instead of a blanket `create_failed`.
+  /// Playback setup failure reported to Dart.
   struct PlaybackSetupError: LocalizedError {
     let code: String
     let message: String
@@ -42,11 +39,9 @@ final class AVPlayerManager {
     let sourceId: String
     let player: AVQueuePlayer
     let looping: Bool
-    /// Retained for gapless looping; AVPlayerLooper stops working if released.
+    /// Retained for the lifetime of gapless looping.
     var looper: AVPlayerLooper?
-    /// Value of `visibleGeneration` when this controller was created. Window
-    /// eviction ignores controllers created since the last visible-source
-    /// update, because they have not been measured against a current window.
+    /// Creation-time visibility generation used to defer eviction.
     let createdAtVisibleGeneration: Int
     var itemStatusObservation: NSKeyValueObservation?
     var timeControlObservation: NSKeyValueObservation?
@@ -82,8 +77,7 @@ final class AVPlayerManager {
   private var creationOrder: [Int] = []
   private var preparedItems: [String: PreparedItem] = [:]
   private var metricsByController: [Int: PlaybackMetrics] = [:]
-  /// AVQueuePlayer is required by AVPlayerLooper, which provides gapless
-  /// repeats; a plain AVPlayer can only seek back to zero, which shows a gap.
+  /// Reusable queue players required by `AVPlayerLooper`.
   private var pooledPlayers: [AVQueuePlayer] = []
   private var attachedRenderViews: [Int: NativeVideoRenderView] = [:]
 
@@ -92,9 +86,9 @@ final class AVPlayerManager {
   private var preloadBehind: Int = 1
   private var maxConcurrentPreloads: Int = 2
   private var positionInterval: TimeInterval = 0.2
-  private var muted: Bool = true
+  private var muted: Bool = false
   private var volume: Float = 1.0
-  private var handleAudioFocus: Bool = false
+  private var handleAudioFocus: Bool = true
 
   /// Controllers paused by backgrounding, to be resumed on return.
   private var autoPausedControllerIds = Set<Int>()
@@ -105,22 +99,17 @@ final class AVPlayerManager {
   private var preloadGeneration: Int = 0
   private var positionTimer: Timer?
 
-  /// Shrinks the preload window when the device cannot keep up.
-  ///
-  /// Preloading competes with playback for bandwidth and memory, so under
-  /// sustained rebuffering or memory pressure the cheapest correction is to
-  /// prepare fewer items rather than to keep thrashing.
+  /// Preload-window multiplier reduced under rebuffer or memory pressure.
   private var windowScale: Double = 1.0
   private var rebuffersSinceLastRecovery: Int = 0
 
-  /// Consecutive stalls tolerated before the window is halved.
+  /// Stalls before preload degradation.
   private static let rebuffersBeforeDegrade = 3
 
-  /// Floor for `windowScale`; below this preloading stops helping.
+  /// Minimum preload-window multiplier.
   private static let minWindowScale = 0.25
 
-  /// Ceiling on every AVPlayer kept alive across the active and pooled buckets
-  /// combined; capping each bucket alone lets their sum grow freely.
+  /// Maximum combined active and pooled player count.
   private var maxTotalPlayers: Int = 6
 
   private func totalLivePlayers() -> Int {
@@ -234,8 +223,7 @@ final class AVPlayerManager {
     )
 
     if looping {
-      // AVPlayerLooper cross-schedules the next cycle before the current one
-      // ends, so there is no seek gap between repeats.
+      // AVPlayerLooper schedules gapless repeats.
       managed.looper = AVPlayerLooper(player: player, templateItem: item)
       player.actionAtItemEnd = .advance
     } else {
@@ -258,9 +246,7 @@ final class AVPlayerManager {
       player.play()
     }
 
-    // Runs after registration and skips this generation's new controllers, so a
-    // controller requested ahead of setVisibleSource is never torn down by a
-    // window it has not been measured against yet.
+    // Apply eviction after controller registration.
     enforceVisibleWindowEviction()
     enforceTotalPlayerBudget(protectedControllerId: controllerId)
     schedulePreloadWindow()
@@ -292,7 +278,7 @@ final class AVPlayerManager {
       return
     }
     let clamped = min(max(Float(speed), 0.25), 4)
-    // Assigning rate also starts playback, so only apply it while playing.
+    // Defer rate changes until playback is active.
     if player.timeControlStatus == .playing {
       player.rate = clamped
     }
@@ -316,13 +302,7 @@ final class AVPlayerManager {
     }
   }
 
-  /**
-   Applies audio behaviour to current and future players.
-
-   The session category matters as much as the volume: `.ambient` respects the
-   ringer switch and mixes with other audio, which is what a muted feed should
-   do, while `.playback` is only appropriate once the user has opted into sound.
-   */
+  /// Applies audio policy to current and future players.
   func applyAudioPolicy(_ policy: AudioPolicyMessage) {
     muted = policy.muted
     volume = min(max(Float(policy.volume), 0), 1)
@@ -338,7 +318,7 @@ final class AVPlayerManager {
     let session = AVAudioSession.sharedInstance()
     do {
       if muted {
-        // Silent by design: never interrupt whatever the user is listening to.
+        // Preserve external audio while muted.
         try session.setCategory(.ambient, mode: .moviePlayback, options: [.mixWithOthers])
       } else if handleAudioFocus {
         try session.setCategory(.playback, mode: .moviePlayback)
@@ -351,7 +331,7 @@ final class AVPlayerManager {
       }
       try session.setActive(true, options: [])
     } catch {
-      // A failed session configuration must not take playback down with it.
+      // Audio-session failure does not stop playback.
     }
   }
 
@@ -375,8 +355,7 @@ final class AVPlayerManager {
     }
   }
 
-  /// Pauses anything playing when the app leaves the foreground and remembers
-  /// it, so returning restores exactly what was interrupted.
+  /// Pauses active players until the app returns to the foreground.
   private func onAppBackgrounded() {
     for (controllerId, managed) in controllers
     where managed.player.timeControlStatus == .playing {
@@ -417,6 +396,9 @@ final class AVPlayerManager {
   }
 
   func attach(controllerId: Int, renderView: NativeVideoRenderView) {
+    if let previous = attachedRenderViews[controllerId], previous !== renderView {
+      previous.setPlayer(nil)
+    }
     attachedRenderViews[controllerId] = renderView
     if let managed = controllers[controllerId] {
       bindRenderView(renderView, to: managed)
@@ -425,15 +407,21 @@ final class AVPlayerManager {
     }
   }
 
-  /// The live player for a controller, used to bind texture output.
+  /// Returns the player used for texture output.
   func player(for controllerId: Int) -> AVPlayer? {
     controllers[controllerId]?.player
   }
 
-  func detach(controllerId: Int) {
-    guard let renderView = attachedRenderViews.removeValue(forKey: controllerId) else {
+  func detach(controllerId: Int, renderView expected: NativeVideoRenderView? = nil) {
+    guard let renderView = attachedRenderViews[controllerId] else {
+      expected?.setPlayer(nil)
       return
     }
+    if let expected, renderView !== expected {
+      expected.setPlayer(nil)
+      return
+    }
+    attachedRenderViews.removeValue(forKey: controllerId)
     controllers[controllerId]?.readyForDisplayObservation?.invalidate()
     controllers[controllerId]?.readyForDisplayObservation = nil
     renderView.setPlayer(nil)
@@ -447,8 +435,7 @@ final class AVPlayerManager {
     enforceVisibleWindowEviction(forceAggressive: true)
   }
 
-  /// Halves the preload window after repeated stalls, down to a floor that
-  /// still keeps the immediate neighbour prepared.
+  /// Reduces the preload window after repeated stalls.
   private func noteRebuffer() {
     rebuffersSinceLastRecovery += 1
     guard rebuffersSinceLastRecovery >= AVPlayerManager.rebuffersBeforeDegrade else {
@@ -462,7 +449,7 @@ final class AVPlayerManager {
     }
   }
 
-  /// Restores the window one step at a time once playback settles.
+  /// Restores the preload window after stable playback.
   private func noteSteadyPlayback() {
     rebuffersSinceLastRecovery = 0
     guard windowScale < 1.0 else {
@@ -506,8 +493,7 @@ final class AVPlayerManager {
 
   // MARK: - Prebuffering
 
-  /// Builds player items for the nearby window so the next source can start
-  /// without waiting on a fresh asset load.
+  /// Prepares items in the current preload window.
   private func schedulePreloadWindow() {
     preloadGeneration += 1
     let generation = preloadGeneration
@@ -546,7 +532,7 @@ final class AVPlayerManager {
           return
         }
         let item = self.makePlayerItem(for: fresh)
-        // Buffer eagerly for the nearest item, more conservatively further out.
+        // Scale buffering by viewport distance.
         let distance = self.registry.distanceFromVisible(id: fresh.id) ?? self.preloadAhead
         item.preferredForwardBufferDuration = distance <= 1 ? 4 : 2
         self.preparedItems[fresh.id] = PreparedItem(
@@ -558,12 +544,7 @@ final class AVPlayerManager {
     }
   }
 
-  /// Primes the decode pipeline so `play()` starts without a visible hitch.
-  ///
-  /// `preroll(atRate:)` raises an Objective-C exception unless the player is
-  /// already `.readyToPlay`, which Swift cannot catch, so the status is checked
-  /// first. It also has to run on the player that will actually present the
-  /// item: prerolling a throwaway player warms state that is then discarded.
+  /// Prerolls a ready player before presentation.
   private func prerollIfReady(_ player: AVPlayer) {
     guard player.status == .readyToPlay else {
       return
@@ -580,12 +561,7 @@ final class AVPlayerManager {
     return prepared.item
   }
 
-  /// Builds a player item, routed through the disk cache when possible.
-  ///
-  /// HLS is deliberately excluded: AVFoundation resolves playlist and segment
-  /// URLs internally, so a resource-loader shim cannot cache segments the way
-  /// it can a single progressive file. HLS therefore plays straight from the
-  /// network with a tuned forward buffer.
+  /// Creates a cached progressive item or a network-backed HLS item.
   private func makePlayerItem(for source: RegisteredSource) -> AVPlayerItem {
     guard let url = URL(string: source.uri) else {
       return AVPlayerItem(asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")))
@@ -601,8 +577,7 @@ final class AVPlayerManager {
     } else {
       var options: [String: Any] = [:]
       if !source.headers.isEmpty {
-        // Undocumented but long-standing key; the only way to attach headers to
-        // a remote AVURLAsset without going through the resource loader.
+        // AVURLAsset option for per-source HTTP headers.
         options["AVURLAssetHTTPHeaderFieldsKey"] = source.headers
       }
       asset = AVURLAsset(url: url, options: options)
@@ -623,7 +598,7 @@ final class AVPlayerManager {
     case .progressive:
       return true
     case .auto:
-      // Playlist extensions are the only reliable signal without a probe.
+      // Infer HLS from playlist extensions.
       let lowered = source.uri.lowercased()
       return !lowered.contains(".m3u8") && !lowered.contains(".mpd")
     }
@@ -658,7 +633,7 @@ final class AVPlayerManager {
         isComplete: false
       )
     }
-    // Entries are whole files, so anything present is complete.
+    // Whole-file cache entries are complete.
     let bytes = MediaDiskCache.shared.cachedBytes(for: uri)
     return CacheStatusMessage(
       sourceId: sourceId,
@@ -711,8 +686,7 @@ final class AVPlayerManager {
     }
   }
 
-  /// Trims the combined player count back under `maxTotalPlayers`, draining the
-  /// stateless pool before touching live controllers.
+  /// Enforces the player budget by releasing pooled players first.
   private func enforceTotalPlayerBudget(protectedControllerId: Int? = nil) {
     while totalLivePlayers() > maxTotalPlayers, !pooledPlayers.isEmpty {
       _ = pooledPlayers.popLast()
@@ -746,8 +720,7 @@ final class AVPlayerManager {
     }
   }
 
-  /// Picks an eviction victim, never choosing the source a controller is about
-  /// to be created for.
+  /// Selects the furthest controller outside `protectedSourceId`.
   private func evictionCandidateId(protectedSourceId: String?) -> Int? {
     let eligible = creationOrder.filter { controllers[$0]?.sourceId != protectedSourceId }
     if let farthest = eligible.max(by: {
@@ -786,8 +759,7 @@ final class AVPlayerManager {
     managed.presentationSizeObservation?.invalidate()
     autoPausedControllerIds.remove(controllerId)
     pendingRateByController.removeValue(forKey: controllerId)
-    // Disable before releasing, otherwise the looper keeps re-queuing items on
-    // a player that is about to be recycled.
+    // Stop the looper before recycling its player.
     managed.looper?.disableLooping()
     managed.looper = nil
     attachedRenderViews.removeValue(forKey: controllerId)?.setPlayer(nil)
@@ -808,9 +780,7 @@ final class AVPlayerManager {
   ) {
     renderView.setPlayer(managed.player)
 
-    // isReadyForDisplay is the genuine first-frame signal. Observing it keeps
-    // the iOS first-frame metric comparable with Android's onRenderedFirstFrame
-    // rather than measuring the earlier "started playing" transition.
+    // Match Android's first-frame metric at display readiness.
     managed.readyForDisplayObservation?.invalidate()
     managed.readyForDisplayObservation = renderView.playerLayer.observe(
       \.isReadyForDisplay,
@@ -895,8 +865,7 @@ final class AVPlayerManager {
           metrics.hasBeenReady = true
           self.metricsByController[managed.id] = metrics
         }
-        // Rate can only be set while playing, so a speed requested earlier is
-        // applied at the first opportunity.
+        // Apply deferred playback speed after playback starts.
         if let rate = self.pendingRateByController[managed.id], player.rate != rate {
           player.rate = rate
         }
@@ -919,8 +888,7 @@ final class AVPlayerManager {
       guard size.width > 0, size.height > 0 else {
         return
       }
-      // AVFoundation reports the display size with orientation already
-      // applied, so no residual rotation is left for the renderer.
+      // AVFoundation reports display-oriented dimensions.
       self?.onVideoSize(
         VideoSizeEvent(
           controllerId: Int64(managed.id),
@@ -931,8 +899,7 @@ final class AVPlayerManager {
       )
     }
 
-    // Looping is handled by AVPlayerLooper, which recycles the item behind the
-    // scenes; only non-looping playback has a meaningful end.
+    // AVPlayerLooper handles item completion for looping playback.
     guard !managed.looping else {
       return
     }
@@ -977,8 +944,7 @@ final class AVPlayerManager {
 
   private func emitPositions() {
     for (controllerId, managed) in controllers {
-      // Offscreen, idle players do not need per-tick position traffic. A
-      // controller is interesting only if it renders somewhere or is playing.
+      // Skip position updates for idle offscreen players.
       let isRendering = attachedRenderViews[controllerId] != nil
       let isPlaying = managed.player.timeControlStatus == .playing
       guard isRendering || isPlaying else {
@@ -1037,8 +1003,7 @@ final class AVPlayerManager {
     )
   }
 
-  /// Access-log events report per-interval counts, so they are summed into a
-  /// lifetime total to match Android's accumulated dropped-frame counter.
+  /// Accumulates access-log dropped frames into a lifetime total.
   private func updateDroppedFrames(controllerId: Int, item: AVPlayerItem?) {
     guard let item,
       var metrics = metricsByController[controllerId],

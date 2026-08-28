@@ -9,12 +9,10 @@ import 'video_metrics.dart';
 import 'video_playback_state.dart';
 import 'video_size.dart';
 
-/// Handle for controlling the native player bound to one [FeedSource].
+/// A handle to the native player for one [FeedSource].
 ///
-/// A controller stays usable only while its native player is alive. The native
-/// scheduler may reclaim a player at any time (window eviction, memory
-/// pressure), so commands issued afterwards throw [ControllerReleasedError]
-/// instead of silently doing nothing.
+/// The native scheduler may release the player at any time. Commands issued
+/// after release throw [ControllerReleasedError].
 class FeedController {
   FeedController({
     required this.controllerId,
@@ -36,7 +34,7 @@ class FeedController {
 
   ControllerReleaseReason? _releaseReason;
 
-  /// Whether the native player backing this controller is gone.
+  /// Whether the native player has been released.
   bool get isReleased => _releaseReason != null;
 
   /// Why the controller was released, or `null` while it is still alive.
@@ -91,14 +89,11 @@ class FeedController {
     return _platform.setLooping(controllerId, looping);
   }
 
-  /// Emits whenever the decoded video dimensions become known or change.
+  /// Emits the latest decoded dimensions on listen, then any later changes.
   Stream<VideoSize> get videoSizeStream =>
       _platform.videoSizeStream(controllerId);
 
-  /// Completes once the first frame has actually been rendered.
-  ///
-  /// Useful for dismissing a poster at the exact moment video appears rather
-  /// than when playback merely starts.
+  /// Completes when the first frame is rendered.
   Future<Duration> get firstFrameRendered {
     return metricsStream
         .map((VideoMetrics metrics) => metrics.firstFrameLatency)
@@ -116,10 +111,7 @@ class FeedController {
     await _platform.disposeController(controllerId);
   }
 
-  /// Marks this controller dead without issuing a native dispose call.
-  ///
-  /// Called by the owning player when native code reports that it reclaimed
-  /// the player on its own.
+  /// Marks a controller released by the native scheduler.
   @internal
   void markReleased(ControllerReleaseReason reason) {
     if (isReleased) {
@@ -139,10 +131,7 @@ class FeedController {
     }
   }
 
-  /// Platform implementation backing this controller.
-  ///
-  /// Exposed so widgets in this package bind to the same (possibly injected)
-  /// platform as the controller rather than the global singleton.
+  /// Platform implementation used by this controller and package widgets.
   @internal
   FeedPlayerPlatform get platform => _platform;
 
@@ -151,7 +140,3 @@ class FeedController {
       'FeedController(id: $controllerId, source: $sourceId, '
       'released: $isReleased)';
 }
-
-/// Former name of [FeedController].
-@Deprecated('Renamed to FeedController. Will be removed in 0.2.0.')
-typedef VideoController = FeedController;

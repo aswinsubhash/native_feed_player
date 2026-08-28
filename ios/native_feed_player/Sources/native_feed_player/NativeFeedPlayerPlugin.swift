@@ -2,12 +2,7 @@ import Flutter
 import Foundation
 import UIKit
 
-/// Holds the Pigeon sink for one event channel and buffers events emitted
-/// before Dart subscribes.
-///
-/// Native playback starts reporting state during `createController`, which runs
-/// before the caller has had a chance to listen to that controller's stream, so
-/// without a small buffer the first transition is silently lost.
+/// Buffers events until the Dart event stream attaches.
 final class BufferedEventSink<T> {
   private let maxBuffered: Int
   private var pending: [T] = []
@@ -47,8 +42,7 @@ final class BufferedEventSink<T> {
   }
 }
 
-/// Pigeon generates a distinct handler class per event channel, so each one
-/// needs a concrete adapter that forwards its sink into a shared holder.
+/// Adapts a Pigeon event channel to `BufferedEventSink`.
 private final class PlaybackStateStreamAdapter: PlaybackStateEventsStreamHandler {
   private let holder: BufferedEventSink<PlaybackStateEvent>
 
@@ -135,9 +129,7 @@ private final class LifecycleStreamAdapter: LifecycleEventsStreamHandler {
 public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPlayerHostApi {
   private static let videoViewType = "native_feed_player/video_view"
 
-  /// Controller ids must stay unique for the life of the process, not the life
-  /// of one engine attachment, so a re-attaching engine cannot mint ids that
-  /// collide with handles Dart still holds.
+  /// Process-wide ID seed retained across engine reattachment.
   private static var controllerIdSeed = 0
 
   private let stateEvents = BufferedEventSink<PlaybackStateEvent>()
@@ -473,7 +465,7 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
       return
     }
     if let controllerId = attachedControllerByViewId.removeValue(forKey: viewId) {
-      manager?.detach(controllerId: controllerId)
+      manager?.detach(controllerId: controllerId, renderView: view.renderView)
     }
     renderViewPool.release(view.renderView)
   }
