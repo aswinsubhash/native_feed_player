@@ -2,14 +2,7 @@ package io.github.aswinsubhash.native_feed_player
 
 import java.util.ArrayDeque
 
-/**
- * Holds the Pigeon sink for one event channel and buffers events emitted
- * before Dart subscribes.
- *
- * Native playback starts reporting state during `createController`, which runs
- * before the caller has had a chance to listen to that controller's stream, so
- * without a small buffer the first transition is silently lost.
- */
+/** Buffers events until the Dart event stream attaches. */
 internal class BufferedStreamHandler<T>(private val maxBuffered: Int = 64) {
     private val pending = ArrayDeque<T>()
     private var sink: PigeonEventSink<T>? = null
@@ -26,6 +19,10 @@ internal class BufferedStreamHandler<T>(private val maxBuffered: Int = 64) {
         pending.clear()
     }
 
+    fun clearPending() {
+        pending.clear()
+    }
+
     fun emit(event: T) {
         val target = sink
         if (target != null) {
@@ -39,10 +36,7 @@ internal class BufferedStreamHandler<T>(private val maxBuffered: Int = 64) {
     }
 }
 
-/**
- * Pigeon generates a distinct abstract handler per event channel, so each one
- * needs a concrete adapter that forwards its sink into a shared holder.
- */
+/** Adapts a Pigeon event channel to [BufferedStreamHandler]. */
 internal class PlaybackStateStreamAdapter(
     private val holder: BufferedStreamHandler<PlaybackStateEvent>
 ) : PlaybackStateEventsStreamHandler() {

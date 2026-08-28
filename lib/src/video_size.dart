@@ -1,9 +1,6 @@
 import 'messages.g.dart';
 
-/// Natural dimensions of the decoded video.
-///
-/// Both platforms report a display-oriented size, so [rotationDegrees] is
-/// normally `0`; it exists for renderers that receive unrotated frames.
+/// Decoded video dimensions before [rotationDegrees] is applied.
 class VideoSize {
   const VideoSize({
     required this.width,

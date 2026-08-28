@@ -1,11 +1,6 @@
 import Foundation
 
-/// Deployment-target-safe FileHandle helpers.
-///
-/// The throwing FileHandle API landed in iOS 13.4, but Flutter's podhelper
-/// pins every pod target to the Flutter minimum (13.0), so the plugin cannot
-/// simply raise its own floor. These wrappers use the throwing API where it
-/// exists and fall back to the legacy calls below it.
+/// `FileHandle` wrappers with iOS 13.0 through 13.3 fallbacks.
 extension FileHandle {
   func readCompat(upToCount count: Int) throws -> Data? {
     guard count > 0 else {

@@ -2,13 +2,7 @@ import AVFoundation
 import Flutter
 import Foundation
 
-/// Publishes AVPlayer frames into a Flutter texture.
-///
-/// Platform views composite a native view into the Flutter scene, which costs a
-/// synchronisation step per frame. Copying frames into a texture lets the
-/// Flutter renderer draw the video like any other layer, which is usually
-/// cheaper while scrolling. Both paths are kept so the choice can be measured
-/// rather than assumed.
+/// Publishes `AVPlayer` frames to a Flutter texture.
 final class VideoOutputTexture: NSObject, FlutterTexture {
   private let output: AVPlayerItemVideoOutput
   private weak var player: AVPlayer?
@@ -16,15 +10,15 @@ final class VideoOutputTexture: NSObject, FlutterTexture {
   private var latestBuffer: CVPixelBuffer?
   private let bufferLock = NSLock()
 
-  /// Set once the texture is registered, so frame notifications can be routed.
+  /// Flutter texture identifier assigned after registration.
   var textureId: Int64 = 0
   var onFrameAvailable: ((Int64) -> Void)?
 
   init(player: AVPlayer) {
-    // BGRA is what the Flutter engine expects to upload without conversion.
+    // Flutter uploads BGRA without conversion.
     output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
       kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-      kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+      kCVPixelBufferIOSurfacePropertiesKey as String: [String: String](),
     ])
     super.init()
     attach(to: player)
@@ -54,8 +48,7 @@ final class VideoOutputTexture: NSObject, FlutterTexture {
   }
 
   @objc private func onDisplayLink(_ link: CADisplayLink) {
-    // targetTimestamp is when this frame will actually be shown, which is the
-    // time the pixel buffer should correspond to.
+    // Select the frame for the display link's presentation time.
     let itemTime = output.itemTime(forHostTime: link.targetTimestamp)
     guard output.hasNewPixelBuffer(forItemTime: itemTime),
       let buffer = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil)

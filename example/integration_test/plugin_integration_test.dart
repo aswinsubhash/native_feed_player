@@ -1,8 +1,4 @@
-// Integration tests for native_feed_player.
-//
-// These run in a full Flutter application so they exercise the real native
-// host, unlike the Dart unit tests. They also emit structured benchmark lines
-// consumed by tool/benchmark_report.dart.
+// Native integration tests and benchmark output for tool/benchmark_report.dart.
 
 import 'dart:async';
 import 'dart:convert';
@@ -74,8 +70,7 @@ class _BenchmarkCollector {
   }
 }
 
-// Hosts that answer range requests, which the iOS byte-range cache needs. The
-// gtv-videos-bucket samples these once used now return 403.
+// Sample sources with HTTP range support.
 const String _goodUriA =
     'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4';
 const String _goodUriB =
@@ -120,7 +115,6 @@ void main() {
     ]);
     await tester.pump(const Duration(milliseconds: 200));
 
-    // Pagination must not disturb an already-live controller.
     expect(first.isReleased, isFalse);
     expect(player.sources, hasLength(5));
 
@@ -149,7 +143,6 @@ void main() {
         autoPlay: true,
       );
       collector.trackController(controller);
-      // Every controller handed out must be live at that moment.
       expect(controller.isReleased, isFalse);
       await tester.pump(const Duration(milliseconds: 120));
     }
@@ -157,7 +150,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await collector.closeAndEmit();
 
-    // Eviction must never leave a stale handle in the player's cache.
     for (final FeedController controller in player.activeControllers) {
       expect(controller.isReleased, isFalse);
     }
@@ -183,7 +175,6 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump(const Duration(milliseconds: 300));
 
-    // Backgrounding must not have destroyed the player.
     expect(controller.isReleased, isFalse);
     await controller.play();
 

@@ -183,7 +183,7 @@ void main() {
       final FeedPlayerConfig config = platform.initializedWith!;
       expect(config.maxActivePlayers, 3);
       expect(config.preloadAhead, greaterThan(config.preloadBehind));
-      expect(config.audio.muted, isTrue);
+      expect(config.audio.muted, isFalse);
       expect(config.cache.enabled, isTrue);
       expect(config.cache.maxBytes, 256 * 1024 * 1024);
     });
@@ -278,15 +278,26 @@ void main() {
     });
 
     test('setMuted updates the retained audio policy', () async {
-      expect(player.config.audio.muted, isTrue);
-
-      await player.setMuted(false);
-
-      expect(platform.audioPolicies.single.muted, isFalse);
       expect(player.config.audio.muted, isFalse);
-      // Other config must survive the targeted change.
+
+      await player.setMuted(true);
+
+      expect(platform.audioPolicies.single.muted, isTrue);
+      expect(player.config.audio.muted, isTrue);
       expect(player.config.maxActivePlayers, 3);
       expect(player.config.cache.maxBytes, 256 * 1024 * 1024);
+    });
+
+    test('initialize replaces the previous session', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController controller = await player.controllerFor('a');
+
+      await player.initialize();
+
+      expect(controller.isReleased, isTrue);
+      expect(controller.releaseReason, ControllerReleaseReason.disposed);
+      expect(player.sources, isEmpty);
+      expect(player.activeControllers, isEmpty);
     });
 
     test('uninitialized use is rejected', () {

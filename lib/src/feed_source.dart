@@ -8,16 +8,11 @@ enum FeedMediaKind {
   /// A single downloadable file (mp4/mov). Fully cacheable on both platforms.
   progressive,
 
-  /// HTTP Live Streaming. Adaptive, but byte-level disk caching is not
-  /// available on iOS; see the caching notes in the README.
+  /// HTTP Live Streaming. iOS does not provide byte-level disk caching.
   hls,
 }
 
-/// One item in the feed.
-///
-/// [id] is owned by the caller and must stay stable for the life of the item.
-/// Positions are used only to rank preload priority, so appending a page never
-/// invalidates existing sources.
+/// A media source identified by a caller-defined stable [id].
 class FeedSource {
   const FeedSource({
     required this.id,

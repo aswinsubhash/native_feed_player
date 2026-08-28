@@ -12,12 +12,9 @@ import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
 
 /**
- * Process-wide disk cache for feed media.
+ * Process-wide media cache.
  *
- * [SimpleCache] takes an exclusive lock on its directory, so a second instance
- * over the same folder throws. The cache is therefore a singleton keyed by
- * nothing but the process, and reconfiguring it tears the previous one down
- * first.
+ * [SimpleCache] exclusively locks its directory, so only one instance may exist.
  */
 internal object MediaCache {
     private const val CACHE_DIRECTORY = "native_feed_player"
@@ -51,20 +48,14 @@ internal object MediaCache {
     @Synchronized
     fun isEnabled(): Boolean = cache != null
 
-    /**
-     * The live cache, for components that write into it directly (the preload
-     * manager caches distant items to disk rather than into memory).
-     */
+    /** Returns the active cache instance. */
     @Synchronized
     fun activeCache(): SimpleCache? = cache
 
     @Synchronized
     fun usageBytes(): Long = cache?.cacheSpace ?: 0L
 
-    /**
-     * Bytes held for [uri]. Media3 keys spans by the cache key, which defaults
-     * to the URI string.
-     */
+    /** Cached bytes for [uri]. */
     @Synchronized
     fun cachedBytes(uri: String): Long {
         val activeCache = cache ?: return 0L
@@ -107,15 +98,7 @@ internal object MediaCache {
         configuredMaxBytes = 0
     }
 
-    /**
-     * Builds the data source chain shared by every player.
-     *
-     * Headers vary per source but ExoPlayer factories are static, so a
-     * [ResolvingDataSource] injects them per request by looking the URI up in
-     * the registry. That keeps a single factory instance, which
-     * DefaultPreloadManager requires in order to share components with the
-     * players it builds.
-     */
+    /** Builds the shared cache and per-URI header data source chain. */
     @Synchronized
     fun createDataSourceFactory(
         headerLookup: (uri: String) -> Map<String, String>
@@ -135,7 +118,7 @@ internal object MediaCache {
         return CacheDataSource.Factory()
             .setCache(activeCache)
             .setUpstreamDataSourceFactory(resolving)
-            // Reads stay served from disk even if the network fails mid-stream.
+            // Preserve cached reads after upstream failures.
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 }

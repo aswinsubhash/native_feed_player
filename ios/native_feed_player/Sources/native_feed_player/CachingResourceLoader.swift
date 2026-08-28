@@ -1,17 +1,9 @@
 import AVFoundation
 import Foundation
 
-/// Serves `AVAssetResourceLoader` requests for progressive media while writing
-/// the same bytes to disk.
+/// Loads and caches progressive media through a custom URL scheme.
 ///
-/// AVFoundation only hands requests to a delegate when the URL uses a scheme it
-/// does not understand, so remote URLs are rewritten with a private scheme and
-/// restored before hitting the network.
-///
-/// One sequential download per asset backs every request. Feed clips are played
-/// front to back, so a single forward stream satisfies playback and produces a
-/// complete cache entry at the same time. A seek past the downloaded prefix
-/// waits for the stream to reach it rather than opening a second connection.
+/// Concurrent requests for one URI share a sequential download.
 final class CachingResourceLoader: NSObject {
   static let scheme = "nfpcache"
 
@@ -96,7 +88,7 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
     }
     let uri = originalURL.absoluteString
 
-    // Fully cached: answer straight from disk, no network at all.
+    // Serve complete entries from disk.
     if let cached = MediaDiskCache.shared.cachedFile(for: uri) {
       serveFromFile(loadingRequest, cached: cached)
       return true
@@ -187,7 +179,7 @@ extension CachingResourceLoader {
     return download
   }
 
-  /// Answers whatever the downloaded prefix can already satisfy.
+  /// Serves pending requests from downloaded bytes.
   fileprivate func servePending(_ download: Download) {
     var stillPending: [AVAssetResourceLoadingRequest] = []
 
@@ -197,7 +189,7 @@ extension CachingResourceLoader {
       }
 
       if let info = request.contentInformationRequest {
-        // Content info needs the response headers, which arrive first.
+        // Wait for response headers before serving content metadata.
         guard download.contentLength > 0 || download.finished else {
           stillPending.append(request)
           continue
@@ -301,8 +293,7 @@ extension CachingResourceLoader: URLSessionDataDelegate {
       self.servePending(download)
       self.downloadsByUri.removeValue(forKey: download.uri)
 
-      // Only a complete, error-free body is worth caching; a truncated file
-      // would serve corrupt media on the next play.
+      // Cache only complete response bodies.
       let complete = error == nil
         && download.bytesWritten > 0
         && (download.contentLength == 0 || download.bytesWritten >= download.contentLength)

@@ -5,19 +5,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Guards the trim-memory level mapping.
- *
- * The Android trim levels are not ordered by severity, so comparing them with
- * `>=` misclassifies TRIM_MEMORY_UI_HIDDEN (20) as more severe than
- * TRIM_MEMORY_RUNNING_CRITICAL (15) and tears down the whole player pool every
- * time the app is backgrounded. These tests pin the intended classification
- * without needing a real ExoPlayer.
- */
+/** Verifies explicit classification of non-severity-ordered trim levels. */
 internal class TrimMemoryClassificationTest {
     private enum class Pressure { NONE, MODERATE, CRITICAL }
 
-    /** Mirrors ExoPlayerManager.onTrimMemory's `when` arms. */
     private fun classify(level: Int): Pressure = when (level) {
         ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
         ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> Pressure.CRITICAL
@@ -59,7 +50,6 @@ internal class TrimMemoryClassificationTest {
 
     @Test
     fun uiHiddenSortsAboveCritical_soOrderedComparisonWouldBeWrong() {
-        // Documents why `level >= TRIM_MEMORY_RUNNING_CRITICAL` is unsafe.
         assertTrue(
             ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN >
                 ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
@@ -67,10 +57,7 @@ internal class TrimMemoryClassificationTest {
     }
 }
 
-/**
- * Guards the window-eviction rule that a controller is only judged against a
- * visible index the app has actually published.
- */
+/** Verifies visibility-generation eviction rules. */
 internal class VisibleWindowEvictionRuleTest {
     private data class Controller(val index: Int, val createdAtGeneration: Long)
 
@@ -94,9 +81,6 @@ internal class VisibleWindowEvictionRuleTest {
 
     @Test
     fun controllerCreatedBeforeVisibleIndexUpdate_isNotEvicted() {
-        // Reproduces the original bug: app prepares {0,1,2} for an upcoming
-        // swipe to index 1 while native visibleIndex is still 0 and radius is
-        // 1, so index 2 used to be destroyed the instant it was created.
         val controllers = mapOf(
             1 to Controller(index = 0, createdAtGeneration = 5),
             2 to Controller(index = 1, createdAtGeneration = 5),

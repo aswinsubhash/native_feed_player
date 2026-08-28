@@ -12,29 +12,16 @@ import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
 import kotlin.math.abs
 
 /**
- * Wraps Media3's [DefaultPreloadManager].
+ * MediaSource-level preloading for nearby feed items.
  *
- * The previous approach kept a fully built ExoPlayer alive for every upcoming
- * item, which is by far the most expensive way to preload. The preload manager
- * works at the MediaSource level instead, so nearby items cost a prepared
- * source rather than a whole player.
- *
- * Players must be built from the same builder so they share the load control,
- * bandwidth meter, track selector, and playback looper; a preloaded source is
- * only valid on a player from that builder.
+ * Players and preloaded sources must share the same builder.
  */
 @OptIn(UnstableApi::class)
 internal class FeedPreloadManager(
     context: Context,
     headerLookup: (uri: String) -> Map<String, String>
 ) {
-    /**
-     * How much of an item to preload, by distance from the viewport.
-     *
-     * The immediate neighbour is buffered into memory so promotion is instant.
-     * Anything further out is only cached to disk: it costs no heap, and when
-     * the user reaches it the bytes are already local.
-     */
+    /** Selects memory or disk preloading by viewport distance. */
     private inner class DistanceBasedStatusControl :
         TargetPreloadStatusControl<Int, DefaultPreloadManager.PreloadStatus> {
         override fun getTargetPreloadStatus(rankingData: Int): DefaultPreloadManager.PreloadStatus {
@@ -92,12 +79,7 @@ internal class FeedPreloadManager(
         maxPreloadDistance = distance.coerceAtLeast(1)
     }
 
-    /**
-     * Syncs the manager with the current window.
-     *
-     * Ranks come from the registry, so a repeated URI resolves to one entry and
-     * pagination never renumbers what is already added.
-     */
+    /** Synchronizes the nearest unique sources with the preload window. */
     fun sync(window: List<RegisteredSource>, visibleRank: Int) {
         currentRank = visibleRank
 
@@ -122,10 +104,7 @@ internal class FeedPreloadManager(
         delegate.invalidate()
     }
 
-    /**
-     * Returns a preloaded source when one exists, so playback starts from
-     * already-buffered media instead of re-preparing from scratch.
-     */
+    /** Returns the preloaded source for [source], if available. */
     fun mediaSourceFor(source: RegisteredSource): MediaSource? {
         val item = addedItemsByUri[source.uri] ?: return null
         return delegate.getMediaSource(item)
@@ -136,10 +115,7 @@ internal class FeedPreloadManager(
         addedItemsByUri.clear()
     }
 
-    /**
-     * Must be released before the players built from it, because they share
-     * components.
-     */
+    /** Releases shared preload components. */
     fun release() {
         delegate.release()
         addedItemsByUri.clear()

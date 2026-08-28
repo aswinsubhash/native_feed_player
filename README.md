@@ -75,6 +75,10 @@ they fall outside the active window or memory gets tight, so a controller can
 die without you asking. This is the single most important thing to understand
 about the API.
 
+Only one native playback session is active per Flutter engine. Initializing a
+new `FeedPlayer` releases controllers and outputs from the previous session,
+including after a Flutter hot restart.
+
 Controllers therefore fail loudly rather than silently:
 
 ```dart
@@ -106,7 +110,7 @@ await player.initialize(
     preloadBehind: 1,
     maxConcurrentPreloads: 2,
     cache: CachePolicy(maxBytes: 256 * 1024 * 1024),
-    audio: AudioPolicy(muted: true),
+    audio: AudioPolicy(muted: false),
   ),
 );
 ```
@@ -120,7 +124,8 @@ await player.initialize(
 | `positionUpdateInterval` | `200 ms` | Position events are only emitted for controllers that render or play. |
 | `renderMode` | `platformView` | See [Rendering](#rendering). |
 | `cache.maxBytes` | `256 MB` | LRU. Conservative so it stays safe on low-storage devices. |
-| `audio.muted` | `true` | Feeds conventionally start silent and unmute on user intent. |
+| `audio.muted` | `false` | Set to `true` for feeds that should start silently. |
+| `audio.handleAudioFocus` | `true` | Requests appropriate platform audio focus while playback is audible. |
 
 Call `setVisibleSource` on scroll settle (or throttled during scroll) so the
 scheduler can infer direction and rank work correctly.
@@ -170,6 +175,10 @@ FeedPlayerConfig(renderMode: RenderMode.texture)
 NativeVideoView(controller: controller, renderMode: player.config.renderMode);
 ```
 
+Sizing is adaptive by default: portrait and square videos use `BoxFit.cover`,
+while landscape videos use `BoxFit.contain` so the complete frame stays centered.
+Pass `fit: BoxFit.cover` or `fit: BoxFit.contain` to override that decision.
+
 `platformView` is the default because it is the exercised path, **not** because
 it won a benchmark. Which mode is faster depends on GPU bandwidth, refresh rate,
 and video resolution, and the iOS texture path pays a per-frame pixel-buffer
@@ -211,7 +220,7 @@ dart run pigeon \
   --dart_out lib/src/messages.g.dart \
   --kotlin_out android/src/main/kotlin/io/github/aswinsubhash/native_feed_player/Messages.g.kt \
   --kotlin_package io.github.aswinsubhash.native_feed_player \
-  --swift_out ios/Classes/Messages.g.swift
+  --swift_out ios/native_feed_player/Sources/native_feed_player/Messages.g.swift
 dart format lib/src/messages.g.dart
 ```
 
@@ -228,6 +237,6 @@ silent source of platform drift.
 
 ## Requirements
 
-- Flutter 3.3+, Dart 3.11+
+- Flutter 3.41+, Dart 3.11+
 - Android: minSdk 24, Media3 1.11
-- iOS: 13.0+
+- iOS: 13.0+, with CocoaPods and Swift Package Manager support

@@ -18,12 +18,7 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import java.util.ArrayDeque
 
-/**
- * Owns every ExoPlayer instance and the scheduling policy around them.
- *
- * Controllers are addressed by id and bound to a [RegisteredSource]; feed
- * position is only used to rank preload priority and eviction distance.
- */
+/** Owns ExoPlayer instances, preload scheduling, and eviction. */
 internal class ExoPlayerManager(
     context: Context,
     private val onState: (controllerId: Int, status: PlaybackStatusMessage, error: PlaybackErrorMessage?) -> Unit,
@@ -37,13 +32,7 @@ internal class ExoPlayerManager(
         val listener: Player.Listener,
         val analyticsListener: AnalyticsListener,
         val sourceId: String,
-        /**
-         * Value of [visibleGeneration] when this controller was created.
-         *
-         * Window eviction ignores controllers created since the last visible
-         * source update, because their position cannot be judged against a
-         * viewport the app has not published yet.
-         */
+        /** Creation-time visibility generation used to defer eviction. */
         val createdAtVisibleGeneration: Long
     )
 
@@ -71,9 +60,9 @@ internal class ExoPlayerManager(
     private var preloadBehind = 1
     private var maxConcurrentPreloads = 2
     private var positionIntervalMs = 200L
-    private var muted = true
+    private var muted = false
     private var volume = 1.0f
-    private var handleAudioFocus = false
+    private var handleAudioFocus = true
 
     /** Controllers paused by backgrounding, to be resumed on return. */
     private val autoPausedControllerIds = mutableSetOf<Int>()
@@ -81,21 +70,11 @@ internal class ExoPlayerManager(
     private var preloadGeneration = 0
     private var tickerRunning = false
 
-    /**
-     * Shrinks the preload window when the device cannot keep up.
-     *
-     * Preloading competes with playback for bandwidth and memory, so under
-     * sustained rebuffering or memory pressure the cheapest correction is to
-     * prepare fewer items rather than to keep thrashing.
-     */
+    /** Preload-window multiplier reduced under rebuffer or memory pressure. */
     private var windowScale = 1.0
     private var rebuffersSinceLastRecovery = 0
 
-    /**
-     * Ceiling on every ExoPlayer kept alive across the managed, preloaded, and
-     * recycled buckets combined. Capping each bucket separately still allows
-     * their sum to grow without bound.
-     */
+    /** Maximum combined active and recycled player count. */
     private var maxTotalPlayers = 6
 
     private fun totalLivePlayers(): Int = managedPlayers.size + recycledPlayers.size
@@ -112,14 +91,14 @@ internal class ExoPlayerManager(
     }
 
     fun initialize(config: FeedPlayerConfigMessage) {
+        resetSession(ReleaseReasonMessage.DISPOSED)
         maxActivePlayers = maxOf(1, config.maxActivePlayers.toInt())
         preloadAhead = maxOf(0, config.preloadAhead.toInt())
         preloadBehind = maxOf(0, config.preloadBehind.toInt())
         maxConcurrentPreloads = maxOf(1, config.maxConcurrentPreloads.toInt())
         positionIntervalMs = maxOf(50L, config.positionUpdateIntervalMs)
         applyAudioPolicy(config.audio)
-        // Preloading no longer costs a player, so the budget only has to cover
-        // live controllers plus the recycle pool.
+        // Preloading does not retain players.
         maxTotalPlayers = maxActivePlayers * 2
 
         MediaCache.configure(
@@ -128,8 +107,7 @@ internal class ExoPlayerManager(
             maxBytes = config.cache.maxBytes
         )
 
-        // The preload manager owns the shared player components, so it must be
-        // rebuilt (and every player with it) when configuration changes.
+        // Rebuild shared Media3 components for the new configuration.
         releaseAllPooledPlayers()
         preloadManager?.release()
         preloadManager = FeedPreloadManager(appContext) { uri -> headersFor(uri) }
@@ -198,8 +176,7 @@ internal class ExoPlayerManager(
                 .build(),
             handleAudioFocus
         )
-        // Keeps the CPU alive for audio while the screen sleeps, without
-        // holding a wake lock when the feed is muted.
+        // Keep the CPU awake only for audible playback.
         player.setWakeMode(if (muted) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
 
         managedPlayers[controllerId] = ManagedPlayer(
@@ -226,9 +203,7 @@ internal class ExoPlayerManager(
 
         emitMetrics(controllerId)
         startTickerIfNeeded()
-        // Runs after registration and skips this generation's new controllers,
-        // so a controller requested ahead of setVisibleSource is never torn
-        // down by a window it has not been measured against yet.
+        // Apply eviction after controller registration.
         enforceVisibleWindowEviction()
         enforceTotalPlayerBudget(protectedControllerId = controllerId)
         schedulePreloadWindow()
@@ -238,8 +213,6 @@ internal class ExoPlayerManager(
         autoPausedControllerIds.remove(controllerId)
         managedPlayers[controllerId]?.player?.play()
     }
-
-    // MARK: - Controls
 
     fun setVolume(controllerId: Int, value: Double) {
         val clamped = value.toFloat().coerceIn(0f, 1f)
@@ -260,13 +233,7 @@ internal class ExoPlayerManager(
             if (looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
     }
 
-    /**
-     * Applies audio behaviour to current and future players.
-     *
-     * Focus is only requested when audio is actually audible: a muted feed that
-     * grabs focus would needlessly duck or pause whatever the user is listening
-     * to.
-     */
+    /** Applies audio policy to current and future players. */
     fun applyAudioPolicy(policy: AudioPolicyMessage) {
         muted = policy.muted
         volume = policy.volume.toFloat().coerceIn(0f, 1f)
@@ -283,10 +250,7 @@ internal class ExoPlayerManager(
         }
     }
 
-    /**
-     * Pauses anything playing when the app leaves the foreground and remembers
-     * it, so returning restores exactly what was interrupted.
-     */
+    /** Pauses active players until the app returns to the foreground. */
     fun onAppBackgrounded() {
         for ((controllerId, managed) in managedPlayers) {
             if (managed.player.isPlaying) {
@@ -350,15 +314,7 @@ internal class ExoPlayerManager(
         attachedTextureByController.containsKey(controllerId) ||
             surfaceByController.containsKey(controllerId)
 
-    /**
-     * Maps a trim level to a pressure response.
-     *
-     * The levels are not ordered by severity: TRIM_MEMORY_UI_HIDDEN (20) sits
-     * numerically above TRIM_MEMORY_RUNNING_CRITICAL (15) but only means the
-     * app was backgrounded. Comparing with `>=` therefore treats an ordinary
-     * background transition as a critical event and destroys the whole pool.
-     * Each level is matched explicitly instead.
-     */
+    /** Maps non-severity-ordered trim levels to explicit pressure responses. */
     @Suppress("DEPRECATION")
     fun onTrimMemory(level: Int) {
         when (level) {
@@ -378,13 +334,16 @@ internal class ExoPlayerManager(
     }
 
     fun disposeAll() {
+        resetSession(ReleaseReasonMessage.ENGINE_DETACHED)
+    }
+
+    private fun resetSession(reason: ReleaseReasonMessage) {
         preloadGeneration += 1
-        // The preload manager shares components with every player it built, so
-        // it has to go first.
+        // Release shared preload components before their players.
         preloadManager?.release()
         preloadManager = null
         for (id in managedPlayers.keys.toList()) {
-            releaseController(id, ReleaseReasonMessage.ENGINE_DETACHED)
+            releaseController(id, reason)
         }
         attachedTextureByController.clear()
         surfaceByController.clear()
@@ -392,11 +351,13 @@ internal class ExoPlayerManager(
         releaseAllPooledPlayers()
         registry.clear()
         creationOrder.clear()
+        autoPausedControllerIds.clear()
+        visibleGeneration = 0
+        windowScale = 1.0
+        rebuffersSinceLastRecovery = 0
         handler.removeCallbacks(positionTicker)
         tickerRunning = false
     }
-
-    // MARK: - Cache
 
     fun clearMediaCache() {
         MediaCache.evictAll()
@@ -434,10 +395,7 @@ internal class ExoPlayerManager(
 
     fun cacheUsageBytes(): Long = MediaCache.usageBytes()
 
-    /**
-     * Halves the preload window after repeated stalls, down to a floor that
-     * still keeps the immediate neighbour prepared.
-     */
+    /** Reduces the preload window after repeated stalls. */
     private fun noteRebuffer() {
         rebuffersSinceLastRecovery += 1
         if (rebuffersSinceLastRecovery < REBUFFERS_BEFORE_DEGRADE) {
@@ -451,7 +409,7 @@ internal class ExoPlayerManager(
         }
     }
 
-    /** Restores the window one step at a time once playback settles. */
+    /** Restores the preload window after stable playback. */
     private fun noteSteadyPlayback() {
         rebuffersSinceLastRecovery = 0
         if (windowScale >= 1.0) {
@@ -478,20 +436,14 @@ internal class ExoPlayerManager(
     }
 
     private companion object {
-        /** Consecutive stalls tolerated before the window is halved. */
+        /** Stalls before preload degradation. */
         const val REBUFFERS_BEFORE_DEGRADE = 3
 
-        /** Floor for [windowScale]; below this preloading stops helping. */
+        /** Minimum preload-window multiplier. */
         const val MIN_WINDOW_SCALE = 0.25
     }
 
-    /**
-     * Hands the current window to the preload manager.
-     *
-     * Coalesced onto the main looper so a fling that fires many viewport
-     * updates results in one sync against the final position rather than one
-     * per intermediate position.
-     */
+    /** Coalesces preload-window updates on the main looper. */
     private fun schedulePreloadWindow() {
         preloadGeneration += 1
         val generation = preloadGeneration
@@ -525,8 +477,7 @@ internal class ExoPlayerManager(
         val toEvict = managedPlayers.filterValues { managed ->
             val rank = registry.source(managed.sourceId)?.rank
             val outsideWindow = rank == null || (rank - visibleRank) !in -keepBehind..keepAhead
-            // Controllers created since the last visible-source update have not
-            // been measured against a current window yet.
+            // Defer eviction until the next visibility generation.
             val measurable = forceAggressive ||
                 managed.createdAtVisibleGeneration != visibleGeneration
             outsideWindow && measurable
@@ -537,11 +488,7 @@ internal class ExoPlayerManager(
         }
     }
 
-    /**
-     * Trims the combined player count back under [maxTotalPlayers], cheapest
-     * bucket first: recycled players hold no state, preloaded players can be
-     * rebuilt, managed players are last resort.
-     */
+    /** Enforces the player budget by releasing recycled players first. */
     private fun enforceTotalPlayerBudget(protectedControllerId: Int? = null) {
         while (totalLivePlayers() > maxTotalPlayers && recycledPlayers.isNotEmpty()) {
             recycledPlayers.removeFirst().release()
@@ -562,10 +509,7 @@ internal class ExoPlayerManager(
         }
     }
 
-    /**
-     * Picks the controller furthest from the viewport, never choosing the
-     * source a controller is about to be created for.
-     */
+    /** Selects the furthest controller outside [protectedSourceId]. */
     private fun evictionCandidate(protectedSourceId: String?): Int? {
         val eligible = managedPlayers.filterValues { it.sourceId != protectedSourceId }
         if (eligible.isEmpty()) {
@@ -582,13 +526,7 @@ internal class ExoPlayerManager(
         return registry.distanceFromVisible(sourceId) ?: (Int.MAX_VALUE / 4)
     }
 
-    /**
-     * Starts playback from preloaded media when the manager already has it.
-     *
-     * A preloaded MediaSource only works on a player built by the preload
-     * manager's builder, which is why every player here comes from
-     * [FeedPreloadManager.buildPlayer].
-     */
+    /** Uses preloaded media with a player from the same preload manager. */
     private fun obtainPlayerFor(source: RegisteredSource): ExoPlayer {
         val player = obtainReusablePlayer()
         val preloadedSource = preloadManager?.mediaSourceFor(source)
@@ -673,8 +611,7 @@ internal class ExoPlayerManager(
                 if (videoSize.width <= 0 || videoSize.height <= 0) {
                     return
                 }
-                // Media3 applies rotation to the reported size itself on all
-                // supported API levels, so nothing is left for the renderer.
+                // Media3 reports display-oriented dimensions.
                 onVideoSize(
                     VideoSizeEvent(
                         controllerId = controllerId.toLong(),
@@ -707,8 +644,7 @@ internal class ExoPlayerManager(
                     return
                 }
                 val metrics = metricsByController[controllerId] ?: return
-                // Accumulated into a lifetime total so the value means the same
-                // thing as the iOS access-log total.
+                // Match the iOS lifetime total.
                 metrics.droppedFrames += droppedFrames
                 emitMetrics(controllerId)
             }
@@ -734,9 +670,7 @@ internal class ExoPlayerManager(
             if (player.playbackState == Player.STATE_IDLE) {
                 continue
             }
-            // Offscreen, idle players do not need per-tick position traffic.
-            // A controller is interesting only if it is rendering somewhere or
-            // actively playing.
+            // Skip position updates for idle offscreen players.
             val isRendering = hasVideoOutput(controllerId)
             if (!isRendering && !player.isPlaying) {
                 continue
@@ -761,10 +695,7 @@ internal class ExoPlayerManager(
         handler.post(positionTicker)
     }
 
-    /**
-     * Only reached if initialize() has not run yet; still cache-backed so the
-     * two paths share storage.
-     */
+    /** Creates a cache-backed player before initialization completes. */
     private fun createFallbackPlayer(): ExoPlayer {
         val dataSourceFactory = MediaCache.createDataSourceFactory { uri -> headersFor(uri) }
         return ExoPlayer.Builder(appContext)
@@ -784,6 +715,7 @@ internal class ExoPlayerManager(
             managed.player.setVideoSurface(null)
         }
         metricsByController.remove(controllerId)
+        autoPausedControllerIds.remove(controllerId)
         recycleOrReleasePlayer(managed.player)
         onReleased(controllerId, reason)
     }

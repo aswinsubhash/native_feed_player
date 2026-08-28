@@ -34,7 +34,6 @@ internal class FeedSourceRegistryTest {
         val registry = registry(2, visible = "s1")
         registry.append(listOf(source("page2", 2), source("page3", 3)))
 
-        // Appending must not disturb the viewport or renumber earlier sources.
         assertEquals("s1", registry.visibleSourceId)
         assertEquals(1, registry.visibleRank())
         assertEquals(4, registry.size)
@@ -47,7 +46,6 @@ internal class FeedSourceRegistryTest {
 
         val ids = registry.preloadWindow(ahead = 2, behind = 1).map { it.id }
 
-        // Nearest-first, and more positions ahead of travel than behind.
         assertEquals(listOf("s5", "s4", "s6", "s7"), ids)
     }
 
@@ -81,7 +79,6 @@ internal class FeedSourceRegistryTest {
 
         val ids = registry.preloadWindow(ahead = 2, behind = 1).map { it.id }
 
-        // Travelling backwards, so the larger budget lands on lower ranks.
         assertEquals(listOf("s4", "s3", "s5", "s2"), ids)
     }
 
@@ -100,7 +97,6 @@ internal class FeedSourceRegistryTest {
 
         val ids = registry.preloadWindow(ahead = 3, behind = 0).map { it.id }
 
-        // The nearer occurrence wins; the clip is not prepared twice.
         assertEquals(listOf("a", "b"), ids)
     }
 
@@ -112,7 +108,6 @@ internal class FeedSourceRegistryTest {
         val halved = registry.preloadWindow(ahead = 4, behind = 2, scale = 0.5)
 
         assertTrue(halved.size < full.size)
-        // The visible item always survives degradation.
         assertEquals("s5", halved.first().id)
     }
 

@@ -2,12 +2,7 @@ import Flutter
 import Foundation
 import UIKit
 
-/// Holds the Pigeon sink for one event channel and buffers events emitted
-/// before Dart subscribes.
-///
-/// Native playback starts reporting state during `createController`, which runs
-/// before the caller has had a chance to listen to that controller's stream, so
-/// without a small buffer the first transition is silently lost.
+/// Buffers events until the Dart event stream attaches.
 final class BufferedEventSink<T> {
   private let maxBuffered: Int
   private var pending: [T] = []
@@ -31,6 +26,10 @@ final class BufferedEventSink<T> {
     pending.removeAll()
   }
 
+  func clearPending() {
+    pending.removeAll()
+  }
+
   func emit(_ event: T) {
     if let sink {
       sink.success(event)
@@ -43,8 +42,7 @@ final class BufferedEventSink<T> {
   }
 }
 
-/// Pigeon generates a distinct handler class per event channel, so each one
-/// needs a concrete adapter that forwards its sink into a shared holder.
+/// Adapts a Pigeon event channel to `BufferedEventSink`.
 private final class PlaybackStateStreamAdapter: PlaybackStateEventsStreamHandler {
   private let holder: BufferedEventSink<PlaybackStateEvent>
 
@@ -131,9 +129,7 @@ private final class LifecycleStreamAdapter: LifecycleEventsStreamHandler {
 public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPlayerHostApi {
   private static let videoViewType = "native_feed_player/video_view"
 
-  /// Controller ids must stay unique for the life of the process, not the life
-  /// of one engine attachment, so a re-attaching engine cannot mint ids that
-  /// collide with handles Dart still holds.
+  /// Process-wide ID seed retained across engine reattachment.
   private static var controllerIdSeed = 0
 
   private let stateEvents = BufferedEventSink<PlaybackStateEvent>()
@@ -145,7 +141,7 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   private var manager: AVPlayerManager?
   private var memoryWarningObserver: NSObjectProtocol?
   private let renderViewPool = RenderViewPool(maxPoolSize: 8)
-  private var videoViews: [Int64: NativeVideoPlatformView] = [:]
+  private let videoViews = PlatformViewRegistry<Int64, NativeVideoPlatformView>()
   private var attachedControllerByViewId: [Int64: Int] = [:]
   private var binaryMessenger: FlutterBinaryMessenger?
   private var textureOutputs: TextureOutputRegistry?
@@ -159,10 +155,10 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     let viewFactory = NativeVideoViewFactory(
       renderViewPool: instance.renderViewPool,
       onCreate: { [weak instance] viewId, view in
-        instance?.videoViews[viewId] = view
+        instance?.handleVideoViewCreated(viewId: viewId, view: view)
       },
-      onDispose: { [weak instance] viewId, renderView in
-        instance?.handleVideoViewDisposed(viewId: viewId, renderView: renderView)
+      onDispose: { [weak instance] viewId, view in
+        instance?.handleVideoViewDisposed(viewId: viewId, view: view)
       }
     )
     registrar.register(viewFactory, withId: videoViewType)
@@ -186,7 +182,14 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   // MARK: - Host API
 
   func initialize(config: FeedPlayerConfigMessage) throws {
+    textureOutputs?.clear()
+    attachedControllerByViewId.removeAll()
     try managerOrThrow().initialize(config: config)
+    stateEvents.clearPending()
+    positionEvents.clearPending()
+    metricsEvents.clearPending()
+    videoSizeEvents.clearPending()
+    lifecycleEvents.clearPending()
   }
 
   func setSources(sources: [FeedSourceMessage]) throws {
@@ -449,12 +452,22 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
   }
 
-  private func handleVideoViewDisposed(viewId: Int64, renderView: NativeVideoRenderView) {
-    if let controllerId = attachedControllerByViewId.removeValue(forKey: viewId) {
-      manager?.detach(controllerId: controllerId)
+  private func handleVideoViewCreated(viewId: Int64, view: NativeVideoPlatformView) {
+    if let previousControllerId = attachedControllerByViewId.removeValue(forKey: viewId) {
+      manager?.detach(controllerId: previousControllerId)
     }
-    videoViews.removeValue(forKey: viewId)
-    renderViewPool.release(renderView)
+    videoViews.register(view, for: viewId)
+  }
+
+  private func handleVideoViewDisposed(viewId: Int64, view: NativeVideoPlatformView) {
+    guard videoViews.removeIfCurrent(view, for: viewId) else {
+      renderViewPool.release(view.renderView)
+      return
+    }
+    if let controllerId = attachedControllerByViewId.removeValue(forKey: viewId) {
+      manager?.detach(controllerId: controllerId, renderView: view.renderView)
+    }
+    renderViewPool.release(view.renderView)
   }
 
   private func managerOrThrow() throws -> AVPlayerManager {

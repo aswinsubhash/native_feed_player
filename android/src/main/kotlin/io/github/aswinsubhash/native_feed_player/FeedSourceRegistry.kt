@@ -3,9 +3,7 @@ package io.github.aswinsubhash.native_feed_player
 import kotlin.math.abs
 import kotlin.math.max
 
-/**
- * A source the feed can play, addressed by a caller-owned stable id.
- */
+/** A feed source with a caller-defined stable ID. */
 internal data class RegisteredSource(
     val id: String,
     val uri: String,
@@ -14,27 +12,17 @@ internal data class RegisteredSource(
     val headers: Map<String, String>
 )
 
-/** Which way the viewport is travelling through the feed. */
+/** Viewport travel direction. */
 internal enum class ScrollDirection { UNKNOWN, FORWARD, BACKWARD }
 
-/**
- * Ordered set of feed sources plus the window arithmetic over them.
- *
- * Sources are keyed by id rather than list position, so appending a page
- * cannot renumber existing entries or invalidate the preload window. Rank is
- * only an ordering hint used to compute distance from the viewport.
- */
+/** Ordered sources keyed by stable ID with preload-window operations. */
 internal class FeedSourceRegistry {
     private val sourcesById = linkedMapOf<String, RegisteredSource>()
 
     var visibleSourceId: String? = null
         private set
 
-    /**
-     * Inferred from successive viewport updates. Feeds are overwhelmingly
-     * consumed in one direction, so the preload budget should follow travel
-     * rather than spend half of itself behind the user.
-     */
+    /** Inferred direction used to bias the preload window. */
     var direction: ScrollDirection = ScrollDirection.UNKNOWN
         private set
 
@@ -85,7 +73,7 @@ internal class FeedSourceRegistry {
             previousRank == null -> ScrollDirection.UNKNOWN
             target.rank > previousRank -> ScrollDirection.FORWARD
             target.rank < previousRank -> ScrollDirection.BACKWARD
-            // Re-selecting the same position tells us nothing new.
+            // Preserve direction when the rank is unchanged.
             else -> direction
         }
     }
@@ -104,15 +92,8 @@ internal class FeedSourceRegistry {
     }
 
     /**
-     * Sources that should be prepared, nearest first.
-     *
-     * [ahead] and [behind] are expressed relative to travel, not to rank: when
-     * the user scrolls backwards they are swapped so the budget still lands in
-     * front of the viewport.
-     *
-     * [scale] shrinks the window under sustained stress; 1.0 is the configured
-     * size. Sources sharing a URI are collapsed to the nearest one so a feed
-     * that repeats a clip does not prepare it twice.
+     * Returns the nearest unique sources in the travel-relative preload window.
+     * [scale] applies runtime window degradation.
      */
     fun preloadWindow(ahead: Int, behind: Int, scale: Double = 1.0): List<RegisteredSource> {
         val visibleRank = visibleRank() ?: return emptyList()
@@ -132,7 +113,7 @@ internal class FeedSourceRegistry {
             .filter { source -> seenUris.add(source.uri) }
     }
 
-    /** Keeps at least the visible item in the window while scaling down. */
+    /** Scales a preload budget without excluding the visible source. */
     private fun scaleBudget(budget: Int, scale: Double): Int {
         if (budget <= 0) {
             return 0

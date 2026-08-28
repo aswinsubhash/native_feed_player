@@ -6,22 +6,15 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
-import android.view.TextureView
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 import java.util.concurrent.atomic.AtomicInteger
 
-/** NativeFeedPlayerPlugin */
 class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPlayerHostApi {
     private companion object {
         private const val VIDEO_VIEW_TYPE = "native_feed_player/video_view"
 
-        /**
-         * Controller ids must stay unique for the life of the process, not the
-         * life of one engine attachment. Restarting the counter on detach lets
-         * a second engine (or a hot restart) mint ids that collide with handles
-         * Dart still holds.
-         */
+        /** Process-wide IDs prevent collisions after engine reattachment. */
         private val controllerIdSeed = AtomicInteger(0)
     }
 
@@ -35,16 +28,12 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private val videoSizeEvents = BufferedStreamHandler<VideoSizeEvent>()
     private val lifecycleEvents = BufferedStreamHandler<ControllerLifecycleEvent>()
 
-    /**
-     * Foreground tracking so playback can be paused when the app leaves the
-     * screen. Counting started activities is enough and avoids pulling in the
-     * lifecycle-process artifact for one signal.
-     */
+    /** Started-activity count used for foreground playback state. */
     private var startedActivityCount = 0
     private var activityCallbacks: Application.ActivityLifecycleCallbacks? = null
 
     private val textureViewPool = TextureViewPool(maxPoolSize = 8)
-    private val videoViews = mutableMapOf<Int, NativeVideoPlatformView>()
+    private val videoViews = PlatformViewRegistry<Int, NativeVideoPlatformView>()
     private val attachedControllerByViewId = mutableMapOf<Int, Int>()
     private var textureOutputs: TextureOutputRegistry? = null
 
@@ -58,8 +47,8 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             VIDEO_VIEW_TYPE,
             NativeVideoViewFactory(
                 textureViewPool = textureViewPool,
-                onCreate = { viewId, view -> videoViews[viewId] = view },
-                onDispose = { viewId, textureView -> handleVideoViewDisposed(viewId, textureView) }
+                onCreate = { viewId, view -> handleVideoViewCreated(viewId, view) },
+                onDispose = { viewId, view -> handleVideoViewDisposed(viewId, view) }
             )
         )
 
@@ -136,7 +125,14 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     }
 
     override fun initialize(config: FeedPlayerConfigMessage) {
+        releaseTextureOutputs()
+        attachedControllerByViewId.clear()
         managerOrThrow().initialize(config)
+        stateEvents.clearPending()
+        positionEvents.clearPending()
+        metricsEvents.clearPending()
+        videoSizeEvents.clearPending()
+        lifecycleEvents.clearPending()
     }
 
     override fun setSources(sources: List<FeedSourceMessage>) {
@@ -356,13 +352,24 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             )
     }
 
-    private fun handleVideoViewDisposed(viewId: Int, textureView: TextureView) {
+    private fun handleVideoViewCreated(viewId: Int, view: NativeVideoPlatformView) {
+        val previousControllerId = attachedControllerByViewId.remove(viewId)
+        if (previousControllerId != null) {
+            exoPlayerManager?.detachControllerFromView(previousControllerId)
+        }
+        videoViews.register(viewId, view)
+    }
+
+    private fun handleVideoViewDisposed(viewId: Int, view: NativeVideoPlatformView) {
+        if (!videoViews.removeIfCurrent(viewId, view)) {
+            textureViewPool.release(view.textureView)
+            return
+        }
         val controllerId = attachedControllerByViewId.remove(viewId)
         if (controllerId != null) {
             exoPlayerManager?.detachControllerFromView(controllerId)
         }
-        videoViews.remove(viewId)
-        textureViewPool.release(textureView)
+        textureViewPool.release(view.textureView)
     }
 }
 

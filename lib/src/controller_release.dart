@@ -5,8 +5,7 @@ enum ControllerReleaseReason {
   /// The application called `dispose()` on the controller.
   disposed,
 
-  /// The native scheduler reclaimed the controller because it fell outside the
-  /// active window or exceeded the player budget.
+  /// Reclaimed because the controller is outside the active window or budget.
   evicted,
 
   /// The native player failed unrecoverably and was torn down.
@@ -29,10 +28,7 @@ ControllerReleaseReason releaseReasonFromMessage(ReleaseReasonMessage message) {
   }
 }
 
-/// Emitted whenever a native controller is released, for any reason.
-///
-/// The native side owns controller lifetime, so this event is the only reliable
-/// signal that a controller handle has become dead.
+/// Reports that a native controller has been released.
 class ControllerReleaseEvent {
   const ControllerReleaseEvent({
     required this.controllerId,

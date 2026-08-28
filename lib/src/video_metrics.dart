@@ -1,13 +1,9 @@
 import 'messages.g.dart';
 
-/// Playback quality counters for one controller.
+/// Playback quality metrics for one controller.
 ///
-/// Both platforms report the same definitions:
-///
-/// * [firstFrameLatency] is measured from controller creation to the first
-///   frame actually rendered to a surface.
-/// * [droppedFrames] and [rebufferCount] are monotonic totals for the
-///   controller's lifetime, not deltas between samples.
+/// [firstFrameLatency] spans creation to the first rendered frame.
+/// [droppedFrames] and [rebufferCount] are lifetime totals.
 class VideoMetrics {
   const VideoMetrics({
     required this.controllerId,
@@ -22,10 +18,10 @@ class VideoMetrics {
   /// Times playback stalled after having become ready at least once.
   final int rebufferCount;
 
-  /// Video frames the decoder or renderer dropped, lifetime total.
+  /// Lifetime count of dropped video frames.
   final int droppedFrames;
 
-  /// Creation to first rendered frame. Null until the first frame appears.
+  /// Time from controller creation to the first rendered frame.
   final Duration? firstFrameLatency;
 
   final DateTime timestamp;
@@ -49,7 +45,7 @@ class VideoMetrics {
       'dropped: $droppedFrames, firstFrame: $firstFrameLatency)';
 }
 
-/// Playback position, plus buffer and duration when the platform knows them.
+/// Playback position, buffered position, and duration.
 class PlaybackPosition {
   const PlaybackPosition({
     required this.position,
@@ -62,7 +58,7 @@ class PlaybackPosition {
   /// How far ahead of [position] media is buffered.
   final Duration? bufferedPosition;
 
-  /// Total duration, or null for live/unknown-length media.
+  /// Total duration, or `null` for live or unknown-length media.
   final Duration? duration;
 
   static PlaybackPosition fromMessage(PositionEvent event) {
