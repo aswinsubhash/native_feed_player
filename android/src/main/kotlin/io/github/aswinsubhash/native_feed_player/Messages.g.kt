@@ -63,7 +63,7 @@ private object MessagesPigeonUtils {
     }
     return a == b
   }
-      
+
 }
 
 /**
@@ -1014,6 +1014,7 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
 
 val MessagesPigeonMethodCodec = StandardMethodCodec(MessagesPigeonCodec())
 
+
 /** Generated interface from Pigeon that represents a handler of messages from Flutter. */
 interface NativeFeedPlayerHostApi {
   fun initialize(config: FeedPlayerConfigMessage)
@@ -1038,10 +1039,10 @@ interface NativeFeedPlayerHostApi {
    * Drops persisted media bytes for the given sources, or all of them when
    * the list is empty.
    */
-  fun evictCachedMedia(request: SourceIdsRequest)
-  fun clearMediaCache()
-  fun cacheStatus(request: VisibleSourceRequest): CacheStatusMessage
-  fun cacheUsageBytes(): Long
+  fun evictCachedMedia(request: SourceIdsRequest, callback: (Result<Unit>) -> Unit)
+  fun clearMediaCache(callback: (Result<Unit>) -> Unit)
+  fun cacheStatus(request: VisibleSourceRequest, callback: (Result<CacheStatusMessage>) -> Unit)
+  fun cacheUsageBytes(callback: (Result<Long>) -> Unit)
   fun attachView(request: AttachViewRequest)
   fun detachView(request: ControllerRequest)
   /** Binds the controller to a Flutter texture and returns its id. */
@@ -1333,13 +1334,14 @@ interface NativeFeedPlayerHostApi {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
             val requestArg = args[0] as SourceIdsRequest
-            val wrapped: List<Any?> = try {
-              api.evictCachedMedia(requestArg)
-              listOf(null)
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
+            api.evictCachedMedia(requestArg) { result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                reply.reply(MessagesPigeonUtils.wrapResult(null))
+              }
             }
-            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)
@@ -1349,13 +1351,14 @@ interface NativeFeedPlayerHostApi {
         val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearMediaCache$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { _, reply ->
-            val wrapped: List<Any?> = try {
-              api.clearMediaCache()
-              listOf(null)
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
+            api.clearMediaCache{ result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                reply.reply(MessagesPigeonUtils.wrapResult(null))
+              }
             }
-            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)
@@ -1367,12 +1370,15 @@ interface NativeFeedPlayerHostApi {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
             val requestArg = args[0] as VisibleSourceRequest
-            val wrapped: List<Any?> = try {
-              listOf(api.cacheStatus(requestArg))
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
+            api.cacheStatus(requestArg) { result: Result<CacheStatusMessage> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(MessagesPigeonUtils.wrapResult(data))
+              }
             }
-            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)
@@ -1382,12 +1388,15 @@ interface NativeFeedPlayerHostApi {
         val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.cacheUsageBytes$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { _, reply ->
-            val wrapped: List<Any?> = try {
-              listOf(api.cacheUsageBytes())
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
+            api.cacheUsageBytes{ result: Result<Long> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(MessagesPigeonUtils.wrapResult(data))
+              }
             }
-            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)
@@ -1519,7 +1528,7 @@ class PigeonEventSink<T>(private val sink: EventChannel.EventSink) {
     sink.endOfStream()
   }
 }
-      
+
 abstract class PlaybackStateEventsStreamHandler : MessagesPigeonEventChannelWrapper<PlaybackStateEvent> {
   companion object {
     fun register(messenger: BinaryMessenger, streamHandler: PlaybackStateEventsStreamHandler, instanceName: String = "") {
@@ -1536,7 +1545,7 @@ override fun onListen(p0: Any?, sink: PigeonEventSink<PlaybackStateEvent>) {}
 
 override fun onCancel(p0: Any?) {}
 }
-      
+
 abstract class PositionEventsStreamHandler : MessagesPigeonEventChannelWrapper<PositionEvent> {
   companion object {
     fun register(messenger: BinaryMessenger, streamHandler: PositionEventsStreamHandler, instanceName: String = "") {
@@ -1553,7 +1562,7 @@ override fun onListen(p0: Any?, sink: PigeonEventSink<PositionEvent>) {}
 
 override fun onCancel(p0: Any?) {}
 }
-      
+
 abstract class MetricsEventsStreamHandler : MessagesPigeonEventChannelWrapper<MetricsEvent> {
   companion object {
     fun register(messenger: BinaryMessenger, streamHandler: MetricsEventsStreamHandler, instanceName: String = "") {
@@ -1570,7 +1579,7 @@ override fun onListen(p0: Any?, sink: PigeonEventSink<MetricsEvent>) {}
 
 override fun onCancel(p0: Any?) {}
 }
-      
+
 abstract class VideoSizeEventsStreamHandler : MessagesPigeonEventChannelWrapper<VideoSizeEvent> {
   companion object {
     fun register(messenger: BinaryMessenger, streamHandler: VideoSizeEventsStreamHandler, instanceName: String = "") {
@@ -1587,7 +1596,7 @@ override fun onListen(p0: Any?, sink: PigeonEventSink<VideoSizeEvent>) {}
 
 override fun onCancel(p0: Any?) {}
 }
-      
+
 abstract class LifecycleEventsStreamHandler : MessagesPigeonEventChannelWrapper<ControllerLifecycleEvent> {
   companion object {
     fun register(messenger: BinaryMessenger, streamHandler: LifecycleEventsStreamHandler, instanceName: String = "") {
@@ -1604,4 +1613,3 @@ override fun onListen(p0: Any?, sink: PigeonEventSink<ControllerLifecycleEvent>)
 
 override fun onCancel(p0: Any?) {}
 }
-      

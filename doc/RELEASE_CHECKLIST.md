@@ -5,10 +5,11 @@
 - [ ] `dart format --output=none --set-exit-if-changed` passes for committed Dart sources.
 - [ ] `flutter analyze` passes at package root.
 - [ ] `flutter test` passes at package root and in `example/`.
-- [ ] Pigeon regeneration leaves all committed Dart, Kotlin, and Swift bindings unchanged.
+- [ ] `dart run tool/generate_pigeon.dart` leaves all committed bindings unchanged.
 - [ ] `dart doc` completes without warnings.
 - [ ] `flutter build apk --debug` passes in `example/`.
-- [ ] Android plugin unit tests pass.
+- [ ] Android plugin unit tests and `lintDebug` pass under built-in Kotlin.
+- [ ] Android and iOS simulator integration jobs pass for both render modes.
 - [ ] CocoaPods-mode `flutter build ios --simulator --no-codesign` passes in `example/`.
 - [ ] SwiftPM-mode `flutter build ios --simulator --no-codesign` passes in `example/`.
 - [ ] Swift plugin unit tests pass through both CocoaPods and SwiftPM integration.
@@ -39,7 +40,8 @@
   - API surface and examples
   - tuning guidance
   - limitations and known caveats
-- [ ] Confirm iOS and Android platform requirements are explicit.
+- [ ] Confirm Flutter 3.47, Dart 3.13, iOS, and Android requirements are explicit.
+- [ ] Verify authenticated cache partitions never persist raw header values.
 - [ ] Confirm `LICENSE` contains the intended canonical license text and is recognized by package tooling.
 - [ ] Confirm native builds contain no package-owned compiler warnings.
 - [ ] Confirm CocoaPods and SwiftPM bundle `PrivacyInfo.xcprivacy`.

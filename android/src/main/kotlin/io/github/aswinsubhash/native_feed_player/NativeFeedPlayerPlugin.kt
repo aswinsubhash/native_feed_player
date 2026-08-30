@@ -6,9 +6,21 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicInteger
+
+internal fun removeControllerViewMappings(
+    attachedControllerByViewId: MutableMap<Int, Int>,
+    controllerId: Int
+) {
+    attachedControllerByViewId.entries.removeAll { it.value == controllerId }
+}
 
 class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPlayerHostApi {
     private companion object {
@@ -21,6 +33,8 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private var appContext: Context? = null
     private var exoPlayerManager: ExoPlayerManager? = null
     private var binaryMessenger: BinaryMessenger? = null
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    private var cacheExecutor: ExecutorService? = null
 
     private val stateEvents = BufferedStreamHandler<PlaybackStateEvent>()
     private val positionEvents = BufferedStreamHandler<PositionEvent>()
@@ -41,6 +55,9 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         appContext = flutterPluginBinding.applicationContext
         appContext?.registerComponentCallbacks(this)
         binaryMessenger = flutterPluginBinding.binaryMessenger
+        cacheExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "native-feed-player-cache")
+        }
         textureOutputs = TextureOutputRegistry(flutterPluginBinding.textureRegistry)
 
         flutterPluginBinding.platformViewRegistry.registerViewFactory(
@@ -85,6 +102,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
                 )
             },
             onReleased = { controllerId, reason ->
+                releaseControllerOutputs(controllerId)
                 lifecycleEvents.emit(
                     ControllerLifecycleEvent(
                         controllerId = controllerId.toLong(),
@@ -113,6 +131,8 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         appContext = null
         exoPlayerManager?.disposeAll()
         exoPlayerManager = null
+        cacheExecutor?.shutdown()
+        cacheExecutor = null
         videoViews.clear()
         attachedControllerByViewId.clear()
         textureViewPool.clear()
@@ -164,6 +184,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     override fun disposeController(request: ControllerRequest) {
         val controllerId = request.controllerId.toInt()
         if (controllerId > 0) {
+            releaseControllerOutputs(controllerId)
             managerOrThrow().disposeController(controllerId)
         }
     }
@@ -213,18 +234,40 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         managerOrThrow().setVisibleSource(request.sourceId)
     }
 
-    override fun evictCachedMedia(request: SourceIdsRequest) {
-        managerOrThrow().evictCachedMedia(request.sourceIds)
+    override fun evictCachedMedia(
+        request: SourceIdsRequest,
+        callback: (Result<Unit>) -> Unit
+    ) {
+        val manager = managerOrThrow()
+        val evictAll = request.sourceIds.isEmpty()
+        val sourceIdentities = manager.cacheIdentities(request.sourceIds)
+        runCacheOperation(callback) {
+            if (evictAll) {
+                MediaCache.evictAll()
+            } else {
+                sourceIdentities.forEach(MediaCache::evict)
+            }
+        }
     }
 
-    override fun clearMediaCache() {
-        managerOrThrow().clearMediaCache()
+    override fun clearMediaCache(callback: (Result<Unit>) -> Unit) {
+        managerOrThrow()
+        runCacheOperation(callback) { MediaCache.evictAll() }
     }
 
-    override fun cacheStatus(request: VisibleSourceRequest): CacheStatusMessage =
-        managerOrThrow().cacheStatus(request.sourceId)
+    override fun cacheStatus(
+        request: VisibleSourceRequest,
+        callback: (Result<CacheStatusMessage>) -> Unit
+    ) {
+        val manager = managerOrThrow()
+        val sourceIdentity = manager.cacheIdentity(request.sourceId)
+        runCacheOperation(callback) { manager.cacheStatus(request.sourceId, sourceIdentity) }
+    }
 
-    override fun cacheUsageBytes(): Long = managerOrThrow().cacheUsageBytes()
+    override fun cacheUsageBytes(callback: (Result<Long>) -> Unit) {
+        managerOrThrow()
+        runCacheOperation(callback) { MediaCache.usageBytes() }
+    }
 
     override fun attachView(request: AttachViewRequest) {
         val controllerId = request.controllerId.toInt()
@@ -292,6 +335,33 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private fun releaseTextureOutputs() {
         val manager = exoPlayerManager
         textureOutputs?.clear { controllerId, _ -> manager?.unbindSurface(controllerId) }
+    }
+
+    /** Removes every native output before Dart observes the controller release. */
+    private fun releaseControllerOutputs(controllerId: Int) {
+        val manager = exoPlayerManager
+        textureOutputs?.detach(controllerId) { manager?.unbindSurface(controllerId) }
+        manager?.detachControllerFromView(controllerId)
+        removeControllerViewMappings(attachedControllerByViewId, controllerId)
+    }
+
+    private fun <T> runCacheOperation(
+        callback: (Result<T>) -> Unit,
+        operation: () -> T
+    ) {
+        val executor = cacheExecutor
+        if (executor == null) {
+            callback(Result.failure(FlutterError("not_attached", "Cache executor is unavailable.", null)))
+            return
+        }
+        try {
+            executor.execute {
+                val result = runCatching(operation)
+                mainHandler.post { callback(result) }
+            }
+        } catch (error: RejectedExecutionException) {
+            callback(Result.failure(error))
+        }
     }
 
     override fun onTrimMemory(level: Int) {

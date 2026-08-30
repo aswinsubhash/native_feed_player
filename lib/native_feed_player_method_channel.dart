@@ -39,7 +39,9 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   final Stream<ControllerLifecycleEvent>? _lifecycleEventStream;
 
   late final Stream<PlaybackStateEvent> _states =
-      (_playbackStateEventStream ?? playbackStateEvents()).asBroadcastStream();
+      (_playbackStateEventStream ?? playbackStateEvents())
+          .map(_cachePlaybackState)
+          .asBroadcastStream();
 
   late final Stream<PositionEvent> _positions =
       (_positionEventStream ?? positionEvents()).asBroadcastStream();
@@ -63,7 +65,10 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       <int, Stream<VideoMetrics>>{};
   final Map<int, Stream<VideoSize>> _videoSizeStreams =
       <int, Stream<VideoSize>>{};
+  final Map<int, PlaybackStatusUpdate> _latestStates =
+      <int, PlaybackStatusUpdate>{};
   final Map<int, VideoSize> _latestVideoSizes = <int, VideoSize>{};
+  StreamSubscription<PlaybackStateEvent>? _stateCacheSubscription;
   StreamSubscription<VideoSizeEvent>? _videoSizeCacheSubscription;
 
   @override
@@ -80,7 +85,9 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Future<void> initialize(FeedPlayerConfig config) async {
     _ensureSupportedPlatform();
+    _latestStates.clear();
     _latestVideoSizes.clear();
+    _stateCacheSubscription ??= _states.listen((_) {});
     _videoSizeCacheSubscription ??= _videoSizes.listen((_) {});
     await hostApi.initialize(config.toMessage());
   }
@@ -100,6 +107,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<void> removeSources(List<String> sourceIds) async {
+    _validateIds(sourceIds);
     await hostApi.removeSources(SourceIdsRequest(sourceIds: sourceIds));
   }
 
@@ -109,6 +117,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     required bool autoPlay,
     required bool looping,
   }) {
+    _validateId(sourceId, 'sourceId');
     return hostApi.createController(
       CreateControllerRequest(
         sourceId: sourceId,
@@ -158,16 +167,24 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Stream<PlaybackStatusUpdate> stateStream(int controllerId) {
     return _stateStreams.putIfAbsent(controllerId, () {
-      return _states
-          .where(
-            (PlaybackStateEvent event) => event.controllerId == controllerId,
-          )
-          .map(
-            (PlaybackStateEvent event) => PlaybackStatusUpdate(
-              state: playbackStateFromMessage(event.status),
-              error: PlaybackError.fromMessage(event.error),
-            ),
-          );
+      return Stream<PlaybackStatusUpdate>.multi((
+        MultiStreamController<PlaybackStatusUpdate> output,
+      ) {
+        final PlaybackStatusUpdate? latest = _latestStates[controllerId];
+        if (latest != null) {
+          output.addSync(latest);
+        }
+        final StreamSubscription<PlaybackStateEvent> subscription = _states
+            .where(
+              (PlaybackStateEvent event) => event.controllerId == controllerId,
+            )
+            .listen(
+              (PlaybackStateEvent event) => output.add(_playbackUpdate(event)),
+              onError: output.addError,
+              onDone: output.close,
+            );
+        output.onCancel = subscription.cancel;
+      }, isBroadcast: true);
     });
   }
 
@@ -182,6 +199,13 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<void> setVolume(int controllerId, double volume) async {
+    if (!volume.isFinite || volume < 0.0 || volume > 1.0) {
+      throw ArgumentError.value(
+        volume,
+        'volume',
+        'Must be finite and within 0..1.',
+      );
+    }
     await hostApi.setVolume(
       ControllerDoubleRequest(controllerId: controllerId, value: volume),
     );
@@ -236,11 +260,13 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<void> setVisibleSource(String sourceId) async {
+    _validateId(sourceId, 'sourceId');
     await hostApi.setVisibleSource(VisibleSourceRequest(sourceId: sourceId));
   }
 
   @override
   Future<void> evictCachedMedia(List<String> sourceIds) async {
+    _validateIds(sourceIds);
     await hostApi.evictCachedMedia(SourceIdsRequest(sourceIds: sourceIds));
   }
 
@@ -251,6 +277,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<CacheStatus> cacheStatus(String sourceId) async {
+    _validateId(sourceId, 'sourceId');
     final CacheStatusMessage message = await hostApi.cacheStatus(
       VisibleSourceRequest(sourceId: sourceId),
     );
@@ -288,14 +315,28 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Future<void> dispose() async {
     await hostApi.disposeAll();
+    await _stateCacheSubscription?.cancel();
     await _videoSizeCacheSubscription?.cancel();
+    _stateCacheSubscription = null;
     _videoSizeCacheSubscription = null;
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();
     _videoSizeStreams.clear();
+    _latestStates.clear();
     _latestVideoSizes.clear();
   }
+
+  PlaybackStateEvent _cachePlaybackState(PlaybackStateEvent event) {
+    _latestStates[event.controllerId] = _playbackUpdate(event);
+    return event;
+  }
+
+  PlaybackStatusUpdate _playbackUpdate(PlaybackStateEvent event) =>
+      PlaybackStatusUpdate(
+        state: playbackStateFromMessage(event.status),
+        error: PlaybackError.fromMessage(event.error),
+      );
 
   VideoSizeEvent _cacheVideoSize(VideoSizeEvent event) {
     _latestVideoSizes[event.controllerId] = VideoSize.fromMessage(event);
@@ -317,7 +358,20 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _positionStreams.remove(controllerId);
     _metricsStreams.remove(controllerId);
     _videoSizeStreams.remove(controllerId);
+    _latestStates.remove(controllerId);
     _latestVideoSizes.remove(controllerId);
+  }
+
+  void _validateIds(List<String> sourceIds) {
+    for (final String sourceId in sourceIds) {
+      _validateId(sourceId, 'sourceIds');
+    }
+  }
+
+  void _validateId(String id, String name) {
+    if (id.trim().isEmpty) {
+      throw ArgumentError.value(id, name, 'Must not be empty.');
+    }
   }
 
   void _ensureSupportedPlatform() {

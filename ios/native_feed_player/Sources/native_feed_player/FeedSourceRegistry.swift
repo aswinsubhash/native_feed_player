@@ -7,6 +7,10 @@ struct RegisteredSource {
   let rank: Int
   let kind: FeedMediaKindMessage
   let headers: [String: String]
+
+  var cacheIdentity: String {
+    MediaCacheIdentity.make(uri: uri, headers: headers)
+  }
 }
 
 /// Ordered sources keyed by stable ID with preload-window operations.
@@ -61,15 +65,16 @@ final class FeedSourceRegistry {
     direction = .unknown
   }
 
-  func setVisible(_ sourceId: String) {
+  @discardableResult
+  func setVisible(_ sourceId: String) -> Bool {
     guard let target = sourcesById[sourceId] else {
-      return
+      return false
     }
     let previousRank = visibleRank()
     visibleSourceId = sourceId
     guard let previousRank else {
       direction = .unknown
-      return
+      return true
     }
     if target.rank > previousRank {
       direction = .forward
@@ -77,6 +82,7 @@ final class FeedSourceRegistry {
       direction = .backward
     }
     // Preserve direction when the rank is unchanged.
+    return true
   }
 
   func source(id: String) -> RegisteredSource? {
@@ -110,7 +116,7 @@ final class FeedSourceRegistry {
     let scaledForward = scaleBudget(forwardBudget, scale)
     let scaledBackward = scaleBudget(backwardBudget, scale)
 
-    var seenUris = Set<String>()
+    var seenIdentities = Set<String>()
     return sourcesById.values
       .filter { source in
         let delta = source.rank - visible
@@ -124,7 +130,7 @@ final class FeedSourceRegistry {
           ? lhs.rank < rhs.rank
           : lhsDistance < rhsDistance
       }
-      .filter { source in seenUris.insert(source.uri).inserted }
+      .filter { source in seenIdentities.insert(source.cacheIdentity).inserted }
   }
 
   /// Keeps at least the visible item in the window while scaling down.

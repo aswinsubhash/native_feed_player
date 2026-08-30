@@ -2,6 +2,8 @@ package io.github.aswinsubhash.native_feed_player
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -163,9 +165,10 @@ internal class FeedSourceRegistryTest {
     @Test
     fun setVisible_ignoresUnknownSource() {
         val registry = registry(2, visible = "s1")
-        registry.setVisible("does-not-exist")
+        assertFalse(registry.setVisible("does-not-exist"))
 
         assertEquals("s1", registry.visibleSourceId)
+        assertTrue(registry.setVisible("s0"))
     }
 
     @Test
@@ -186,5 +189,95 @@ internal class FeedSourceRegistryTest {
 
         assertEquals(1, registry.size)
         assertNull(registry.source("blank"))
+    }
+
+    @Test
+    fun cacheIdentity_isStableAcrossHeaderOrderAndNameCase_withoutLeakingSecrets() {
+        val uri = "https://example.test/video.m3u8?token=query-secret"
+        val first = CacheIdentity.forSource(
+            uri,
+            linkedMapOf("Authorization" to "Bearer super-secret", "X-Tenant" to "42")
+        )
+        val reordered = CacheIdentity.forSource(
+            uri,
+            linkedMapOf("x-tenant" to "42", "authorization" to "Bearer super-secret")
+        )
+
+        assertEquals(first, reordered)
+        assertTrue(first.startsWith(CacheIdentity.CACHE_KEY_PREFIX))
+        assertFalse(first.contains("super-secret"))
+        assertFalse(first.contains("query-secret"))
+        val childKey = CacheIdentity.cacheKey(first, "https://cdn.test/segment.ts?sig=child-secret")
+        assertTrue(childKey.startsWith("$first/"))
+        assertFalse(childKey.contains("child-secret"))
+    }
+
+    @Test
+    fun cacheIdentity_changesWithUriOrCredentials() {
+        val base = CacheIdentity.forSource(
+            "https://example.test/video.mp4",
+            mapOf("Authorization" to "Bearer one")
+        )
+
+        assertNotEquals(
+            base,
+            CacheIdentity.forSource(
+                "https://example.test/video.mp4",
+                mapOf("Authorization" to "Bearer two")
+            )
+        )
+        assertNotEquals(
+            base,
+            CacheIdentity.forSource(
+                "https://example.test/other.mp4",
+                mapOf("Authorization" to "Bearer one")
+            )
+        )
+    }
+
+    @Test
+    fun preloadWindow_keepsSameUriWhenCredentialsDiffer() {
+        val registry = FeedSourceRegistry()
+        val uri = "https://example.test/private.m3u8"
+        registry.replaceAll(
+            listOf(
+                RegisteredSource("a", uri, 0, FeedMediaKindMessage.HLS, mapOf("Token" to "a")),
+                RegisteredSource("b", uri, 1, FeedMediaKindMessage.HLS, mapOf("Token" to "b"))
+            )
+        )
+
+        assertEquals(listOf("a", "b"), registry.preloadWindow(2, 0).map { it.id })
+    }
+
+    @Test
+    fun replaceAll_marksRemovedOrIdentityChangedControllerSourcesAsOrphans() {
+        val registry = FeedSourceRegistry()
+        val original = RegisteredSource(
+            "same-id",
+            "https://example.test/video.mp4",
+            0,
+            FeedMediaKindMessage.PROGRESSIVE,
+            mapOf("Authorization" to "old")
+        )
+        registry.replaceAll(listOf(original))
+        val identity = original.cacheIdentity
+        assertFalse(registry.isOrphaned(original.id, identity, original.kind))
+
+        registry.replaceAll(listOf(original.copy(headers = mapOf("Authorization" to "new"))))
+        assertTrue(registry.isOrphaned(original.id, identity, original.kind))
+        assertTrue(registry.isOrphaned("removed-id", identity, original.kind))
+    }
+
+    @Test
+    fun sourceHeaders_overrideRequestHeadersCaseInsensitively_forChildRequests() {
+        val merged = MediaCache.mergeRequestHeaders(
+            requestHeaders = mapOf("authorization" to "stale", "Range" to "bytes=0-10"),
+            sourceHeaders = mapOf("Authorization" to "Bearer current", "X-Tenant" to "42")
+        )
+
+        assertEquals("Bearer current", merged["authorization"])
+        assertEquals("bytes=0-10", merged["range"])
+        assertEquals("42", merged["x-tenant"])
+        assertEquals(3, merged.size)
     }
 }

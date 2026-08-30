@@ -282,12 +282,16 @@ abstract class NativeFeedPlayerHostApi {
 
   /// Drops persisted media bytes for the given sources, or all of them when
   /// the list is empty.
+  @async
   void evictCachedMedia(SourceIdsRequest request);
 
+  @async
   void clearMediaCache();
 
+  @async
   CacheStatusMessage cacheStatus(VisibleSourceRequest request);
 
+  @async
   int cacheUsageBytes();
 
   void attachView(AttachViewRequest request);

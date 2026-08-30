@@ -23,20 +23,24 @@ class RecordingFeedPlayerPlatform
   final List<int> detachedViewControllerIds = <int>[];
   final List<int> disposedControllerIds = <int>[];
   final List<String> visibleSourceIds = <String>[];
+  final List<String> attachmentOperations = <String>[];
 
+  Completer<int>? nextAttachTexture;
+  Completer<void>? nextDetachTexture;
+  Object? attachTextureError;
   FeedPlayerConfig? initializedWith;
   int nextControllerId = 1;
 
   Future<void> close() async {
-    await _releases.close();
+    unawaited(_releases.close());
     for (final StreamController<VideoMetrics> c in _metrics.values) {
-      await c.close();
+      unawaited(c.close());
     }
     for (final StreamController<VideoSize> c in _videoSizes.values) {
-      await c.close();
+      unawaited(c.close());
     }
     for (final StreamController<PlaybackStatusUpdate> c in _states.values) {
-      await c.close();
+      unawaited(c.close());
     }
   }
 
@@ -203,22 +207,38 @@ class RecordingFeedPlayerPlatform
     required int viewId,
   }) async {
     attachedViewControllerIds.add(controllerId);
+    attachmentOperations.add('attachView:$controllerId:$viewId');
   }
 
   @override
   Future<void> detachView({required int controllerId}) async {
     detachedViewControllerIds.add(controllerId);
+    attachmentOperations.add('detachView:$controllerId');
   }
 
   @override
   Future<int> attachTexture(int controllerId) async {
     attachedTextureControllerIds.add(controllerId);
+    attachmentOperations.add('attachTexture:$controllerId');
+    final Object? error = attachTextureError;
+    if (error != null) {
+      throw error;
+    }
+    final Completer<int>? gate = nextAttachTexture;
+    nextAttachTexture = null;
+    if (gate != null) {
+      return gate.future;
+    }
     return 1000 + controllerId;
   }
 
   @override
   Future<void> detachTexture(int controllerId) async {
     detachedTextureControllerIds.add(controllerId);
+    attachmentOperations.add('detachTexture:$controllerId');
+    final Completer<void>? gate = nextDetachTexture;
+    nextDetachTexture = null;
+    await gate?.future;
   }
 
   @override

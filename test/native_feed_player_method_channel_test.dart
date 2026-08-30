@@ -229,6 +229,30 @@ void main() {
     expect(update.error!.platformCode, 'NSURLErrorDomain:-1009');
   });
 
+  test('late state subscriber receives the latest update', () async {
+    await platform.initialize(const FeedPlayerConfig());
+    states.add(
+      PlaybackStateEvent(
+        controllerId: 7,
+        status: PlaybackStatusMessage.error,
+        error: PlaybackErrorMessage(
+          code: 'network_failed',
+          message: 'offline',
+          isRecoverable: true,
+        ),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final PlaybackStatusUpdate update = await platform
+        .stateStream(7)
+        .first
+        .timeout(const Duration(seconds: 1));
+
+    expect(update.state, VideoPlaybackState.error);
+    expect(update.error?.code, 'network_failed');
+  });
+
   test('position stream maps buffer and duration', () async {
     final Future<PlaybackPosition> next = platform.positionStream(7).first;
 
@@ -345,5 +369,37 @@ void main() {
 
     await platform.evictCachedMedia(<String>['a']);
     expect(hostApi.evictRequest!.sourceIds, <String>['a']);
+  });
+
+  test(
+    'empty source identifiers are rejected at the platform boundary',
+    () async {
+      expect(
+        () => platform.createController(
+          sourceId: ' ',
+          autoPlay: false,
+          looping: true,
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(platform.setVisibleSource(''), throwsArgumentError);
+      await expectLater(platform.cacheStatus(' '), throwsArgumentError);
+      await expectLater(
+        platform.evictCachedMedia(<String>['valid', '']),
+        throwsArgumentError,
+      );
+      expect(hostApi.createRequest, isNull);
+      expect(hostApi.visibleRequest, isNull);
+    },
+  );
+
+  test('invalid volumes are rejected at the platform boundary', () async {
+    await expectLater(platform.setVolume(7, double.nan), throwsArgumentError);
+    await expectLater(
+      platform.setVolume(7, double.infinity),
+      throwsArgumentError,
+    );
+    await expectLater(platform.setVolume(7, -0.1), throwsArgumentError);
+    await expectLater(platform.setVolume(7, 1.1), throwsArgumentError);
   });
 }

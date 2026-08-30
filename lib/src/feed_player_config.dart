@@ -16,8 +16,12 @@ class CachePolicy {
   /// Upper bound on bytes retained on disk, enforced with LRU eviction.
   final int maxBytes;
 
-  CachePolicyMessage toMessage() =>
-      CachePolicyMessage(enabled: enabled, maxBytes: maxBytes);
+  CachePolicyMessage toMessage() {
+    if (maxBytes <= 0) {
+      throw ArgumentError.value(maxBytes, 'maxBytes', 'Must be positive.');
+    }
+    return CachePolicyMessage(enabled: enabled, maxBytes: maxBytes);
+  }
 }
 
 /// Audio behaviour for the feed.
@@ -43,11 +47,20 @@ class AudioPolicy {
     );
   }
 
-  AudioPolicyMessage toMessage() => AudioPolicyMessage(
-    muted: muted,
-    volume: volume,
-    handleAudioFocus: handleAudioFocus,
-  );
+  AudioPolicyMessage toMessage() {
+    if (!volume.isFinite || volume < 0.0 || volume > 1.0) {
+      throw ArgumentError.value(
+        volume,
+        'volume',
+        'Must be finite and within 0..1.',
+      );
+    }
+    return AudioPolicyMessage(
+      muted: muted,
+      volume: volume,
+      handleAudioFocus: handleAudioFocus,
+    );
+  }
 }
 
 /// Native video output mode.
@@ -108,16 +121,53 @@ class FeedPlayerConfig {
   final CachePolicy cache;
   final AudioPolicy audio;
 
-  FeedPlayerConfigMessage toMessage() => FeedPlayerConfigMessage(
-    maxActivePlayers: maxActivePlayers,
-    preloadAhead: preloadAhead,
-    preloadBehind: preloadBehind,
-    maxConcurrentPreloads: maxConcurrentPreloads,
-    positionUpdateIntervalMs: positionUpdateInterval.inMilliseconds,
-    renderMode: renderMode.toMessage(),
-    cache: cache.toMessage(),
-    audio: audio.toMessage(),
-  );
+  FeedPlayerConfigMessage toMessage() {
+    if (maxActivePlayers < 1) {
+      throw ArgumentError.value(
+        maxActivePlayers,
+        'maxActivePlayers',
+        'Must be at least 1.',
+      );
+    }
+    if (preloadAhead < 0) {
+      throw ArgumentError.value(
+        preloadAhead,
+        'preloadAhead',
+        'Cannot be negative.',
+      );
+    }
+    if (preloadBehind < 0) {
+      throw ArgumentError.value(
+        preloadBehind,
+        'preloadBehind',
+        'Cannot be negative.',
+      );
+    }
+    if (maxConcurrentPreloads < 1) {
+      throw ArgumentError.value(
+        maxConcurrentPreloads,
+        'maxConcurrentPreloads',
+        'Must be at least 1.',
+      );
+    }
+    if (positionUpdateInterval.inMilliseconds <= 0) {
+      throw ArgumentError.value(
+        positionUpdateInterval,
+        'positionUpdateInterval',
+        'Must be at least 1 millisecond.',
+      );
+    }
+    return FeedPlayerConfigMessage(
+      maxActivePlayers: maxActivePlayers,
+      preloadAhead: preloadAhead,
+      preloadBehind: preloadBehind,
+      maxConcurrentPreloads: maxConcurrentPreloads,
+      positionUpdateIntervalMs: positionUpdateInterval.inMilliseconds,
+      renderMode: renderMode.toMessage(),
+      cache: cache.toMessage(),
+      audio: audio.toMessage(),
+    );
+  }
 
   FeedPlayerConfig copyWith({
     int? maxActivePlayers,

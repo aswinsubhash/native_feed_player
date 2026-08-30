@@ -112,7 +112,7 @@ func deepHashMessages(value: Any?, hasher: inout Hasher) {
   }
 
   if let valueDict = value as? [AnyHashable: AnyHashable] {
-    for key in valueDict.keys { 
+    for key in valueDict.keys {
       hasher.combine(key)
       deepHashMessages(value: valueDict[key]!, hasher: &hasher)
     }
@@ -126,7 +126,7 @@ func deepHashMessages(value: Any?, hasher: inout Hasher) {
   return hasher.combine(String(describing: value))
 }
 
-    
+
 
 /// How a source should be treated by the native loader.
 enum FeedMediaKindMessage: Int {
@@ -965,6 +965,7 @@ class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
 
 var messagesPigeonMethodCodec = FlutterStandardMethodCodec(readerWriter: MessagesPigeonCodecReaderWriter());
 
+
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
 protocol NativeFeedPlayerHostApi {
   func initialize(config: FeedPlayerConfigMessage) throws
@@ -987,10 +988,10 @@ protocol NativeFeedPlayerHostApi {
   func setVisibleSource(request: VisibleSourceRequest) throws
   /// Drops persisted media bytes for the given sources, or all of them when
   /// the list is empty.
-  func evictCachedMedia(request: SourceIdsRequest) throws
-  func clearMediaCache() throws
-  func cacheStatus(request: VisibleSourceRequest) throws -> CacheStatusMessage
-  func cacheUsageBytes() throws -> Int64
+  func evictCachedMedia(request: SourceIdsRequest, completion: @escaping (Result<Void, Error>) -> Void)
+  func clearMediaCache(completion: @escaping (Result<Void, Error>) -> Void)
+  func cacheStatus(request: VisibleSourceRequest, completion: @escaping (Result<CacheStatusMessage, Error>) -> Void)
+  func cacheUsageBytes(completion: @escaping (Result<Int64, Error>) -> Void)
   func attachView(request: AttachViewRequest) throws
   func detachView(request: ControllerRequest) throws
   /// Binds the controller to a Flutter texture and returns its id.
@@ -1240,11 +1241,13 @@ class NativeFeedPlayerHostApiSetup {
       evictCachedMediaChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
         let requestArg = args[0] as! SourceIdsRequest
-        do {
-          try api.evictCachedMedia(request: requestArg)
-          reply(wrapResult(nil))
-        } catch {
-          reply(wrapError(error))
+        api.evictCachedMedia(request: requestArg) { result in
+          switch result {
+          case .success:
+            reply(wrapResult(nil))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
         }
       }
     } else {
@@ -1253,11 +1256,13 @@ class NativeFeedPlayerHostApiSetup {
     let clearMediaCacheChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.clearMediaCache\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       clearMediaCacheChannel.setMessageHandler { _, reply in
-        do {
-          try api.clearMediaCache()
-          reply(wrapResult(nil))
-        } catch {
-          reply(wrapError(error))
+        api.clearMediaCache { result in
+          switch result {
+          case .success:
+            reply(wrapResult(nil))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
         }
       }
     } else {
@@ -1268,11 +1273,13 @@ class NativeFeedPlayerHostApiSetup {
       cacheStatusChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
         let requestArg = args[0] as! VisibleSourceRequest
-        do {
-          let result = try api.cacheStatus(request: requestArg)
-          reply(wrapResult(result))
-        } catch {
-          reply(wrapError(error))
+        api.cacheStatus(request: requestArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
         }
       }
     } else {
@@ -1281,11 +1288,13 @@ class NativeFeedPlayerHostApiSetup {
     let cacheUsageBytesChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_feed_player.NativeFeedPlayerHostApi.cacheUsageBytes\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       cacheUsageBytesChannel.setMessageHandler { _, reply in
-        do {
-          let result = try api.cacheUsageBytes()
-          reply(wrapResult(result))
-        } catch {
-          reply(wrapError(error))
+        api.cacheUsageBytes { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
         }
       }
     } else {
@@ -1430,7 +1439,7 @@ class PlaybackStateEventsStreamHandler: PigeonEventChannelWrapper<PlaybackStateE
     channel.setStreamHandler(internalStreamHandler)
   }
 }
-      
+
 class PositionEventsStreamHandler: PigeonEventChannelWrapper<PositionEvent> {
   static func register(with messenger: FlutterBinaryMessenger,
                       instanceName: String = "",
@@ -1444,7 +1453,7 @@ class PositionEventsStreamHandler: PigeonEventChannelWrapper<PositionEvent> {
     channel.setStreamHandler(internalStreamHandler)
   }
 }
-      
+
 class MetricsEventsStreamHandler: PigeonEventChannelWrapper<MetricsEvent> {
   static func register(with messenger: FlutterBinaryMessenger,
                       instanceName: String = "",
@@ -1458,7 +1467,7 @@ class MetricsEventsStreamHandler: PigeonEventChannelWrapper<MetricsEvent> {
     channel.setStreamHandler(internalStreamHandler)
   }
 }
-      
+
 class VideoSizeEventsStreamHandler: PigeonEventChannelWrapper<VideoSizeEvent> {
   static func register(with messenger: FlutterBinaryMessenger,
                       instanceName: String = "",
@@ -1472,7 +1481,7 @@ class VideoSizeEventsStreamHandler: PigeonEventChannelWrapper<VideoSizeEvent> {
     channel.setStreamHandler(internalStreamHandler)
   }
 }
-      
+
 class LifecycleEventsStreamHandler: PigeonEventChannelWrapper<ControllerLifecycleEvent> {
   static func register(with messenger: FlutterBinaryMessenger,
                       instanceName: String = "",
@@ -1486,4 +1495,3 @@ class LifecycleEventsStreamHandler: PigeonEventChannelWrapper<ControllerLifecycl
     channel.setStreamHandler(internalStreamHandler)
   }
 }
-      

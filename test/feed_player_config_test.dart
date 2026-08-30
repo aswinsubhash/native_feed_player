@@ -2,6 +2,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:native_feed_player/native_feed_player.dart';
 import 'package:native_feed_player/src/messages.g.dart';
 
+class _InvalidCachePolicy extends CachePolicy {
+  const _InvalidCachePolicy() : super(maxBytes: 1);
+
+  @override
+  int get maxBytes => 0;
+}
+
+class _InvalidAudioPolicy extends AudioPolicy {
+  const _InvalidAudioPolicy();
+
+  @override
+  double get volume => double.nan;
+}
+
+class _InvalidFeedPlayerConfig extends FeedPlayerConfig {
+  const _InvalidFeedPlayerConfig();
+
+  @override
+  int get maxActivePlayers => 0;
+}
+
 void main() {
   group('FeedPlayerConfig', () {
     test('defaults suit a forward-travelling feed', () {
@@ -41,6 +62,17 @@ void main() {
       );
       expect(() => CachePolicy(maxBytes: 0), throwsAssertionError);
       expect(() => AudioPolicy(volume: 1.5), throwsAssertionError);
+    });
+
+    test('wire validation remains active independently of assertions', () {
+      expect(const _InvalidCachePolicy().toMessage, throwsArgumentError);
+      expect(const _InvalidAudioPolicy().toMessage, throwsArgumentError);
+      expect(const _InvalidFeedPlayerConfig().toMessage, throwsArgumentError);
+
+      final FeedPlayerConfig config = FeedPlayerConfig(
+        positionUpdateInterval: Duration(microseconds: int.parse('1')),
+      );
+      expect(config.toMessage, throwsArgumentError);
     });
 
     test('copyWith changes one field and preserves the rest', () {
@@ -108,6 +140,53 @@ void main() {
 
       expect(message.kind, FeedMediaKindMessage.hls);
       expect(message.headers['Authorization'], 'Bearer t');
+    });
+
+    test('headers participate in equality and hashing', () {
+      const FeedSource first = FeedSource(
+        id: 'a',
+        uri: 'a.mp4',
+        headers: <String, String>{'a': '1', 'b': '2'},
+      );
+      const FeedSource reordered = FeedSource(
+        id: 'a',
+        uri: 'a.mp4',
+        headers: <String, String>{'b': '2', 'a': '1'},
+      );
+      const FeedSource different = FeedSource(
+        id: 'a',
+        uri: 'a.mp4',
+        headers: <String, String>{'a': 'changed', 'b': '2'},
+      );
+
+      expect(first, reordered);
+      expect(first.hashCode, reordered.hashCode);
+      expect(first, isNot(different));
+    });
+
+    test('toString redacts URI query values', () {
+      const FeedSource source = FeedSource(
+        id: 'a',
+        uri: 'https://example.test/video.mp4?token=secret&signature=value#part',
+      );
+
+      final String description = source.toString();
+
+      expect(description, contains('https://example.test/video.mp4'));
+      expect(description, contains('#part'));
+      expect(description, isNot(contains('secret')));
+      expect(description, isNot(contains('signature')));
+    });
+
+    test('wire conversion rejects empty ids and uris', () {
+      expect(
+        () => const FeedSource(id: ' ', uri: 'a.mp4').toMessage(0),
+        throwsArgumentError,
+      );
+      expect(
+        () => const FeedSource(id: 'a', uri: ' ').toMessage(0),
+        throwsArgumentError,
+      );
     });
   });
 

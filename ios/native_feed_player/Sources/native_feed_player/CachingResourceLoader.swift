@@ -3,74 +3,165 @@ import Foundation
 
 /// Loads and caches progressive media through a custom URL scheme.
 ///
-/// Concurrent requests for one URI share a sequential download.
+/// Concurrent requests for one request identity share a sequential download.
 final class CachingResourceLoader: NSObject {
   static let scheme = "nfpcache"
 
+  private struct RequestContext {
+    let headers: [String: String]
+  }
+
   /// Wraps a remote URL so AVFoundation routes it through this delegate.
-  static func interceptURL(for uri: String) -> URL? {
+  /// The opaque identity in the scheme prevents assets with different request
+  /// credentials from sharing loader or disk state.
+  static func interceptURL(for uri: String, headers: [String: String] = [:]) -> URL? {
+    let identity = MediaCacheIdentity.make(uri: uri, headers: headers)
     guard var components = URLComponents(string: uri), let originalScheme = components.scheme
     else {
       return nil
     }
-    components.scheme = "\(scheme)-\(originalScheme)"
+    components.scheme = "\(scheme)-\(originalScheme)-\(identity)"
     return components.url
   }
 
   /// Restores the real URL from an intercepted one.
   static func originalURL(from url: URL) -> URL? {
     guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-      let intercepted = components.scheme,
-      intercepted.hasPrefix("\(scheme)-")
+      let originalScheme = interceptedParts(from: components.scheme).scheme
     else {
       return nil
     }
-    components.scheme = String(intercepted.dropFirst(scheme.count + 1))
+    components.scheme = originalScheme
     return components.url
   }
 
+  static func identity(from url: URL) -> String? {
+    guard let scheme = URLComponents(url: url, resolvingAgainstBaseURL: false)?.scheme else {
+      return nil
+    }
+    return interceptedParts(from: scheme).identity
+  }
+
+  /// Exposed internally for focused response validation tests.
+  static func isSuccessfulHTTPStatus(_ statusCode: Int) -> Bool {
+    (200...299).contains(statusCode)
+  }
+
   fileprivate final class Download: NSObject {
-    let uri: String
+    let identity: String
     let handle: FileHandle
     let temporaryURL: URL
     var task: URLSessionDataTask?
     var contentLength: Int64 = 0
     var contentType: String?
     var bytesWritten: Int64 = 0
+    var receivedSuccessfulResponse = false
     var finished = false
     var failure: Error?
     var pending: [AVAssetResourceLoadingRequest] = []
 
-    init(uri: String, temporaryURL: URL, handle: FileHandle) {
-      self.uri = uri
+    init(identity: String, temporaryURL: URL, handle: FileHandle) {
+      self.identity = identity
       self.temporaryURL = temporaryURL
       self.handle = handle
     }
   }
 
   private let queue = DispatchQueue(label: "native_feed_player.resourceloader")
+  private let sessionConfiguration: URLSessionConfiguration
   private lazy var session: URLSession = {
-    URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    URLSession(configuration: sessionConfiguration, delegate: self, delegateQueue: nil)
   }()
 
-  private var downloadsByUri: [String: Download] = [:]
+  private var downloadsByIdentity: [String: Download] = [:]
   private var downloadsByTask: [Int: Download] = [:]
-  private var headersByUri: [String: [String: String]] = [:]
+  private var contextsByIdentity: [String: RequestContext] = [:]
+  var onFailure: ((String, Error) -> Void)?
 
-  func setHeaders(_ headers: [String: String], for uri: String) {
-    queue.async { self.headersByUri[uri] = headers }
+  init(sessionConfiguration: URLSessionConfiguration = .ephemeral) {
+    sessionConfiguration.urlCache = nil
+    sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    self.sessionConfiguration = sessionConfiguration
+    super.init()
   }
 
-  func cancelAll() {
-    queue.async {
-      for (_, download) in self.downloadsByUri {
-        download.task?.cancel()
-        try? download.handle.closeCompat()
-        try? FileManager.default.removeItem(at: download.temporaryURL)
-      }
-      self.downloadsByUri.removeAll()
-      self.downloadsByTask.removeAll()
+  /// Registers the short-lived request context before AVFoundation can ask the
+  /// resource loader for bytes.
+  func prepareURL(for uri: String, headers: [String: String]) -> URL? {
+    guard let intercepted = CachingResourceLoader.interceptURL(for: uri, headers: headers),
+      let identity = CachingResourceLoader.identity(from: intercepted)
+    else {
+      return nil
     }
+    let context = RequestContext(headers: MediaCacheIdentity.normalizedHeaders(headers))
+    queue.sync {
+      contextsByIdentity[identity] = context
+    }
+    return intercepted
+  }
+
+  func cancelAll(completion: (() -> Void)? = nil) {
+    queue.async {
+      let cancellation = Self.cancellationError()
+      for download in Array(self.downloadsByIdentity.values) {
+        self.failAndClean(download, error: cancellation, cancelTask: true)
+      }
+      self.downloadsByIdentity.removeAll()
+      self.downloadsByTask.removeAll()
+      self.contextsByIdentity.removeAll()
+      completion?()
+    }
+  }
+
+  func cancel(identities: Set<String>, completion: @escaping () -> Void) {
+    queue.async {
+      let cancellation = Self.cancellationError()
+      for identity in identities {
+        if let download = self.downloadsByIdentity[identity] {
+          self.failAndClean(download, error: cancellation, cancelTask: true)
+        }
+        self.contextsByIdentity.removeValue(forKey: identity)
+      }
+      completion()
+    }
+  }
+
+  /// Breaks URLSession's delegate retention during manager teardown.
+  func shutdown() {
+    queue.sync {
+      let cancellation = Self.cancellationError()
+      for download in Array(downloadsByIdentity.values) {
+        failAndClean(download, error: cancellation, cancelTask: true)
+      }
+      downloadsByIdentity.removeAll()
+      downloadsByTask.removeAll()
+      contextsByIdentity.removeAll()
+    }
+    session.invalidateAndCancel()
+  }
+
+  deinit {
+    session.invalidateAndCancel()
+  }
+
+  private static func interceptedParts(from interceptedScheme: String?) -> (
+    scheme: String?, identity: String?
+  ) {
+    guard let interceptedScheme, interceptedScheme.hasPrefix("\(scheme)-") else {
+      return (nil, nil)
+    }
+    let remainder = String(interceptedScheme.dropFirst(scheme.count + 1))
+    guard let separator = remainder.lastIndex(of: "-") else {
+      // Accept the old URL shape only to restore a URL. It has no v2 identity
+      // and therefore can never address a cached entry.
+      return (remainder, nil)
+    }
+    let identity = String(remainder[remainder.index(after: separator)...])
+    let originalScheme = String(remainder[..<separator])
+    guard identity.count == 64, identity.allSatisfy({ $0.isHexDigit }) else {
+      return (remainder, nil)
+    }
+    return (originalScheme, identity.lowercased())
   }
 }
 
@@ -82,21 +173,21 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
     shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
   ) -> Bool {
     guard let interceptedURL = loadingRequest.request.url,
-      let originalURL = CachingResourceLoader.originalURL(from: interceptedURL)
+      let originalURL = CachingResourceLoader.originalURL(from: interceptedURL),
+      let identity = CachingResourceLoader.identity(from: interceptedURL)
     else {
       return false
     }
-    let uri = originalURL.absoluteString
 
     // Serve complete entries from disk.
-    if let cached = MediaDiskCache.shared.cachedFile(for: uri) {
+    if let cached = MediaDiskCache.shared.cachedFile(forIdentity: identity) {
       serveFromFile(loadingRequest, cached: cached)
       return true
     }
 
     queue.async {
-      let download = self.downloadsByUri[uri]
-        ?? self.startDownload(uri: uri, originalURL: originalURL)
+      let download = self.downloadsByIdentity[identity]
+        ?? self.startDownload(identity: identity, originalURL: originalURL)
       guard let download else {
         loadingRequest.finishLoading(with: CachingResourceLoader.cacheError())
         return
@@ -112,8 +203,19 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
     didCancel loadingRequest: AVAssetResourceLoadingRequest
   ) {
     queue.async {
-      for (_, download) in self.downloadsByUri {
+      for download in Array(self.downloadsByIdentity.values) where
+        download.pending.contains(where: { $0 === loadingRequest })
+      {
+        // AVFoundation already owns the cancelled request's terminal state, so
+        // do not invoke it again. Cancel and clean an otherwise unused task.
         download.pending.removeAll { $0 === loadingRequest }
+        if download.pending.isEmpty {
+          self.failAndClean(
+            download,
+            error: CachingResourceLoader.cancellationError(),
+            cancelTask: true
+          )
+        }
       }
     }
   }
@@ -150,30 +252,51 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
 // MARK: - Download coordination
 
 extension CachingResourceLoader {
-  private static func cacheError() -> NSError {
+  private static func cacheError(_ description: String = "Unable to open a cache file for writing.") -> NSError {
     NSError(
       domain: "native_feed_player.cache",
       code: -1,
-      userInfo: [NSLocalizedDescriptionKey: "Unable to open a cache file for writing."]
+      userInfo: [NSLocalizedDescriptionKey: description]
     )
   }
 
-  private func startDownload(uri: String, originalURL: URL) -> Download? {
+  private static func cancellationError() -> NSError {
+    NSError(
+      domain: NSURLErrorDomain,
+      code: NSURLErrorCancelled,
+      userInfo: [NSLocalizedDescriptionKey: "Media cache request was cancelled."]
+    )
+  }
+
+  private static func httpError(statusCode: Int) -> NSError {
+    NSError(
+      domain: NSURLErrorDomain,
+      code: NSURLErrorBadServerResponse,
+      userInfo: [
+        NSLocalizedDescriptionKey: "Media request failed with HTTP status \(statusCode).",
+        "HTTPStatusCode": statusCode,
+      ]
+    )
+  }
+
+  private func startDownload(identity: String, originalURL: URL) -> Download? {
     let temporaryURL = FileManager.default.temporaryDirectory
-      .appendingPathComponent("nfp-\(MediaDiskCache.key(for: uri))")
+      .appendingPathComponent("nfp-\(identity)-\(UUID().uuidString)")
     FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
     guard let handle = try? FileHandle(forWritingTo: temporaryURL) else {
+      try? FileManager.default.removeItem(at: temporaryURL)
+      contextsByIdentity.removeValue(forKey: identity)
       return nil
     }
 
-    let download = Download(uri: uri, temporaryURL: temporaryURL, handle: handle)
+    let download = Download(identity: identity, temporaryURL: temporaryURL, handle: handle)
     var request = URLRequest(url: originalURL)
-    for (field, value) in headersByUri[uri] ?? [:] {
+    for (field, value) in contextsByIdentity[identity]?.headers ?? [:] {
       request.setValue(value, forHTTPHeaderField: field)
     }
     let task = session.dataTask(with: request)
     download.task = task
-    downloadsByUri[uri] = download
+    downloadsByIdentity[identity] = download
     downloadsByTask[task.taskIdentifier] = download
     task.resume()
     return download
@@ -187,10 +310,14 @@ extension CachingResourceLoader {
       if request.isCancelled {
         continue
       }
+      if download.finished, let failure = download.failure {
+        request.finishLoading(with: failure)
+        continue
+      }
 
       if let info = request.contentInformationRequest {
-        // Wait for response headers before serving content metadata.
-        guard download.contentLength > 0 || download.finished else {
+        // Wait for validated response headers before serving content metadata.
+        guard download.receivedSuccessfulResponse || download.finished else {
           stillPending.append(request)
           continue
         }
@@ -243,6 +370,34 @@ extension CachingResourceLoader {
     try? handle.seekCompat(toOffset: UInt64(max(0, offset)))
     return try? handle.readCompat(upToCount: length)
   }
+
+  private func failAndClean(_ download: Download, error: Error, cancelTask: Bool) {
+    guard !download.finished else {
+      return
+    }
+    download.finished = true
+    download.failure = download.failure ?? error
+    if cancelTask {
+      download.task?.cancel()
+    }
+    try? download.handle.closeCompat()
+    servePending(download)
+    // Defensive: every non-cancelled pending request must reach a terminal state.
+    for request in download.pending where !request.isCancelled {
+      request.finishLoading(with: download.failure)
+    }
+    download.pending.removeAll()
+    let failure = download.failure as NSError?
+    if failure?.domain != NSURLErrorDomain || failure?.code != NSURLErrorCancelled {
+      onFailure?(download.identity, download.failure ?? error)
+    }
+    if let task = download.task {
+      downloadsByTask.removeValue(forKey: task.taskIdentifier)
+    }
+    downloadsByIdentity.removeValue(forKey: download.identity)
+    contextsByIdentity.removeValue(forKey: download.identity)
+    try? FileManager.default.removeItem(at: download.temporaryURL)
+  }
 }
 
 // MARK: - URLSessionDataDelegate
@@ -255,30 +410,48 @@ extension CachingResourceLoader: URLSessionDataDelegate {
     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
   ) {
     queue.async {
-      if let download = self.downloadsByTask[dataTask.taskIdentifier] {
-        download.contentLength = response.expectedContentLength > 0
-          ? response.expectedContentLength
-          : 0
-        download.contentType = response.mimeType
-        self.servePending(download)
+      guard let download = self.downloadsByTask[dataTask.taskIdentifier] else {
+        completionHandler(.cancel)
+        return
       }
+      if let http = response as? HTTPURLResponse,
+        !CachingResourceLoader.isSuccessfulHTTPStatus(http.statusCode)
+      {
+        self.failAndClean(
+          download,
+          error: CachingResourceLoader.httpError(statusCode: http.statusCode),
+          cancelTask: true
+        )
+        completionHandler(.cancel)
+        return
+      }
+      download.receivedSuccessfulResponse = true
+      download.contentLength = response.expectedContentLength > 0
+        ? response.expectedContentLength
+        : 0
+      download.contentType = response.mimeType
+      self.servePending(download)
       completionHandler(.allow)
     }
   }
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
     queue.async {
-      guard let download = self.downloadsByTask[dataTask.taskIdentifier] else {
+      guard let download = self.downloadsByTask[dataTask.taskIdentifier],
+        !download.finished,
+        download.receivedSuccessfulResponse
+      else {
         return
       }
       do {
         try download.handle.seekToEndCompat()
         try download.handle.writeCompat(contentsOf: data)
         download.bytesWritten += Int64(data.count)
+        self.servePending(download)
       } catch {
         download.failure = error
+        self.failAndClean(download, error: error, cancelTask: true)
       }
-      self.servePending(download)
     }
   }
 
@@ -288,22 +461,43 @@ extension CachingResourceLoader: URLSessionDataDelegate {
         return
       }
       download.finished = true
-      download.failure = error
+      download.failure = download.failure ?? error
       try? download.handle.closeCompat()
-      self.servePending(download)
-      self.downloadsByUri.removeValue(forKey: download.uri)
 
-      // Cache only complete response bodies.
-      let complete = error == nil
+      let complete = download.failure == nil
+        && download.receivedSuccessfulResponse
         && download.bytesWritten > 0
         && (download.contentLength == 0 || download.bytesWritten >= download.contentLength)
+      if !complete, download.failure == nil {
+        download.failure = CachingResourceLoader.cacheError("Media response ended before all bytes arrived.")
+      }
+      if !complete, let failure = download.failure as NSError?,
+        failure.domain != NSURLErrorDomain || failure.code != NSURLErrorCancelled
+      {
+        self.onFailure?(download.identity, failure)
+      }
+      self.servePending(download)
+      for request in download.pending where !request.isCancelled {
+        request.finishLoading(with: download.failure)
+      }
+      download.pending.removeAll()
+      self.downloadsByIdentity.removeValue(forKey: download.identity)
+
       if complete {
         MediaDiskCache.shared.store(
           temporaryFile: download.temporaryURL,
-          uri: download.uri,
+          identity: download.identity,
           contentType: download.contentType
-        )
+        ) { [weak self] in
+          self?.queue.async {
+            // A retry may have installed a fresh context while adoption ran.
+            if self?.downloadsByIdentity[download.identity] == nil {
+              self?.contextsByIdentity.removeValue(forKey: download.identity)
+            }
+          }
+        }
       } else {
+        self.contextsByIdentity.removeValue(forKey: download.identity)
         try? FileManager.default.removeItem(at: download.temporaryURL)
       }
     }

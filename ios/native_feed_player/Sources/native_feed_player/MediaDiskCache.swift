@@ -1,17 +1,75 @@
 import CryptoKit
 import Foundation
 
+/// Builds an opaque, credential-safe identity for a media request.
+///
+/// The digest includes the complete URI and normalized HTTP headers, but only
+/// the SHA-256 result is used as a loader key, file name, or persisted value.
+enum MediaCacheIdentity {
+  static let schemaVersion = "native-feed-player-cache-v2"
+
+  static func make(uri: String, headers: [String: String]) -> String {
+    var material = Data()
+    append(schemaVersion, to: &material)
+    append(uri, to: &material)
+    for (name, value) in canonicalHeaders(headers) {
+      append(name, to: &material)
+      append(value, to: &material)
+    }
+    let digest = SHA256.hash(data: material)
+    return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Header names are case-insensitive. Sending the normalized headers and
+  /// hashing the same representation prevents differently-cased credentials
+  /// from sharing a cache entry.
+  static func normalizedHeaders(_ headers: [String: String]) -> [String: String] {
+    Dictionary(uniqueKeysWithValues: canonicalHeaders(headers))
+  }
+
+  private static func canonicalHeaders(_ headers: [String: String]) -> [(String, String)] {
+    var normalized: [String: String] = [:]
+    // Resolve duplicate differently-cased names deterministically before
+    // sorting. Such duplicates cannot both be represented by URLRequest.
+    for (name, value) in headers.sorted(by: {
+      let left = $0.key.lowercased()
+      let right = $1.key.lowercased()
+      return left == right ? $0.key < $1.key : left < right
+    }) {
+      let canonicalName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      guard !canonicalName.isEmpty else {
+        continue
+      }
+      normalized[canonicalName] = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return normalized.sorted { $0.key < $1.key }
+  }
+
+  private static func append(_ value: String, to data: inout Data) {
+    let bytes = Data(value.utf8)
+    var length = UInt64(bytes.count).bigEndian
+    withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
+    data.append(bytes)
+  }
+}
+
 /// LRU disk cache for complete media files.
 final class MediaDiskCache {
   private struct Entry: Codable {
     let key: String
-    let uri: String
     let contentType: String?
     let byteCount: Int64
     var lastAccess: TimeInterval
   }
 
+  private struct Index: Codable {
+    let schemaVersion: Int
+    let entries: [String: Entry]
+  }
+
   static let shared = MediaDiskCache()
+
+  private static let indexSchemaVersion = 2
 
   private let queue = DispatchQueue(label: "native_feed_player.cache", attributes: .concurrent)
   private let fileManager = FileManager.default
@@ -50,90 +108,107 @@ final class MediaDiskCache {
 
   // MARK: - Lookup
 
+  static func identity(for uri: String, headers: [String: String]) -> String {
+    MediaCacheIdentity.make(uri: uri, headers: headers)
+  }
+
+  /// Kept as a convenience for headerless requests and unit tests.
   static func key(for uri: String) -> String {
-    let digest = SHA256.hash(data: Data(uri.utf8))
-    return digest.map { String(format: "%02x", $0) }.joined()
+    identity(for: uri, headers: [:])
   }
 
   func fileURL(forKey key: String) -> URL {
     rootURL.appendingPathComponent(key)
   }
 
-  /// Returns the local file for a fully cached URI, refreshing its LRU stamp.
-  func cachedFile(for uri: String) -> (url: URL, contentType: String?, byteCount: Int64)? {
-    let key = MediaDiskCache.key(for: uri)
-    return queue.sync(flags: .barrier) { () -> (URL, String?, Int64)? in
-      guard enabled, var entry = entries[key] else {
+  /// Returns the local file for a fully cached request, refreshing its LRU stamp.
+  func cachedFile(forIdentity identity: String) -> (url: URL, contentType: String?, byteCount: Int64)? {
+    queue.sync(flags: .barrier) { () -> (URL, String?, Int64)? in
+      guard enabled, var entry = entries[identity] else {
         return nil
       }
-      let url = fileURL(forKey: key)
+      let url = fileURL(forKey: identity)
       guard fileManager.fileExists(atPath: url.path) else {
-        entries.removeValue(forKey: key)
+        entries.removeValue(forKey: identity)
+        saveIndexLocked()
         return nil
       }
       entry.lastAccess = Date().timeIntervalSince1970
-      entries[key] = entry
+      entries[identity] = entry
       saveIndexLocked()
       return (url, entry.contentType, entry.byteCount)
     }
   }
 
-  func cachedBytes(for uri: String) -> Int64 {
-    let key = MediaDiskCache.key(for: uri)
-    return queue.sync { entries[key]?.byteCount ?? 0 }
+  func cachedBytes(forIdentity identity: String, completion: @escaping (Int64) -> Void) {
+    queue.async {
+      completion(self.entries[identity]?.byteCount ?? 0)
+    }
   }
 
-  func usageBytes() -> Int64 {
-    queue.sync { entries.values.reduce(0) { $0 + $1.byteCount } }
+  func usageBytes(completion: @escaping (Int64) -> Void) {
+    queue.async {
+      completion(self.entries.values.reduce(0) { $0 + $1.byteCount })
+    }
   }
 
   // MARK: - Mutation
 
-  /// Adopts a completed download into the cache.
-  func store(temporaryFile: URL, uri: String, contentType: String?) {
-    guard isEnabled else {
-      try? fileManager.removeItem(at: temporaryFile)
-      return
-    }
-    let key = MediaDiskCache.key(for: uri)
-    queue.sync(flags: .barrier) {
-      let destination = fileURL(forKey: key)
-      try? fileManager.removeItem(at: destination)
-      do {
-        try fileManager.moveItem(at: temporaryFile, to: destination)
-      } catch {
-        try? fileManager.removeItem(at: temporaryFile)
+  /// Adopts a completed download into the cache. Ownership of the temporary
+  /// file transfers to the cache queue immediately.
+  func store(
+    temporaryFile: URL,
+    identity: String,
+    contentType: String?,
+    completion: (() -> Void)? = nil
+  ) {
+    queue.async(flags: .barrier) {
+      guard self.enabled else {
+        try? self.fileManager.removeItem(at: temporaryFile)
+        completion?()
         return
       }
-      let size = (try? fileManager.attributesOfItem(atPath: destination.path)[.size] as? Int64)
+      let destination = self.fileURL(forKey: identity)
+      try? self.fileManager.removeItem(at: destination)
+      do {
+        try self.fileManager.moveItem(at: temporaryFile, to: destination)
+      } catch {
+        try? self.fileManager.removeItem(at: temporaryFile)
+        completion?()
+        return
+      }
+      let size = (try? self.fileManager.attributesOfItem(atPath: destination.path)[.size] as? Int64)
         ?? 0
-      entries[key] = Entry(
-        key: key,
-        uri: uri,
+      self.entries[identity] = Entry(
+        key: identity,
         contentType: contentType,
         byteCount: size,
         lastAccess: Date().timeIntervalSince1970
       )
-      saveIndexLocked()
-      enforceBudgetLocked()
+      self.saveIndexLocked()
+      self.enforceBudgetLocked()
+      completion?()
     }
   }
 
-  func evict(uri: String) {
-    let key = MediaDiskCache.key(for: uri)
-    queue.sync(flags: .barrier) {
-      removeEntryLocked(key: key)
-      saveIndexLocked()
-    }
-  }
-
-  func evictAll() {
-    queue.sync(flags: .barrier) {
-      for key in entries.keys {
-        try? fileManager.removeItem(at: fileURL(forKey: key))
+  func evict(identities: Set<String>, completion: @escaping () -> Void) {
+    queue.async(flags: .barrier) {
+      for identity in identities {
+        self.removeEntryLocked(key: identity)
       }
-      entries.removeAll()
-      saveIndexLocked()
+      self.saveIndexLocked()
+      completion()
+    }
+  }
+
+  func evictAll(completion: @escaping () -> Void) {
+    queue.async(flags: .barrier) {
+      for key in self.entries.keys {
+        try? self.fileManager.removeItem(at: self.fileURL(forKey: key))
+      }
+      self.entries.removeAll()
+      self.saveIndexLocked()
+      completion()
     }
   }
 
@@ -166,17 +241,35 @@ final class MediaDiskCache {
 
   private func loadIndexLocked() {
     guard let data = try? Data(contentsOf: indexURL),
-      let decoded = try? JSONDecoder().decode([String: Entry].self, from: data)
+      let index = try? JSONDecoder().decode(Index.self, from: data),
+      index.schemaVersion == MediaDiskCache.indexSchemaVersion
     else {
-      entries = [:]
+      invalidateLegacySchemaLocked()
       return
     }
     // Discard index entries whose files are missing.
-    entries = decoded.filter { fileManager.fileExists(atPath: fileURL(forKey: $0.key).path) }
+    entries = index.entries.filter { fileManager.fileExists(atPath: fileURL(forKey: $0.key).path) }
+    saveIndexLocked()
+  }
+
+  /// The previous index persisted raw URIs and keyed files without headers.
+  /// Delete it atomically on first v2 configuration so it can never be reused.
+  private func invalidateLegacySchemaLocked() {
+    if let contents = try? fileManager.contentsOfDirectory(
+      at: rootURL,
+      includingPropertiesForKeys: nil
+    ) {
+      for url in contents {
+        try? fileManager.removeItem(at: url)
+      }
+    }
+    entries = [:]
+    saveIndexLocked()
   }
 
   private func saveIndexLocked() {
-    guard let data = try? JSONEncoder().encode(entries) else {
+    let index = Index(schemaVersion: MediaDiskCache.indexSchemaVersion, entries: entries)
+    guard let data = try? JSONEncoder().encode(index) else {
       return
     }
     try? data.write(to: indexURL, options: .atomic)

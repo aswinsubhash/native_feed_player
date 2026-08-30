@@ -32,7 +32,7 @@
 
 ## Observations
 
-- 
+-
 
 ## Release Decision
 

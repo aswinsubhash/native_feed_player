@@ -18,8 +18,7 @@ import kotlin.math.abs
  */
 @OptIn(UnstableApi::class)
 internal class FeedPreloadManager(
-    context: Context,
-    headerLookup: (uri: String) -> Map<String, String>
+    context: Context
 ) {
     /** Selects memory or disk preloading by viewport distance. */
     private inner class DistanceBasedStatusControl :
@@ -46,7 +45,7 @@ internal class FeedPreloadManager(
     private val cacheAvailable: Boolean = MediaCache.activeCache() != null
     private val builder: DefaultPreloadManager.Builder
     private val delegate: DefaultPreloadManager
-    private val addedItemsByUri = mutableMapOf<String, MediaItem>()
+    private val addedItemsByIdentity = mutableMapOf<String, MediaItem>()
 
     private var currentRank: Int = 0
     private var maxPreloadDistance: Int = 2
@@ -56,7 +55,6 @@ internal class FeedPreloadManager(
             context.applicationContext,
             DistanceBasedStatusControl()
         )
-            .setDataSourceFactory(MediaCache.createDataSourceFactory(headerLookup))
             .setLoadControl(
                 DefaultLoadControl.Builder()
                     .setBufferDurationsMs(
@@ -83,21 +81,23 @@ internal class FeedPreloadManager(
     fun sync(window: List<RegisteredSource>, visibleRank: Int) {
         currentRank = visibleRank
 
-        val wanted = window.associateBy { it.uri }
-        for ((uri, item) in addedItemsByUri.toList()) {
-            if (!wanted.containsKey(uri)) {
+        val wanted = window.associateBy { it.cacheIdentity }
+        for ((identity, item) in addedItemsByIdentity.toList()) {
+            if (!wanted.containsKey(identity)) {
                 delegate.remove(item)
-                addedItemsByUri.remove(uri)
+                addedItemsByIdentity.remove(identity)
             }
         }
 
         for (source in window) {
-            if (addedItemsByUri.containsKey(source.uri)) {
+            val identity = source.cacheIdentity
+            if (addedItemsByIdentity.containsKey(identity)) {
                 continue
             }
-            val item = MediaItem.fromUri(source.uri)
-            delegate.add(item, source.rank)
-            addedItemsByUri[source.uri] = item
+            val mediaSource = MediaCache.createMediaSource(source)
+            val item = mediaSource.mediaItem
+            delegate.add(mediaSource, source.rank)
+            addedItemsByIdentity[identity] = item
         }
 
         delegate.setCurrentPlayingIndex(visibleRank)
@@ -106,19 +106,19 @@ internal class FeedPreloadManager(
 
     /** Returns the preloaded source for [source], if available. */
     fun mediaSourceFor(source: RegisteredSource): MediaSource? {
-        val item = addedItemsByUri[source.uri] ?: return null
+        val item = addedItemsByIdentity[source.cacheIdentity] ?: return null
         return delegate.getMediaSource(item)
     }
 
     fun reset() {
         delegate.reset()
-        addedItemsByUri.clear()
+        addedItemsByIdentity.clear()
     }
 
     /** Releases shared preload components. */
     fun release() {
         delegate.release()
-        addedItemsByUri.clear()
+        addedItemsByIdentity.clear()
     }
 
     private companion object {

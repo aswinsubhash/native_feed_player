@@ -65,8 +65,8 @@ internal class FeedSourceRegistry {
         direction = ScrollDirection.UNKNOWN
     }
 
-    fun setVisible(sourceId: String) {
-        val target = sourcesById[sourceId] ?: return
+    fun setVisible(sourceId: String): Boolean {
+        val target = sourcesById[sourceId] ?: return false
         val previousRank = visibleRank()
         visibleSourceId = sourceId
         direction = when {
@@ -76,6 +76,7 @@ internal class FeedSourceRegistry {
             // Preserve direction when the rank is unchanged.
             else -> direction
         }
+        return true
     }
 
     fun source(id: String): RegisteredSource? = sourcesById[id]
@@ -103,14 +104,14 @@ internal class FeedSourceRegistry {
         val scaledForward = scaleBudget(forwardBudget, scale)
         val scaledBackward = scaleBudget(backwardBudget, scale)
 
-        val seenUris = mutableSetOf<String>()
+        val seenIdentities = mutableSetOf<String>()
         return sourcesById.values
             .filter { source ->
                 val delta = source.rank - visibleRank
                 delta in -scaledBackward..scaledForward
             }
             .sortedBy { source -> abs(source.rank - visibleRank) }
-            .filter { source -> seenUris.add(source.uri) }
+            .filter { source -> seenIdentities.add(source.cacheIdentity) }
     }
 
     /** Scales a preload budget without excluding the visible source. */
@@ -119,6 +120,15 @@ internal class FeedSourceRegistry {
             return 0
         }
         return max(0, Math.round(budget * scale).toInt())
+    }
+
+    fun isOrphaned(
+        sourceId: String,
+        sourceIdentity: String,
+        sourceKind: FeedMediaKindMessage
+    ): Boolean {
+        val source = sourcesById[sourceId] ?: return true
+        return source.cacheIdentity != sourceIdentity || source.kind != sourceKind
     }
 
     private fun lowestRankedId(): String? =

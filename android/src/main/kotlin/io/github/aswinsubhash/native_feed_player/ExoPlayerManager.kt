@@ -7,18 +7,95 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.Surface
 import android.view.TextureView
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import java.util.ArrayDeque
 
+/** Time-based adaptive policy that ignores isolated stalls and recovers only after stability. */
+internal class AdaptivePreloadPolicy {
+    private val recentRebuffersMs = ArrayDeque<Long>()
+    private var lastInstabilityMs: Long? = null
+
+    var scale: Double = 1.0
+        private set
+
+    fun recordRebuffer(nowMs: Long): Boolean {
+        lastInstabilityMs = nowMs
+        while (recentRebuffersMs.isNotEmpty() &&
+            nowMs - recentRebuffersMs.first() > REBUFFER_WINDOW_MS
+        ) {
+            recentRebuffersMs.removeFirst()
+        }
+        recentRebuffersMs.addLast(nowMs)
+        if (recentRebuffersMs.size < REBUFFERS_BEFORE_DEGRADE) {
+            return false
+        }
+        recentRebuffersMs.clear()
+        val next = (scale / 2).coerceAtLeast(MIN_SCALE)
+        if (next == scale) {
+            return false
+        }
+        scale = next
+        return true
+    }
+
+    fun recordSteadyPlayback(nowMs: Long): Boolean {
+        val lastInstability = lastInstabilityMs ?: return false
+        if (scale >= 1.0 || nowMs - lastInstability < RECOVERY_INTERVAL_MS) {
+            return false
+        }
+        scale = (scale * 2).coerceAtMost(1.0)
+        lastInstabilityMs = nowMs
+        recentRebuffersMs.clear()
+        return true
+    }
+
+    fun forceMinimum(nowMs: Long): Boolean {
+        val changed = scale != MIN_SCALE
+        scale = MIN_SCALE
+        lastInstabilityMs = nowMs
+        recentRebuffersMs.clear()
+        return changed
+    }
+
+    fun reset() {
+        scale = 1.0
+        lastInstabilityMs = null
+        recentRebuffersMs.clear()
+    }
+
+    internal companion object {
+        const val REBUFFERS_BEFORE_DEGRADE = 3
+        const val REBUFFER_WINDOW_MS = 30_000L
+        const val RECOVERY_INTERVAL_MS = 30_000L
+        const val MIN_SCALE = 0.25
+    }
+}
+
+internal fun mapPlaybackStatus(
+    playbackState: Int,
+    isPlaying: Boolean,
+    hasPlayerError: Boolean,
+    hasEverPlayed: Boolean
+): PlaybackStatusMessage = when {
+    hasPlayerError -> PlaybackStatusMessage.ERROR
+    playbackState == Player.STATE_IDLE -> PlaybackStatusMessage.IDLE
+    playbackState == Player.STATE_BUFFERING -> PlaybackStatusMessage.BUFFERING
+    playbackState == Player.STATE_ENDED -> PlaybackStatusMessage.COMPLETED
+    playbackState == Player.STATE_READY && isPlaying -> PlaybackStatusMessage.PLAYING
+    playbackState == Player.STATE_READY && hasEverPlayed -> PlaybackStatusMessage.PAUSED
+    playbackState == Player.STATE_READY -> PlaybackStatusMessage.READY
+    else -> PlaybackStatusMessage.IDLE
+}
+
 /** Owns ExoPlayer instances, preload scheduling, and eviction. */
+@OptIn(UnstableApi::class)
 internal class ExoPlayerManager(
     context: Context,
     private val onState: (controllerId: Int, status: PlaybackStatusMessage, error: PlaybackErrorMessage?) -> Unit,
@@ -32,6 +109,10 @@ internal class ExoPlayerManager(
         val listener: Player.Listener,
         val analyticsListener: AnalyticsListener,
         val sourceId: String,
+        val sourceIdentity: String,
+        val sourceKind: FeedMediaKindMessage,
+        var targetVolume: Float,
+        var isMuted: Boolean,
         /** Creation-time visibility generation used to defer eviction. */
         val createdAtVisibleGeneration: Long
     )
@@ -42,6 +123,7 @@ internal class ExoPlayerManager(
         var rebufferCount: Int = 0
         var droppedFrames: Int = 0
         var hasBeenReady: Boolean = false
+        var hasEverPlayed: Boolean = false
     }
 
     private val appContext = context.applicationContext
@@ -70,9 +152,8 @@ internal class ExoPlayerManager(
     private var preloadGeneration = 0
     private var tickerRunning = false
 
-    /** Preload-window multiplier reduced under rebuffer or memory pressure. */
-    private var windowScale = 1.0
-    private var rebuffersSinceLastRecovery = 0
+    /** Preload-window multiplier reduced under clustered stalls or memory pressure. */
+    private val adaptivePreloadPolicy = AdaptivePreloadPolicy()
 
     /** Maximum combined active and recycled player count. */
     private var maxTotalPlayers = 6
@@ -110,18 +191,21 @@ internal class ExoPlayerManager(
         // Rebuild shared Media3 components for the new configuration.
         releaseAllPooledPlayers()
         preloadManager?.release()
-        preloadManager = FeedPreloadManager(appContext) { uri -> headersFor(uri) }
+        preloadManager = FeedPreloadManager(appContext)
             .apply { setMaxPreloadDistance(maxOf(preloadAhead, preloadBehind)) }
 
         enforceVisibleWindowEviction()
         schedulePreloadWindow()
     }
 
-    private fun headersFor(uri: String): Map<String, String> =
-        registry.all().firstOrNull { it.uri == uri }?.headers ?: emptyMap()
-
     fun setSources(sources: List<RegisteredSource>) {
         registry.replaceAll(sources)
+        val orphanedControllerIds = managedPlayers.filterValues { managed ->
+            registry.isOrphaned(managed.sourceId, managed.sourceIdentity, managed.sourceKind)
+        }.keys.toList()
+        for (controllerId in orphanedControllerIds) {
+            releaseController(controllerId, ReleaseReasonMessage.DISPOSED)
+        }
         preloadManager?.reset()
         enforceVisibleWindowEviction()
         schedulePreloadWindow()
@@ -163,7 +247,7 @@ internal class ExoPlayerManager(
 
         val player = obtainPlayerFor(source)
         metricsByController[controllerId] = PlaybackMetrics()
-        val listener = playerListener(controllerId, player)
+        val listener = playerListener(controllerId)
         val analyticsListener = analyticsListener(controllerId)
         player.addListener(listener)
         player.addAnalyticsListener(analyticsListener)
@@ -184,6 +268,10 @@ internal class ExoPlayerManager(
             listener = listener,
             analyticsListener = analyticsListener,
             sourceId = sourceId,
+            sourceIdentity = source.cacheIdentity,
+            sourceKind = source.kind,
+            targetVolume = volume,
+            isMuted = muted,
             createdAtVisibleGeneration = visibleGeneration
         )
         creationOrder.addLast(controllerId)
@@ -215,12 +303,16 @@ internal class ExoPlayerManager(
     }
 
     fun setVolume(controllerId: Int, value: Double) {
-        val clamped = value.toFloat().coerceIn(0f, 1f)
-        managedPlayers[controllerId]?.player?.volume = if (muted) 0f else clamped
+        val managed = managedPlayers[controllerId] ?: return
+        managed.targetVolume = value.toFloat().coerceIn(0f, 1f)
+        managed.player.volume = if (managed.isMuted) 0f else managed.targetVolume
     }
 
     fun setMuted(controllerId: Int, value: Boolean) {
-        managedPlayers[controllerId]?.player?.volume = if (value) 0f else volume
+        val managed = managedPlayers[controllerId] ?: return
+        managed.isMuted = value
+        managed.player.volume = if (value) 0f else managed.targetVolume
+        managed.player.setWakeMode(if (value) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
     }
 
     fun setPlaybackSpeed(controllerId: Int, speed: Double) {
@@ -245,8 +337,11 @@ internal class ExoPlayerManager(
             .build()
 
         for (managed in managedPlayers.values) {
+            managed.targetVolume = volume
+            managed.isMuted = muted
             managed.player.setAudioAttributes(attributes, handleAudioFocus)
             managed.player.volume = if (muted) 0f else volume
+            managed.player.setWakeMode(if (muted) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
         }
     }
 
@@ -282,7 +377,9 @@ internal class ExoPlayerManager(
     }
 
     fun setVisibleSource(sourceId: String) {
-        registry.setVisible(sourceId)
+        if (!registry.setVisible(sourceId)) {
+            return
+        }
         visibleGeneration += 1
         enforceVisibleWindowEviction()
         enforceTotalPlayerBudget()
@@ -353,38 +450,28 @@ internal class ExoPlayerManager(
         creationOrder.clear()
         autoPausedControllerIds.clear()
         visibleGeneration = 0
-        windowScale = 1.0
-        rebuffersSinceLastRecovery = 0
+        adaptivePreloadPolicy.reset()
         handler.removeCallbacks(positionTicker)
         tickerRunning = false
     }
 
-    fun clearMediaCache() {
-        MediaCache.evictAll()
-    }
+    fun cacheIdentities(sourceIds: List<String>): List<String> = sourceIds.mapNotNull { sourceId ->
+        registry.source(sourceId)?.cacheIdentity
+    }.distinct()
 
-    /** Evicts the given sources, or everything when [sourceIds] is empty. */
-    fun evictCachedMedia(sourceIds: List<String>) {
-        if (sourceIds.isEmpty()) {
-            MediaCache.evictAll()
-            return
-        }
-        for (sourceId in sourceIds) {
-            val uri = registry.source(sourceId)?.uri ?: continue
-            MediaCache.evict(uri)
-        }
-    }
+    fun cacheIdentity(sourceId: String): String? = registry.source(sourceId)?.cacheIdentity
 
-    fun cacheStatus(sourceId: String): CacheStatusMessage {
-        val uri = registry.source(sourceId)?.uri
-            ?: return CacheStatusMessage(
+    fun cacheStatus(sourceId: String, sourceIdentity: String?): CacheStatusMessage {
+        if (sourceIdentity == null) {
+            return CacheStatusMessage(
                 sourceId = sourceId,
                 cachedBytes = 0,
                 totalBytes = 0,
                 isComplete = false
             )
-        val cached = MediaCache.cachedBytes(uri)
-        val total = MediaCache.contentLength(uri)
+        }
+        val cached = MediaCache.cachedBytes(sourceIdentity)
+        val total = MediaCache.contentLength(sourceIdentity)
         return CacheStatusMessage(
             sourceId = sourceId,
             cachedBytes = cached,
@@ -393,30 +480,18 @@ internal class ExoPlayerManager(
         )
     }
 
-    fun cacheUsageBytes(): Long = MediaCache.usageBytes()
-
-    /** Reduces the preload window after repeated stalls. */
+    /** Reduces the preload window only after stalls cluster in a bounded interval. */
     private fun noteRebuffer() {
-        rebuffersSinceLastRecovery += 1
-        if (rebuffersSinceLastRecovery < REBUFFERS_BEFORE_DEGRADE) {
-            return
-        }
-        rebuffersSinceLastRecovery = 0
-        val next = (windowScale / 2).coerceAtLeast(MIN_WINDOW_SCALE)
-        if (next != windowScale) {
-            windowScale = next
+        if (adaptivePreloadPolicy.recordRebuffer(SystemClock.elapsedRealtime())) {
             schedulePreloadWindow()
         }
     }
 
-    /** Restores the preload window after stable playback. */
+    /** Restores one step only after a full stable-playback interval. */
     private fun noteSteadyPlayback() {
-        rebuffersSinceLastRecovery = 0
-        if (windowScale >= 1.0) {
-            return
+        if (adaptivePreloadPolicy.recordSteadyPlayback(SystemClock.elapsedRealtime())) {
+            schedulePreloadWindow()
         }
-        windowScale = (windowScale * 2).coerceAtMost(1.0)
-        schedulePreloadWindow()
     }
 
     private fun handleModerateMemoryPressure() {
@@ -429,18 +504,10 @@ internal class ExoPlayerManager(
 
     private fun handleCriticalMemoryPressure() {
         preloadGeneration += 1
-        windowScale = MIN_WINDOW_SCALE
+        adaptivePreloadPolicy.forceMinimum(SystemClock.elapsedRealtime())
         preloadManager?.reset()
         shrinkPooledPlayers(targetSize = 0)
         enforceVisibleWindowEviction(forceAggressive = true)
-    }
-
-    private companion object {
-        /** Stalls before preload degradation. */
-        const val REBUFFERS_BEFORE_DEGRADE = 3
-
-        /** Minimum preload-window multiplier. */
-        const val MIN_WINDOW_SCALE = 0.25
     }
 
     /** Coalesces preload-window updates on the main looper. */
@@ -457,7 +524,7 @@ internal class ExoPlayerManager(
             val window = registry.preloadWindow(
                 ahead = preloadAhead,
                 behind = preloadBehind,
-                scale = windowScale
+                scale = adaptivePreloadPolicy.scale
             ).take(maxConcurrentPreloads + 1)
 
             manager.setMaxPreloadDistance(maxOf(preloadAhead, preloadBehind))
@@ -533,9 +600,8 @@ internal class ExoPlayerManager(
         if (preloadedSource != null) {
             player.setMediaSource(preloadedSource)
         } else {
-            player.setMediaItem(MediaItem.fromUri(source.uri))
+            player.setMediaSource(MediaCache.createMediaSource(source))
         }
-        player.prepare()
         return player
     }
 
@@ -547,64 +613,50 @@ internal class ExoPlayerManager(
     }
 
     private fun emitCurrentPlaybackState(controllerId: Int, player: ExoPlayer) {
-        val status = when (player.playbackState) {
-            Player.STATE_IDLE -> PlaybackStatusMessage.IDLE
-            Player.STATE_BUFFERING -> PlaybackStatusMessage.BUFFERING
-            Player.STATE_READY ->
-                if (player.isPlaying) PlaybackStatusMessage.PLAYING else PlaybackStatusMessage.READY
-            Player.STATE_ENDED -> PlaybackStatusMessage.COMPLETED
-            else -> PlaybackStatusMessage.IDLE
-        }
-        onState(controllerId, status, null)
+        val error = player.playerError
+        val status = mapPlaybackStatus(
+            playbackState = player.playbackState,
+            isPlaying = player.isPlaying,
+            hasPlayerError = error != null,
+            hasEverPlayed = metricsByController[controllerId]?.hasEverPlayed == true
+        )
+        onState(controllerId, status, error?.let(PlaybackErrorMapper::map))
     }
 
-    private fun playerListener(controllerId: Int, player: ExoPlayer): Player.Listener {
+    private fun playerListener(controllerId: Int): Player.Listener {
         return object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val metrics = metricsByController[controllerId]
-                when (playbackState) {
-                    Player.STATE_IDLE -> onState(controllerId, PlaybackStatusMessage.IDLE, null)
-                    Player.STATE_BUFFERING -> {
-                        if (metrics?.hasBeenReady == true) {
-                            metrics.rebufferCount += 1
-                            noteRebuffer()
-                            emitMetrics(controllerId)
-                        }
-                        onState(controllerId, PlaybackStatusMessage.BUFFERING, null)
-                    }
-                    Player.STATE_READY -> {
-                        metrics?.hasBeenReady = true
-                        noteSteadyPlayback()
-                        emitMetrics(controllerId)
-                        onState(
-                            controllerId,
-                            if (player.isPlaying) {
-                                PlaybackStatusMessage.PLAYING
-                            } else {
-                                PlaybackStatusMessage.READY
-                            },
-                            null
-                        )
-                    }
-                    Player.STATE_ENDED ->
-                        onState(controllerId, PlaybackStatusMessage.COMPLETED, null)
+                if (playbackState == Player.STATE_BUFFERING && metrics?.hasBeenReady == true) {
+                    metrics.rebufferCount += 1
+                    noteRebuffer()
+                    emitMetrics(controllerId)
+                } else if (playbackState == Player.STATE_READY) {
+                    metrics?.hasBeenReady = true
+                    emitMetrics(controllerId)
                 }
             }
 
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                onState(
-                    controllerId,
-                    if (isPlaying) PlaybackStatusMessage.PLAYING else PlaybackStatusMessage.PAUSED,
-                    null
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (!events.containsAny(
+                        Player.EVENT_PLAYBACK_STATE_CHANGED,
+                        Player.EVENT_IS_PLAYING_CHANGED,
+                        Player.EVENT_PLAYER_ERROR
+                    )
+                ) {
+                    return
+                }
+                if (player.isPlaying) {
+                    metricsByController[controllerId]?.hasEverPlayed = true
+                }
+                val error = player.playerError
+                val status = mapPlaybackStatus(
+                    playbackState = player.playbackState,
+                    isPlaying = player.isPlaying,
+                    hasPlayerError = error != null,
+                    hasEverPlayed = metricsByController[controllerId]?.hasEverPlayed == true
                 )
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                onState(
-                    controllerId,
-                    PlaybackStatusMessage.ERROR,
-                    PlaybackErrorMapper.map(error)
-                )
+                onState(controllerId, status, error?.let(PlaybackErrorMapper::map))
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -665,6 +717,9 @@ internal class ExoPlayerManager(
     }
 
     private fun emitPositions() {
+        if (managedPlayers.values.any { it.player.isPlaying }) {
+            noteSteadyPlayback()
+        }
         for ((controllerId, managed) in managedPlayers) {
             val player = managed.player
             if (player.playbackState == Player.STATE_IDLE) {
@@ -695,13 +750,8 @@ internal class ExoPlayerManager(
         handler.post(positionTicker)
     }
 
-    /** Creates a cache-backed player before initialization completes. */
-    private fun createFallbackPlayer(): ExoPlayer {
-        val dataSourceFactory = MediaCache.createDataSourceFactory { uri -> headersFor(uri) }
-        return ExoPlayer.Builder(appContext)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-            .build()
-    }
+    /** Creates a player before shared preload components are initialized. */
+    private fun createFallbackPlayer(): ExoPlayer = ExoPlayer.Builder(appContext).build()
 
     private fun releaseController(controllerId: Int, reason: ReleaseReasonMessage) {
         val managed = managedPlayers.remove(controllerId) ?: return
