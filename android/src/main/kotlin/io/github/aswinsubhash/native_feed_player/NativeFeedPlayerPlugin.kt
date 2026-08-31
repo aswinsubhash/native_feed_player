@@ -288,6 +288,16 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         if (previousController != null && previousController != controllerId) {
             manager.detachControllerFromView(previousController)
         }
+
+        val staleViewIds = attachedControllerByViewId
+            .filterValues { it == controllerId }
+            .keys
+            .filter { it != viewId }
+        manager.detachControllerFromView(controllerId)
+        for (staleViewId in staleViewIds) {
+            attachedControllerByViewId.remove(staleViewId)
+        }
+
         attachedControllerByViewId[viewId] = controllerId
         manager.attachControllerToView(controllerId, view.textureView)
     }

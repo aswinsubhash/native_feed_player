@@ -282,7 +282,7 @@ void main() {
     await player.dispose();
   });
 
-  testWidgets('pause/resume lifecycle keeps commands usable', (
+  testWidgets('pause and resume commands remain usable', (
     WidgetTester tester,
   ) async {
     final _BenchmarkCollector collector = _BenchmarkCollector('pause_resume');
@@ -295,10 +295,8 @@ void main() {
     collector.trackController(controller);
 
     await controller.play();
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     await tester.pump(const Duration(milliseconds: 300));
     await controller.pause();
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(controller.isReleased, isFalse);

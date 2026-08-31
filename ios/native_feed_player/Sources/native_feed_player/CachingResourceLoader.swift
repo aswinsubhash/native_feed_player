@@ -182,6 +182,9 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
     // Serve complete entries from disk.
     if let cached = MediaDiskCache.shared.cachedFile(forIdentity: identity) {
       serveFromFile(loadingRequest, cached: cached)
+      queue.async {
+        self.contextsByIdentity.removeValue(forKey: identity)
+      }
       return true
     }
 

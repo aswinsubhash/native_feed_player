@@ -462,7 +462,7 @@ void main() {
       expect(player.config.audio.volume, 1.0);
     });
 
-    test('failed reinitialize preserves the current session', () async {
+    test('failed reinitialize invalidates the current session', () async {
       await player.setSources(<FeedSource>[_source('a')]);
       final FeedController controller = await player.controllerFor('a');
       platform.initializeError = StateError('initialize failed');
@@ -473,8 +473,9 @@ void main() {
       );
 
       expect(player.config.maxActivePlayers, 3);
-      expect(player.sources, hasLength(1));
-      expect(controller.isReleased, isFalse);
+      expect(player.sources, isEmpty);
+      expect(controller.isReleased, isTrue);
+      expect(() => player.setSources(<FeedSource>[]), throwsStateError);
     });
 
     test('overlapping controller requests share one creation', () async {

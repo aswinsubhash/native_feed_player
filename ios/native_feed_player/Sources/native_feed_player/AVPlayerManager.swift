@@ -117,6 +117,8 @@ final class AVPlayerManager {
     var readyForDisplayObservation: NSKeyValueObservation?
     var presentationSizeObservation: NSKeyValueObservation?
     var endObserver: NSObjectProtocol?
+    var loopOperationGeneration = 0
+    var playbackCommandGeneration = 0
 
     init(
       id: Int,
@@ -222,6 +224,8 @@ final class AVPlayerManager {
   }
 
   deinit {
+    positionTimer?.invalidate()
+    positionTimer = nil
     stopObservingAppLifecycle()
     resourceLoader.shutdown()
   }
@@ -373,13 +377,21 @@ final class AVPlayerManager {
   func play(controllerId: Int) {
     assertMainQueue()
     autoPausedControllerIds.remove(controllerId)
-    controllers[controllerId]?.player.play()
+    guard let managed = controllers[controllerId] else {
+      return
+    }
+    managed.playbackCommandGeneration += 1
+    managed.player.play()
   }
 
   func pause(controllerId: Int) {
     assertMainQueue()
     autoPausedControllerIds.remove(controllerId)
-    controllers[controllerId]?.player.pause()
+    guard let managed = controllers[controllerId] else {
+      return
+    }
+    managed.playbackCommandGeneration += 1
+    managed.player.pause()
   }
 
   // MARK: - Controls
@@ -423,6 +435,9 @@ final class AVPlayerManager {
     let player = managed.player
     let position = player.currentTime()
     let shouldResume = player.timeControlStatus == .playing || player.rate != 0
+    managed.loopOperationGeneration += 1
+    let operationGeneration = managed.loopOperationGeneration
+    let playbackCommandGeneration = managed.playbackCommandGeneration
 
     managed.looper?.disableLooping()
     managed.looper = nil
@@ -436,9 +451,21 @@ final class AVPlayerManager {
     }
     attachObservers(to: managed, playerItem: player.currentItem ?? managed.originalItem)
     if position.isNumeric {
-      player.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero) { completed in
-        if completed && shouldResume {
-          DispatchQueue.main.async { [weak player] in player?.play() }
+      player.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero) {
+        [weak self, weak managed, weak player] completed in
+        guard completed else {
+          return
+        }
+        DispatchQueue.main.async {
+          guard let self, let managed, let player,
+            self.controllers[managed.id] === managed,
+            managed.loopOperationGeneration == operationGeneration,
+            managed.playbackCommandGeneration == playbackCommandGeneration,
+            shouldResume
+          else {
+            return
+          }
+          player.play()
         }
       }
     } else if shouldResume {
@@ -524,6 +551,7 @@ final class AVPlayerManager {
     for (controllerId, managed) in controllers
     where managed.player.timeControlStatus == .playing {
       autoPausedControllerIds.insert(controllerId)
+      managed.playbackCommandGeneration += 1
       managed.player.pause()
     }
   }
@@ -531,7 +559,11 @@ final class AVPlayerManager {
   private func onAppForegrounded() {
     assertMainQueue()
     for controllerId in autoPausedControllerIds {
-      controllers[controllerId]?.player.play()
+      guard let managed = controllers[controllerId] else {
+        continue
+      }
+      managed.playbackCommandGeneration += 1
+      managed.player.play()
     }
     autoPausedControllerIds.removeAll()
   }

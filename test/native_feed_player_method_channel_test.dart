@@ -299,6 +299,25 @@ void main() {
     expect(metric.timestamp, DateTime.fromMillisecondsSinceEpoch(1234));
   });
 
+  test(
+    'metrics stream replays the latest metric for a late subscriber',
+    () async {
+      await platform.initialize(const FeedPlayerConfig());
+      metrics.add(
+        MetricsEvent(
+          controllerId: 7,
+          rebufferCount: 0,
+          droppedFrames: 0,
+          timestampMs: 1234,
+          firstFrameLatencyMs: 140,
+        ),
+      );
+
+      final VideoMetrics metric = await platform.metricsStream(7).first;
+      expect(metric.firstFrameLatency, const Duration(milliseconds: 140));
+    },
+  );
+
   test('video size stream is filtered per controller', () async {
     await platform.initialize(const FeedPlayerConfig());
     final Future<VideoSize> next = platform.videoSizeStream(7).first;

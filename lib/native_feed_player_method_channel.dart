@@ -47,7 +47,9 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       (_positionEventStream ?? positionEvents()).asBroadcastStream();
 
   late final Stream<MetricsEvent> _metrics =
-      (_metricsEventStream ?? metricsEvents()).asBroadcastStream();
+      (_metricsEventStream ?? metricsEvents())
+          .map(_cacheMetrics)
+          .asBroadcastStream();
 
   late final Stream<VideoSizeEvent> _videoSizes =
       (_videoSizeEventStream ?? videoSizeEvents())
@@ -67,8 +69,10 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       <int, Stream<VideoSize>>{};
   final Map<int, PlaybackStatusUpdate> _latestStates =
       <int, PlaybackStatusUpdate>{};
+  final Map<int, VideoMetrics> _latestMetrics = <int, VideoMetrics>{};
   final Map<int, VideoSize> _latestVideoSizes = <int, VideoSize>{};
   StreamSubscription<PlaybackStateEvent>? _stateCacheSubscription;
+  StreamSubscription<MetricsEvent>? _metricsCacheSubscription;
   StreamSubscription<VideoSizeEvent>? _videoSizeCacheSubscription;
 
   @override
@@ -86,8 +90,10 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   Future<void> initialize(FeedPlayerConfig config) async {
     _ensureSupportedPlatform();
     _latestStates.clear();
+    _latestMetrics.clear();
     _latestVideoSizes.clear();
     _stateCacheSubscription ??= _states.listen((_) {});
+    _metricsCacheSubscription ??= _metrics.listen((_) {});
     _videoSizeCacheSubscription ??= _videoSizes.listen((_) {});
     await hostApi.initialize(config.toMessage());
   }
@@ -191,9 +197,23 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Stream<VideoMetrics> metricsStream(int controllerId) {
     return _metricsStreams.putIfAbsent(controllerId, () {
-      return _metrics
-          .where((MetricsEvent event) => event.controllerId == controllerId)
-          .map(VideoMetrics.fromMessage);
+      return Stream<VideoMetrics>.multi((
+        MultiStreamController<VideoMetrics> output,
+      ) {
+        final VideoMetrics? latest = _latestMetrics[controllerId];
+        if (latest != null) {
+          output.addSync(latest);
+        }
+        final StreamSubscription<MetricsEvent> subscription = _metrics
+            .where((MetricsEvent event) => event.controllerId == controllerId)
+            .listen(
+              (MetricsEvent event) =>
+                  output.add(VideoMetrics.fromMessage(event)),
+              onError: output.addError,
+              onDone: output.close,
+            );
+        output.onCancel = subscription.cancel;
+      }, isBroadcast: true);
     });
   }
 
@@ -316,15 +336,23 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   Future<void> dispose() async {
     await hostApi.disposeAll();
     await _stateCacheSubscription?.cancel();
+    await _metricsCacheSubscription?.cancel();
     await _videoSizeCacheSubscription?.cancel();
     _stateCacheSubscription = null;
+    _metricsCacheSubscription = null;
     _videoSizeCacheSubscription = null;
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();
     _videoSizeStreams.clear();
     _latestStates.clear();
+    _latestMetrics.clear();
     _latestVideoSizes.clear();
+  }
+
+  MetricsEvent _cacheMetrics(MetricsEvent event) {
+    _latestMetrics[event.controllerId] = VideoMetrics.fromMessage(event);
+    return event;
   }
 
   PlaybackStateEvent _cachePlaybackState(PlaybackStateEvent event) {
@@ -357,6 +385,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _stateStreams.remove(controllerId);
     _positionStreams.remove(controllerId);
     _metricsStreams.remove(controllerId);
+    _latestMetrics.remove(controllerId);
     _videoSizeStreams.remove(controllerId);
     _latestStates.remove(controllerId);
     _latestVideoSizes.remove(controllerId);

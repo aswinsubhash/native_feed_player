@@ -53,11 +53,18 @@ class FeedPlayer {
     _ensureNotDisposed();
     config.toMessage();
     return _serialize(() async {
-      await _platform.initialize(config);
-      _releaseAllControllers();
-      _sources.clear();
-      _config = config;
-      _initialized = true;
+      try {
+        await _platform.initialize(config);
+        _releaseAllControllers();
+        _sources.clear();
+        _config = config;
+        _initialized = true;
+      } catch (_) {
+        _releaseAllControllers();
+        _sources.clear();
+        _initialized = false;
+        rethrow;
+      }
     });
   }
 

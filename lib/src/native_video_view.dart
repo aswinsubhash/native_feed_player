@@ -151,9 +151,31 @@ class _NativeVideoViewState extends State<NativeVideoView> {
     );
     unawaited(
       controller.onReleased.then((_) {
-        if (_isObserved(controller, observation)) {
-          _scheduleReconcile();
+        if (!_isObserved(controller, observation)) {
+          return;
         }
+        _observationGeneration += 1;
+        final Future<void>? cancellation = _videoSizeSub?.cancel();
+        if (cancellation != null) {
+          unawaited(
+            cancellation.catchError((Object error, StackTrace stackTrace) {
+              _reportAsyncError(
+                error,
+                stackTrace,
+                'cancelling released video updates',
+              );
+            }),
+          );
+        }
+        _videoSizeSub = null;
+        if (mounted && !_disposed) {
+          setState(() {
+            _textureId = null;
+            _videoSize = VideoSize.zero;
+            _hasFirstFrame = false;
+          });
+        }
+        _scheduleReconcile();
       }),
     );
   }

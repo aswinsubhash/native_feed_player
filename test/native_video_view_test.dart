@@ -310,6 +310,27 @@ void main() {
     expect(find.byType(Texture), findsNothing);
   });
 
+  testWidgets('released controllers clear their texture output', (
+    WidgetTester tester,
+  ) async {
+    final FeedController controller = await player.controllerFor('a');
+    await tester.pumpWidget(await wrap(controller));
+    await tester.pump();
+
+    platform.emitRelease(
+      controllerId: controller.controllerId,
+      reason: ControllerReleaseReason.evicted,
+    );
+    await controller.onReleased;
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(Texture), findsNothing);
+    expect(platform.detachedTextureControllerIds, <int>[
+      controller.controllerId,
+    ]);
+  });
+
   testWidgets('disposal detaches the texture', (WidgetTester tester) async {
     final FeedController controller = await player.controllerFor('a');
     await tester.pumpWidget(await wrap(controller));
