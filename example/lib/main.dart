@@ -190,29 +190,72 @@ class _MyAppState extends State<MyApp> {
     bool isCurrent() =>
         mounted && _activeControllerId == controller.controllerId;
 
-    _stateSub = controller.stateStream.listen((PlaybackStatusUpdate update) {
-      if (!isCurrent()) {
-        return;
-      }
-      setState(() {
-        _status = update.state;
-        _playbackError = update.error;
-      });
-    });
-    _positionSub = controller.positionStream.listen((
-      PlaybackPosition position,
-    ) {
-      if (!isCurrent()) {
-        return;
-      }
-      setState(() => _position = position);
-    });
-    _metricsSub = controller.metricsStream.listen((VideoMetrics metrics) {
-      if (!isCurrent()) {
-        return;
-      }
-      setState(() => _metrics = metrics);
-    });
+    _stateSub = controller.stateStream.listen(
+      (PlaybackStatusUpdate update) {
+        if (!isCurrent()) {
+          return;
+        }
+        setState(() {
+          _status = update.state;
+          _playbackError = update.error;
+        });
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!isCurrent()) {
+          return;
+        }
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'native_feed_player_example',
+            context: ErrorDescription('while listening for playback state'),
+          ),
+        );
+      },
+    );
+    _positionSub = controller.positionStream.listen(
+      (PlaybackPosition position) {
+        if (!isCurrent()) {
+          return;
+        }
+        setState(() => _position = position);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!isCurrent()) {
+          return;
+        }
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'native_feed_player_example',
+            context: ErrorDescription('while listening for playback position'),
+          ),
+        );
+      },
+    );
+    _metricsSub = controller.metricsStream.listen(
+      (VideoMetrics metrics) {
+        if (!isCurrent()) {
+          return;
+        }
+        setState(() => _metrics = metrics);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!isCurrent()) {
+          return;
+        }
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'native_feed_player_example',
+            context: ErrorDescription('while listening for playback metrics'),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _togglePlayback() async {

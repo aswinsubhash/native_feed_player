@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_feed_player/native_feed_player.dart';
 import 'package:native_feed_player/native_feed_player_method_channel.dart';
@@ -703,6 +704,42 @@ void main() {
       expect(a.isReleased, isTrue);
       expect(b.isReleased, isTrue);
       expect(player.activeControllers, isEmpty);
+    });
+  });
+
+  group('FeedPlayer stream errors', () {
+    late FakeFeedPlayerPlatform platform;
+    late FeedPlayer player;
+    final List<FlutterErrorDetails> reported = <FlutterErrorDetails>[];
+    void Function(FlutterErrorDetails)? previousHandler;
+
+    setUp(() {
+      platform = FakeFeedPlayerPlatform();
+      previousHandler = FlutterError.onError;
+      reported.clear();
+      FlutterError.onError = (FlutterErrorDetails details) {
+        reported.add(details);
+      };
+      player = FeedPlayer(platform: platform);
+    });
+
+    tearDown(() async {
+      FlutterError.onError = previousHandler;
+      await platform.releaseController.close();
+    });
+
+    test('lifecycle stream errors are reported, not unhandled', () async {
+      final Object error = StateError('lifecycle channel failed');
+
+      platform.releaseController.addError(error);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(reported, hasLength(1));
+      expect(reported.single.exception, same(error));
+      expect(reported.single.library, 'native_feed_player');
+      // The player remains usable after a stream error.
+      await player.initialize();
+      expect(player.config.maxActivePlayers, 3);
     });
   });
 }

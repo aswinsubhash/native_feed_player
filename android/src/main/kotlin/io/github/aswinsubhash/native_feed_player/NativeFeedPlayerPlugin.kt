@@ -28,6 +28,12 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
 
         /** Process-wide IDs prevent collisions after engine reattachment. */
         private val controllerIdSeed = AtomicInteger(0)
+
+        val ENGINE_DETACHED_ERROR: FlutterError = FlutterError(
+            "engine_detached",
+            "NativeFeedPlayerPlugin was detached from the Flutter engine.",
+            null
+        )
     }
 
     private var appContext: Context? = null
@@ -50,8 +56,10 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private val videoViews = PlatformViewRegistry<Int, NativeVideoPlatformView>()
     private val attachedControllerByViewId = mutableMapOf<Int, Int>()
     private var textureOutputs: TextureOutputRegistry? = null
+    private val pendingCacheOperations = PendingCacheOperations()
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
+        pendingCacheOperations.attach()
         appContext = flutterPluginBinding.applicationContext
         appContext?.registerComponentCallbacks(this)
         binaryMessenger = flutterPluginBinding.binaryMessenger
@@ -131,7 +139,10 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         appContext = null
         exoPlayerManager?.disposeAll()
         exoPlayerManager = null
-        cacheExecutor?.shutdown()
+        // Fail pending cache replies before the messenger goes away so Dart
+        // futures resolve deterministically; late worker results are dropped.
+        pendingCacheOperations.detach()
+        cacheExecutor?.shutdownNow()
         cacheExecutor = null
         videoViews.clear()
         attachedControllerByViewId.clear()
@@ -364,13 +375,27 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             callback(Result.failure(FlutterError("not_attached", "Cache executor is unavailable.", null)))
             return
         }
+        val token = pendingCacheOperations.register(
+            onDetached = { callback(Result.failure(ENGINE_DETACHED_ERROR)) }
+        )
+        if (token == null) {
+            callback(Result.failure(ENGINE_DETACHED_ERROR))
+            return
+        }
         try {
             executor.execute {
                 val result = runCatching(operation)
-                mainHandler.post { callback(result) }
+                mainHandler.post {
+                    // Deliver only if detach did not already fail this reply.
+                    if (pendingCacheOperations.complete(token)) {
+                        callback(result)
+                    }
+                }
             }
         } catch (error: RejectedExecutionException) {
-            callback(Result.failure(error))
+            if (pendingCacheOperations.complete(token)) {
+                callback(Result.failure(error))
+            }
         }
     }
 

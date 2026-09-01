@@ -59,11 +59,21 @@ final class CachingResourceLoader: NSObject {
     var finished = false
     var failure: Error?
     var pending: [AVAssetResourceLoadingRequest] = []
+    /// Queue-confined read handle reused across pending-request slices; the
+    /// write handle stays positioned at the end of the file.
+    var readHandle: FileHandle?
 
     init(identity: String, temporaryURL: URL, handle: FileHandle) {
       self.identity = identity
       self.temporaryURL = temporaryURL
       self.handle = handle
+    }
+
+    func closeReadHandle() {
+      if let readHandle {
+        try? readHandle.closeCompat()
+      }
+      readHandle = nil
     }
   }
 
@@ -366,12 +376,22 @@ extension CachingResourceLoader {
   }
 
   private func readPrefix(_ download: Download, offset: Int64, length: Int) -> Data? {
-    guard let handle = try? FileHandle(forReadingFrom: download.temporaryURL) else {
+    if download.readHandle == nil {
+      guard let handle = try? FileHandle(forReadingFrom: download.temporaryURL) else {
+        return nil
+      }
+      download.readHandle = handle
+    }
+    guard let handle = download.readHandle else {
       return nil
     }
-    defer { try? handle.closeCompat() }
-    try? handle.seekCompat(toOffset: UInt64(max(0, offset)))
-    return try? handle.readCompat(upToCount: length)
+    do {
+      try handle.seekCompat(toOffset: UInt64(max(0, offset)))
+      return try handle.readCompat(upToCount: length)
+    } catch {
+      download.closeReadHandle()
+      return nil
+    }
   }
 
   private func failAndClean(_ download: Download, error: Error, cancelTask: Bool) {
@@ -385,6 +405,7 @@ extension CachingResourceLoader {
     }
     try? download.handle.closeCompat()
     servePending(download)
+    download.closeReadHandle()
     // Defensive: every non-cancelled pending request must reach a terminal state.
     for request in download.pending where !request.isCancelled {
       request.finishLoading(with: download.failure)
@@ -480,6 +501,7 @@ extension CachingResourceLoader: URLSessionDataDelegate {
         self.onFailure?(download.identity, failure)
       }
       self.servePending(download)
+      download.closeReadHandle()
       for request in download.pending where !request.isCancelled {
         request.finishLoading(with: download.failure)
       }

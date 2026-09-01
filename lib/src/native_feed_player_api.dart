@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart';
+
 import '../native_feed_player_platform_interface.dart';
 import 'controller_release.dart';
 import 'feed_player_config.dart';
@@ -15,7 +17,19 @@ import 'video_controller.dart';
 class FeedPlayer {
   FeedPlayer({FeedPlayerPlatform? platform})
     : _platform = platform ?? FeedPlayerPlatform.instance {
-    _releaseSubscription = _platform.releaseEvents.listen(_onNativeRelease);
+    _releaseSubscription = _platform.releaseEvents.listen(
+      _onNativeRelease,
+      onError: (Object error, StackTrace stackTrace) {
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'native_feed_player',
+            context: ErrorDescription('while listening for controller release'),
+          ),
+        );
+      },
+    );
   }
 
   final FeedPlayerPlatform _platform;

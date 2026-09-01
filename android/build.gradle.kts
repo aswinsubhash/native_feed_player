@@ -70,6 +70,12 @@ dependencies {
     implementation("androidx.media3:media3-datasource:$media3Version")
     implementation("androidx.media3:media3-database:$media3Version")
 
-    testImplementation("org.jetbrains.kotlin:kotlin-test")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.2.10")
     testImplementation("org.mockito:mockito-core:5.23.0")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.13.4")
+    // Real-manager lifecycle tests run on the JVM through Robolectric.
+    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation("junit:junit:4.13.2")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.13.4")
+    testImplementation("androidx.test:core:1.6.1")
 }

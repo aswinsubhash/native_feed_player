@@ -1,7 +1,31 @@
 import 'dart:convert';
 import 'dart:io';
 
+/// Exit code for malformed benchmark summary payloads.
+const int exitDataError = 65;
+
+/// Runs the report generator and returns the process exit code plus any
+/// stdout/stderr text, so tests can exercise the CLI contract in-process.
+(int, String, String) runBenchmarkReport(List<String> args) {
+  final StringBuffer outBuffer = StringBuffer();
+  final StringBuffer errBuffer = StringBuffer();
+  final int code = _run(
+    args: args,
+    stdoutSink: outBuffer,
+    stderrSink: errBuffer,
+  );
+  return (code, outBuffer.toString(), errBuffer.toString());
+}
+
 void main(List<String> args) {
+  exitCode = _run(args: args, stdoutSink: stdout, stderrSink: stderr);
+}
+
+int _run({
+  required List<String> args,
+  required StringSink stdoutSink,
+  required StringSink stderrSink,
+}) {
   final Map<String, String> options = <String, String>{};
   bool append = false;
 
@@ -12,14 +36,13 @@ void main(List<String> args) {
       continue;
     }
     if (arg == '--help' || arg == '-h') {
-      _printUsage();
-      return;
+      _printUsage(stdoutSink);
+      return 0;
     }
     if (!arg.startsWith('--')) {
-      stderr.writeln('Unknown argument: $arg');
-      _printUsage();
-      exitCode = 64;
-      return;
+      stderrSink.writeln('Unknown argument: $arg');
+      _printUsage(stderrSink);
+      return 64;
     }
 
     final List<String> parts = arg.split('=');
@@ -30,10 +53,9 @@ void main(List<String> args) {
 
     final String key = arg.substring(2);
     if (index + 1 >= args.length) {
-      stderr.writeln('Missing value for --$key');
-      _printUsage();
-      exitCode = 64;
-      return;
+      stderrSink.writeln('Missing value for --$key');
+      _printUsage(stderrSink);
+      return 64;
     }
     options[key] = args[index + 1];
     index += 1;
@@ -41,41 +63,44 @@ void main(List<String> args) {
 
   final String? logPath = options['log'];
   if (logPath == null || logPath.isEmpty) {
-    stderr.writeln('Missing required argument: --log <path>');
-    _printUsage();
-    exitCode = 64;
-    return;
+    stderrSink.writeln('Missing required argument: --log <path>');
+    _printUsage(stderrSink);
+    return 64;
   }
 
   final File logFile = File(logPath);
   if (!logFile.existsSync()) {
-    stderr.writeln('Log file not found: $logPath');
-    exitCode = 66;
-    return;
+    stderrSink.writeln('Log file not found: $logPath');
+    return 66;
   }
 
   final List<Map<String, dynamic>> summaries = _extractSummaries(logFile);
   if (summaries.isEmpty) {
-    stderr.writeln(
+    stderrSink.writeln(
       'No benchmark summary lines found. Expected lines prefixed with '
       '`NFP_BENCHMARK_SUMMARY `.',
     );
-    exitCode = 65;
-    return;
+    return exitDataError;
   }
 
-  final String report = _buildReport(
-    summaries: summaries,
-    logPath: logPath,
-    device: options['device'] ?? 'unknown',
-    osVersion: options['os'] ?? 'unknown',
-    buildVariant: options['variant'] ?? '',
-  );
+  final String report;
+  try {
+    report = _buildReport(
+      summaries: summaries,
+      logPath: logPath,
+      device: options['device'] ?? 'unknown',
+      osVersion: options['os'] ?? 'unknown',
+      buildVariant: options['variant'] ?? '',
+    );
+  } on FormatException catch (error) {
+    stderrSink.writeln('Malformed benchmark summary: ${error.message}');
+    return exitDataError;
+  }
 
   final String? outPath = options['out'];
   if (outPath == null || outPath.isEmpty) {
-    stdout.write(report);
-    return;
+    stdoutSink.write(report);
+    return 0;
   }
 
   final File outFile = File(outPath);
@@ -84,7 +109,8 @@ void main(List<String> args) {
     report,
     mode: append ? FileMode.append : FileMode.write,
   );
-  stdout.writeln('Wrote benchmark report: $outPath');
+  stdoutSink.writeln('Wrote benchmark report: $outPath');
+  return 0;
 }
 
 List<Map<String, dynamic>> _extractSummaries(File logFile) {
@@ -150,7 +176,7 @@ String _buildReport({
     final int p50 = _intValue(summary, 'firstFrameP50Ms');
     final int p95 = _intValue(summary, 'firstFrameP95Ms');
     final int maxRebuffer = _intValue(summary, 'maxRebufferCount');
-    final int maxDropped = _intValue(summary, 'maxDroppedFramesEstimate');
+    final int maxDropped = _intValue(summary, 'maxDroppedFrames');
     final String durationSec = (durationMs / 1000).toStringAsFixed(2);
     buffer.writeln(
       '| $scenario | $durationSec | $metricSamples | $p50 | $p95 | '
@@ -170,7 +196,10 @@ int _intValue(Map<String, dynamic> source, String key) {
   if (value is num) {
     return value.toInt();
   }
-  return 0;
+  throw FormatException(
+    'Benchmark summary is missing a numeric "$key" field '
+    '(got ${value == null ? 'nothing' : value.runtimeType}).',
+  );
 }
 
 String _stringValue(
@@ -185,9 +214,9 @@ String _stringValue(
   return fallback;
 }
 
-void _printUsage() {
-  stdout.writeln('Usage:');
-  stdout.writeln(
+void _printUsage(StringSink sink) {
+  sink.writeln('Usage:');
+  sink.writeln(
     '  dart run tool/benchmark_report.dart '
     '--log <log_file> [--device <name>] [--os <version>] '
     '[--variant <build>] [--out <report.md>] [--append]',

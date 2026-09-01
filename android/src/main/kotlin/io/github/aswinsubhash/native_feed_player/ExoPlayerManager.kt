@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.view.Surface
 import android.view.TextureView
 import androidx.annotation.OptIn
+import androidx.annotation.VisibleForTesting
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Player
@@ -159,6 +160,12 @@ internal class ExoPlayerManager(
     private var maxTotalPlayers = 6
 
     private fun totalLivePlayers(): Int = managedPlayers.size + recycledPlayers.size
+
+    @VisibleForTesting
+    internal fun activeControllerCount(): Int = managedPlayers.size
+
+    @VisibleForTesting
+    internal fun scheduledPreloadCount(): Int = preloadManager?.sourceCount() ?: 0
 
     private val positionTicker = object : Runnable {
         override fun run() {
@@ -580,7 +587,10 @@ internal class ExoPlayerManager(
     private fun evictionCandidate(protectedSourceId: String?): Int? {
         val eligible = managedPlayers.filterValues { it.sourceId != protectedSourceId }
         if (eligible.isEmpty()) {
-            return null
+            // Every live controller plays the protected source; evict the
+            // oldest one so repeated createController calls cannot exceed the
+            // active-player budget.
+            return creationOrder.firstOrNull { managedPlayers.containsKey(it) }
         }
         return eligible.keys.maxByOrNull { distanceOrFar(eligible[it]?.sourceId) }
             ?: creationOrder.firstOrNull { managedPlayers[it]?.sourceId != protectedSourceId }

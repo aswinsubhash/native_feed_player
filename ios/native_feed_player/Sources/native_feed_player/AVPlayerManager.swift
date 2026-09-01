@@ -113,12 +113,16 @@ final class AVPlayerManager {
     /// Creation-time visibility generation used to defer eviction.
     let createdAtVisibleGeneration: Int
     var itemStatusObservation: NSKeyValueObservation?
+    var playerStatusObservation: NSKeyValueObservation?
     var timeControlObservation: NSKeyValueObservation?
+    var looperStatusObservation: NSKeyValueObservation?
     var readyForDisplayObservation: NSKeyValueObservation?
     var presentationSizeObservation: NSKeyValueObservation?
     var endObserver: NSObjectProtocol?
     var loopOperationGeneration = 0
     var playbackCommandGeneration = 0
+    var didEmitReady = false
+    var didReportPlaybackError = false
 
     init(
       id: Int,
@@ -317,16 +321,15 @@ final class AVPlayerManager {
       )
     }
     try validateSources([source])
-    guard URL(string: source.uri) != nil else {
+
+    evictToActiveLimit(protectedSourceId: sourceId)
+
+    guard let item = takePreparedItem(for: source) ?? makePlayerItem(for: source) else {
       throw PlaybackSetupError(
         code: "invalid_url",
         message: "Invalid URI for source \(sourceId): \(source.uri)"
       )
     }
-
-    evictToActiveLimit(protectedSourceId: sourceId)
-
-    let item = takePreparedItem(for: source) ?? makePlayerItem(for: source)
     let player = obtainReusablePlayer()
     player.removeAllItems()
     player.automaticallyWaitsToMinimizeStalling = true
@@ -356,12 +359,12 @@ final class AVPlayerManager {
     controllers[controllerId] = managed
     creationOrder.append(controllerId)
     metricsByController[controllerId] = PlaybackMetrics()
+    attachLooperObserver(to: managed)
     attachObservers(to: managed, playerItem: player.currentItem ?? item)
     emitMetrics(controllerId)
     if let renderView = attachedRenderViews[controllerId] {
       bindRenderView(renderView, to: managed)
     }
-    onState(controllerId, .preparing, nil)
     startPositionTimerIfNeeded()
 
     if autoPlay {
@@ -439,6 +442,8 @@ final class AVPlayerManager {
     let operationGeneration = managed.loopOperationGeneration
     let playbackCommandGeneration = managed.playbackCommandGeneration
 
+    managed.looperStatusObservation?.invalidate()
+    managed.looperStatusObservation = nil
     managed.looper?.disableLooping()
     managed.looper = nil
     player.removeAllItems()
@@ -449,6 +454,7 @@ final class AVPlayerManager {
       player.insert(managed.originalItem, after: nil)
       player.actionAtItemEnd = .pause
     }
+    attachLooperObserver(to: managed)
     attachObservers(to: managed, playerItem: player.currentItem ?? managed.originalItem)
     if position.isNumeric {
       player.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero) {
@@ -628,9 +634,8 @@ final class AVPlayerManager {
   private func handleResourceFailure(identity: String, error: Error) {
     assertMainQueue()
     for managed in controllers.values where managed.requestIdentity == identity {
-      onState(
-        managed.id,
-        .error,
+      reportPlaybackFailure(
+        managed,
         PlaybackErrorMapper.map(error, sourceId: managed.sourceId)
       )
     }
@@ -752,7 +757,9 @@ final class AVPlayerManager {
         if self.preparedItems[fresh.id] != nil {
           return
         }
-        let item = self.makePlayerItem(for: fresh)
+        guard let item = self.makePlayerItem(for: fresh) else {
+          return
+        }
         // Scale buffering by viewport distance.
         let distance = self.registry.distanceFromVisible(id: fresh.id) ?? self.preloadAhead
         item.preferredForwardBufferDuration = distance <= 1 ? 4 : 2
@@ -793,6 +800,24 @@ final class AVPlayerManager {
         message: "iOS HLS sources with custom headers are unsupported. Use signed URLs or cookies for source \(source.id)."
       )
     }
+    if let source = sources.first(where: { !isPlayableURL($0.uri) }) {
+      throw PlaybackSetupError(
+        code: "invalid_url",
+        message: "Invalid URI for source \(source.id): \(source.uri)"
+      )
+    }
+  }
+
+  /// Rejects URIs that cannot address media: no scheme, or an HTTP(S) URL
+  /// without a host. File and custom-scheme URLs only need to parse.
+  private func isPlayableURL(_ uri: String) -> Bool {
+    guard let url = URL(string: uri), let scheme = url.scheme?.lowercased(), !scheme.isEmpty else {
+      return false
+    }
+    if scheme == "http" || scheme == "https" {
+      return url.host?.isEmpty == false
+    }
+    return true
   }
 
   private func isHLS(_ source: RegisteredSource) -> Bool {
@@ -807,9 +832,11 @@ final class AVPlayerManager {
   }
 
   /// Creates a cached progressive item or a network-backed HLS item.
-  private func makePlayerItem(for source: RegisteredSource) -> AVPlayerItem {
+  /// Returns nil only when the URI cannot be parsed; registration validates
+  /// URLs first, so nil here means the source was mutated after validation.
+  private func makePlayerItem(for source: RegisteredSource) -> AVPlayerItem? {
     guard let url = URL(string: source.uri) else {
-      return AVPlayerItem(asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")))
+      return nil
     }
 
     let asset: AVURLAsset
@@ -986,7 +1013,12 @@ final class AVPlayerManager {
     }) {
       return farthest
     }
-    return eligible.first
+    if let fallback = eligible.first {
+      return fallback
+    }
+    // Every live controller plays the protected source; evict the oldest one
+    // so repeated createController calls cannot exceed the active budget.
+    return creationOrder.first
   }
 
   private func distanceFromViewport(_ controllerId: Int) -> Int {
@@ -1012,7 +1044,9 @@ final class AVPlayerManager {
       NotificationCenter.default.removeObserver(endObserver)
     }
     managed.itemStatusObservation?.invalidate()
+    managed.playerStatusObservation?.invalidate()
     managed.timeControlObservation?.invalidate()
+    managed.looperStatusObservation?.invalidate()
     managed.readyForDisplayObservation?.invalidate()
     managed.presentationSizeObservation?.invalidate()
     autoPausedControllerIds.remove(controllerId)
@@ -1071,6 +1105,43 @@ final class AVPlayerManager {
     emitMetrics(controllerId)
   }
 
+  private func reportPlaybackFailure(
+    _ managed: ManagedController,
+    _ error: PlaybackErrorMessage
+  ) {
+    assertMainQueue()
+    guard controllers[managed.id] === managed, !managed.didReportPlaybackError else {
+      return
+    }
+    managed.didReportPlaybackError = true
+    onState(managed.id, .error, error)
+  }
+
+  private func attachLooperObserver(to managed: ManagedController) {
+    managed.looperStatusObservation?.invalidate()
+    guard let looper = managed.looper else {
+      managed.looperStatusObservation = nil
+      return
+    }
+    managed.looperStatusObservation = looper.observe(
+      \.status,
+      options: [.new, .initial]
+    ) { [weak self, weak managed] looper, _ in
+      guard looper.status == .failed, let managed else {
+        return
+      }
+      self?.onMain { [weak self, weak managed] in
+        guard let self, let managed else {
+          return
+        }
+        self.reportPlaybackFailure(
+          managed,
+          PlaybackErrorMapper.map(looper.error, sourceId: managed.sourceId)
+        )
+      }
+    }
+  }
+
   private func attachObservers(to managed: ManagedController, playerItem: AVPlayerItem) {
     assertMainQueue()
     if let endObserver = managed.endObserver {
@@ -1078,8 +1149,26 @@ final class AVPlayerManager {
       managed.endObserver = nil
     }
     managed.itemStatusObservation?.invalidate()
+    managed.playerStatusObservation?.invalidate()
     managed.timeControlObservation?.invalidate()
     managed.presentationSizeObservation?.invalidate()
+    managed.playerStatusObservation = managed.player.observe(
+      \.status,
+      options: [.new, .initial]
+    ) { [weak self, weak managed] player, _ in
+      guard player.status == .failed, let managed else {
+        return
+      }
+      self?.onMain { [weak self, weak managed] in
+        guard let self, let managed else {
+          return
+        }
+        self.reportPlaybackFailure(
+          managed,
+          PlaybackErrorMapper.map(player.error, sourceId: managed.sourceId)
+        )
+      }
+    }
     managed.itemStatusObservation = playerItem.observe(
       \.status,
       options: [.new, .initial]
@@ -1092,6 +1181,16 @@ final class AVPlayerManager {
         else {
           return
         }
+        if item.status == .failed {
+          self.reportPlaybackFailure(
+            managed,
+            PlaybackErrorMapper.map(item.error, sourceId: managed.sourceId)
+          )
+          return
+        }
+        guard !managed.didReportPlaybackError else {
+          return
+        }
         switch item.status {
         case .readyToPlay:
           if var metrics = self.metricsByController[managed.id] {
@@ -1100,39 +1199,49 @@ final class AVPlayerManager {
             self.emitMetrics(managed.id)
           }
           self.prerollIfReady(managed.player)
-          self.onState(managed.id, .ready, nil)
-        case .failed:
-          self.onState(
-            managed.id,
-            .error,
-            PlaybackErrorMapper.map(item.error, sourceId: managed.sourceId)
-          )
+          if !managed.didEmitReady {
+            managed.didEmitReady = true
+            self.onState(managed.id, .ready, nil)
+          }
         case .unknown:
           self.onState(managed.id, .preparing, nil)
+        case .failed:
+          break
         @unknown default:
-          self.onState(
-            managed.id,
-            .error,
+          self.reportPlaybackFailure(
+            managed,
             PlaybackErrorMapper.unknown(message: "Unrecognised AVPlayerItem status")
           )
         }
       }
     }
 
+    // No `.initial`: the item-status observation owns the initial preparing
+    // event, and a fresh player's paused state would otherwise emit a spurious
+    // idle before the item is ready.
     managed.timeControlObservation = managed.player.observe(
       \.timeControlStatus,
-      options: [.new, .initial]
+      options: [.new]
     ) { [weak self, weak managed] player, _ in
       self?.onMain { [weak self, weak managed] in
         guard let self, let managed, self.controllers[managed.id] === managed else {
           return
         }
+        if let error = player.error {
+          self.reportPlaybackFailure(
+            managed,
+            PlaybackErrorMapper.map(error, sourceId: managed.sourceId)
+          )
+          return
+        }
         if let item = player.currentItem, item.status == .failed {
-          self.onState(
-            managed.id,
-            .error,
+          self.reportPlaybackFailure(
+            managed,
             PlaybackErrorMapper.map(item.error, sourceId: managed.sourceId)
           )
+          return
+        }
+        guard !managed.didReportPlaybackError else {
           return
         }
         switch player.timeControlStatus {
@@ -1152,6 +1261,10 @@ final class AVPlayerManager {
             metrics.hasBeenReady = true
             self.metricsByController[managed.id] = metrics
           }
+          if !managed.didEmitReady {
+            managed.didEmitReady = true
+            self.onState(managed.id, .ready, nil)
+          }
           // Apply deferred playback speed after playback starts.
           if let rate = self.pendingRateByController[managed.id], player.rate != rate {
             player.rate = rate
@@ -1159,9 +1272,8 @@ final class AVPlayerManager {
           self.noteSteadyPlayback()
           self.onState(managed.id, .playing, nil)
         @unknown default:
-          self.onState(
-            managed.id,
-            .error,
+          self.reportPlaybackFailure(
+            managed,
             PlaybackErrorMapper.unknown(message: "Unrecognised timeControlStatus")
           )
         }
@@ -1205,7 +1317,11 @@ final class AVPlayerManager {
       object: playerItem,
       queue: .main
     ) { [weak self, weak managed] _ in
-      guard let self, let managed, self.controllers[managed.id] === managed else {
+      guard let self,
+        let managed,
+        self.controllers[managed.id] === managed,
+        !managed.didReportPlaybackError
+      else {
         return
       }
       self.onState(managed.id, .completed, nil)

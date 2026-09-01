@@ -537,6 +537,85 @@ final class AVPlayerManagerSessionTests: XCTestCase {
     }
   }
 
+  func testInvalidURLsAreRejectedAtRegistration() {
+    let manager = makeManager()
+    manager.initialize(config: testConfig())
+
+    for uri in ["http://", "HTTP://", "not a url with spaces and no scheme", "://broken"] {
+      XCTAssertThrowsError(
+        try manager.setSources([
+          RegisteredSource(id: "bad", uri: uri, rank: 0, kind: .auto, headers: [:])
+        ])
+      ) { error in
+        XCTAssertEqual(
+          (error as? AVPlayerManager.PlaybackSetupError)?.code,
+          "invalid_url",
+          "expected \(uri) to be rejected"
+        )
+      }
+    }
+  }
+
+  func testValidURLSchemesAreAccepted() throws {
+    let manager = makeManager()
+    manager.initialize(config: testConfig())
+
+    XCTAssertNoThrow(
+      try manager.setSources([
+        RegisteredSource(id: "https", uri: "HTTPS://example.test/a.mp4", rank: 0, kind: .auto, headers: [:]),
+        RegisteredSource(id: "file", uri: "file:///tmp/a.mp4", rank: 1, kind: .auto, headers: [:]),
+      ])
+    )
+  }
+
+  func testControllerCreationEmitsPreparingWithoutIdleFlapping() throws {
+    var states: [PlaybackStatusMessage] = []
+    let manager = AVPlayerManager(
+      onState: { _, status, _ in states.append(status) },
+      onReleased: { _, _ in },
+      onPosition: { _ in },
+      onMetrics: { _ in },
+      onVideoSize: { _ in }
+    )
+    manager.initialize(config: testConfig())
+    try manager.setSources([
+      RegisteredSource(id: "clip", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:])
+    ])
+
+    try manager.createController(controllerId: 21, sourceId: "clip", autoPlay: false, looping: false)
+
+    XCTAssertEqual(states, [.preparing])
+  }
+
+  func testPlaybackFailureRemainsTerminalAndEmitsOnce() throws {
+    let failed = expectation(description: "playback failed")
+    failed.assertForOverFulfill = true
+    var states: [PlaybackStatusMessage] = []
+    let manager = AVPlayerManager(
+      onState: { _, status, _ in
+        states.append(status)
+        if status == .error {
+          failed.fulfill()
+        }
+      },
+      onReleased: { _, _ in },
+      onPosition: { _ in },
+      onMetrics: { _ in },
+      onVideoSize: { _ in }
+    )
+    manager.initialize(config: testConfig())
+    try manager.setSources([
+      RegisteredSource(id: "broken", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:])
+    ])
+
+    try manager.createController(controllerId: 22, sourceId: "broken", autoPlay: true, looping: false)
+    wait(for: [failed], timeout: 2)
+    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+    XCTAssertEqual(states.last, .error, "terminal error was overwritten: \(states)")
+    XCTAssertEqual(states.filter { $0 == .error }.count, 1)
+  }
+
   private func makeManager(onReleased: @escaping (Int) -> Void = { _ in }) -> AVPlayerManager {
     AVPlayerManager(
       onState: { _, _, _ in },

@@ -337,7 +337,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     final PlaybackStatusUpdate update = await failure;
     expect(update.error, isNotNull);
-    expect(update.error!.code, isNotEmpty);
+    // Both native mappers classify unreachable hosts as network failures.
+    expect(update.error!.code, 'network_failed');
     expect(update.error!.isRecoverable, isTrue);
 
     await player.setVisibleSource('online');
@@ -346,8 +347,16 @@ void main() {
       autoPlay: true,
     );
     collector.trackController(recovered);
+
+    final Future<PlaybackStatusUpdate> playing = recovered.stateStream
+        .firstWhere(
+          (PlaybackStatusUpdate u) => u.state == VideoPlaybackState.playing,
+        )
+        .timeout(const Duration(seconds: 20));
+
     await recovered.play();
     await tester.pump(const Duration(milliseconds: 800));
+    await playing;
     await collector.closeAndEmit();
 
     expect(recovered.controllerId, isNot(bad.controllerId));

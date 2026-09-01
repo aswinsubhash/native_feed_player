@@ -93,7 +93,11 @@ collapsed to the nearest occurrence.
 Rebuffers accumulate within a bounded time window. At the threshold the preload
 window halves down to a floor that still keeps the immediate neighbour prepared;
 it recovers one step only after a sustained uninterrupted playback interval.
-Critical memory pressure drops straight to the floor.
+Critical memory pressure drops straight to the floor, clears prepared work, and
+does not immediately reallocate: the OS provides no "pressure ended" signal, so
+the window stays empty until the next feed interaction (viewport change,
+controller creation, source mutation) or until sustained playback restores the
+adaptive scale (about 30 s on Android, 15 s on iOS).
 
 ### Eviction
 

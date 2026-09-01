@@ -77,6 +77,9 @@ final class MediaDiskCache {
   private var entries: [String: Entry] = [:]
   private var maxBytes: Int64 = 0
   private var enabled = false
+  /// Pending LRU-stamp writes, coalesced onto one delayed barrier.
+  private var indexWritePending = false
+  private var indexWriteScheduled = false
 
   private lazy var rootURL: URL = {
     let base = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -121,9 +124,11 @@ final class MediaDiskCache {
     rootURL.appendingPathComponent(key)
   }
 
-  /// Returns the local file for a fully cached request, refreshing its LRU stamp.
+  /// Returns the local file for a fully cached request, refreshing its LRU
+  /// stamp asynchronously so the resource-loader queue never waits on a
+  /// synchronous index write.
   func cachedFile(forIdentity identity: String) -> (url: URL, contentType: String?, byteCount: Int64)? {
-    queue.sync(flags: .barrier) { () -> (URL, String?, Int64)? in
+    queue.sync(flags: .barrier) {
       guard enabled, var entry = entries[identity] else {
         return nil
       }
@@ -135,7 +140,7 @@ final class MediaDiskCache {
       }
       entry.lastAccess = Date().timeIntervalSince1970
       entries[identity] = entry
-      saveIndexLocked()
+      scheduleIndexWriteLocked()
       return (url, entry.contentType, entry.byteCount)
     }
   }
@@ -177,8 +182,13 @@ final class MediaDiskCache {
         completion?()
         return
       }
-      let size = (try? self.fileManager.attributesOfItem(atPath: destination.path)[.size] as? Int64)
-        ?? 0
+      // A failed size lookup must not record a zero-byte entry: the real file
+      // would be invisible to the budget and never evicted. Drop the adoption.
+      guard let size = try? self.fileManager.attributesOfItem(atPath: destination.path)[.size] as? Int64 else {
+        try? self.fileManager.removeItem(at: destination)
+        completion?()
+        return
+      }
       self.entries[identity] = Entry(
         key: identity,
         contentType: contentType,
@@ -273,5 +283,27 @@ final class MediaDiskCache {
       return
     }
     try? data.write(to: indexURL, options: .atomic)
+  }
+
+  /// Coalesces LRU-only index rewrites: at most one delayed write is in
+  /// flight, so repeated cache hits cost no synchronous disk I/O. Structural
+  /// changes (store/evict/configure) call `saveIndexLocked` directly instead.
+  private func scheduleIndexWriteLocked() {
+    indexWritePending = true
+    guard !indexWriteScheduled else {
+      return
+    }
+    indexWriteScheduled = true
+    queue.asyncAfter(deadline: .now() + 0.5, flags: .barrier) { [weak self] in
+      guard let self else {
+        return
+      }
+      self.indexWriteScheduled = false
+      guard self.indexWritePending else {
+        return
+      }
+      self.indexWritePending = false
+      self.saveIndexLocked()
+    }
   }
 }

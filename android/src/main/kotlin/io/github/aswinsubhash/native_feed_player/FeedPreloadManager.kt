@@ -115,6 +115,8 @@ internal class FeedPreloadManager(
         addedItemsByIdentity.clear()
     }
 
+    fun sourceCount(): Int = addedItemsByIdentity.size
+
     /** Releases shared preload components. */
     fun release() {
         delegate.release()

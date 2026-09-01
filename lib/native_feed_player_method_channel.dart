@@ -92,10 +92,30 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _latestStates.clear();
     _latestMetrics.clear();
     _latestVideoSizes.clear();
-    _stateCacheSubscription ??= _states.listen((_) {});
-    _metricsCacheSubscription ??= _metrics.listen((_) {});
-    _videoSizeCacheSubscription ??= _videoSizes.listen((_) {});
+    _stateCacheSubscription ??= _states.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
+    _metricsCacheSubscription ??= _metrics.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
+    _videoSizeCacheSubscription ??= _videoSizes.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
     await hostApi.initialize(config.toMessage());
+  }
+
+  static void _reportCacheStreamError(Object error, StackTrace stackTrace) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'native_feed_player',
+        context: ErrorDescription('while caching native playback events'),
+      ),
+    );
   }
 
   @override

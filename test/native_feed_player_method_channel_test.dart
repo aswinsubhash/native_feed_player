@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_feed_player/native_feed_player.dart';
 import 'package:native_feed_player/native_feed_player_method_channel.dart';
@@ -131,9 +132,11 @@ void main() {
         maxActivePlayers: 4,
         preloadAhead: 3,
         preloadBehind: 1,
-        maxConcurrentPreloads: 2,
-        cache: CachePolicy(maxBytes: 1024),
-        audio: AudioPolicy(muted: false, volume: 0.5),
+        maxConcurrentPreloads: 5,
+        positionUpdateInterval: Duration(milliseconds: 250),
+        renderMode: RenderMode.texture,
+        cache: CachePolicy(enabled: false, maxBytes: 1024),
+        audio: AudioPolicy(muted: false, volume: 0.5, handleAudioFocus: false),
       ),
     );
 
@@ -141,9 +144,14 @@ void main() {
     expect(config.maxActivePlayers, 4);
     expect(config.preloadAhead, 3);
     expect(config.preloadBehind, 1);
+    expect(config.maxConcurrentPreloads, 5);
+    expect(config.positionUpdateIntervalMs, 250);
+    expect(config.renderMode, RenderModeMessage.texture);
+    expect(config.cache.enabled, isFalse);
     expect(config.cache.maxBytes, 1024);
     expect(config.audio.muted, isFalse);
     expect(config.audio.volume, 0.5);
+    expect(config.audio.handleAudioFocus, isFalse);
   });
 
   test('setSources assigns sequential ranks', () async {
@@ -420,5 +428,51 @@ void main() {
     );
     await expectLater(platform.setVolume(7, -0.1), throwsArgumentError);
     await expectLater(platform.setVolume(7, 1.1), throwsArgumentError);
+  });
+
+  group('event stream errors', () {
+    final List<FlutterErrorDetails> reported = <FlutterErrorDetails>[];
+    void Function(FlutterErrorDetails)? previousHandler;
+
+    setUp(() {
+      previousHandler = FlutterError.onError;
+      reported.clear();
+      FlutterError.onError = (FlutterErrorDetails details) {
+        reported.add(details);
+      };
+    });
+
+    tearDown(() {
+      FlutterError.onError = previousHandler;
+    });
+
+    test('cache subscription errors are reported, not unhandled', () async {
+      await platform.initialize(const FeedPlayerConfig());
+      final Object error = StateError('metrics channel failed');
+
+      metrics.addError(error);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(reported, hasLength(1));
+      expect(reported.single.exception, same(error));
+      expect(reported.single.library, 'native_feed_player');
+    });
+
+    test(
+      'per-controller streams still propagate errors to listeners',
+      () async {
+        await platform.initialize(const FeedPlayerConfig());
+        final Object error = StateError('state channel failed');
+        final Completer<Object> received = Completer<Object>();
+
+        final StreamSubscription<PlaybackStatusUpdate> subscription = platform
+            .stateStream(7)
+            .listen((_) {}, onError: received.complete);
+
+        states.addError(error);
+        expect(await received.future, same(error));
+        await subscription.cancel();
+      },
+    );
   });
 }
