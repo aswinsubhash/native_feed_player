@@ -145,33 +145,29 @@ internal class ExoPlayerManagerPreloadResilienceTest {
     }
 
     @Test
-    fun budgetEviction_allControllersOnVisibleSource_stillEnforcesBudget() {
-        val released = mutableListOf<Pair<Int, ReleaseReasonMessage>>()
-        val context = ApplicationProvider.getApplicationContext<Application>()
-        val manager = ExoPlayerManager(
-            context = context,
-            onState = { _, _, _ -> },
-            onReleased = { id, reason -> released.add(id to reason) },
-            onPosition = { _ -> },
-            onMetrics = { _ -> },
-            onVideoSize = { _ -> }
-        ).also(managers::add)
-        manager.initialize(config(maxActivePlayers = 3, preloadAhead = 0, preloadBehind = 0))
-        manager.setSources(listOf(source("only", 0, "https://example.test/only.mp4")))
+    fun recycledPlayer_keepsPreloadPairing() {
+        val manager = manager()
+        manager.initialize(config(maxActivePlayers = 2, preloadAhead = 1, preloadBehind = 0))
+        // Let the deferred preload-manager build run so players come from its builder.
+        shadowOf(Looper.getMainLooper()).idle()
+        manager.setSources(
+            listOf(
+                source("a", 0, "https://example.test/a.mp4"),
+                source("b", 1, "https://example.test/b.mp4")
+            )
+        )
+        manager.setVisibleSource("a")
+        shadowOf(Looper.getMainLooper()).idle()
 
-        // Three live controllers for the visible source exceed the budget of
-        // maxActivePlayers * 2 = 6? No: 3 <= 6. Force the overage with a
-        // smaller budget instead.
-        manager.initialize(config(maxActivePlayers = 1, preloadAhead = 0, preloadBehind = 0))
-        manager.setSources(listOf(source("only", 0, "https://example.test/only.mp4")))
+        manager.createController(controllerId = 1, sourceId = "a", autoPlay = false, looping = false)
+        assertTrue(manager.playerCameFromPreloadManager(1))
 
-        manager.createController(controllerId = 1, sourceId = "only", autoPlay = false, looping = false)
-        manager.createController(controllerId = 2, sourceId = "only", autoPlay = false, looping = false)
+        manager.disposeController(1)
+        shadowOf(Looper.getMainLooper()).idle()
+        manager.createController(controllerId = 2, sourceId = "b", autoPlay = false, looping = false)
 
-        // The duplicate-visible rule caps active controllers at the limit and
-        // the budget loop must terminate rather than spin forever.
-        assertTrue(manager.activeControllerCount() <= 1)
-        assertTrue(released.isNotEmpty())
+        // The recycled player must still be recognised as builder-paired.
+        assertTrue(manager.playerCameFromPreloadManager(2))
     }
 }
 

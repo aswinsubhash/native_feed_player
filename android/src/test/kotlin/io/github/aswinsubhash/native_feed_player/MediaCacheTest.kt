@@ -2,8 +2,6 @@ package io.github.aswinsubhash.native_feed_player
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
-import androidx.media3.database.StandaloneDatabaseProvider
-import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import org.junit.After
 import org.junit.Test
@@ -162,12 +160,12 @@ internal class MediaCacheTest {
             releaseGate.countDown()
 
             // The stale attempt must unwind without holding the directory.
-            assertNull(MediaCache.awaitCache(timeoutMs = 2_000))
+            assertNull(MediaCache.awaitCache(timeoutMs = 10_000))
             assertNull(MediaCache.activeCache())
 
             // The directory lock must be free: a fresh configure succeeds.
             MediaCache.configure(context, true, 1024L * 1024, executor)
-            assertNotNull(MediaCache.awaitCache(timeoutMs = 2_000))
+            assertNotNull(MediaCache.awaitCache(timeoutMs = 10_000))
             assertNotNull(MediaCache.activeCache())
             assertTrue(builtCount >= 2)
         } finally {

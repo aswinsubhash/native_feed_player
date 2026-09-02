@@ -105,9 +105,6 @@ internal object MediaCache {
     private var cache: SimpleCache? = null
     private var databaseProvider: StandaloneDatabaseProvider? = null
     private var configuredMaxBytes: Long = 0
-
-    /** Budget requested while another engine held the cache; applied on the next reconfigure. */
-    private var pendingMaxBytes: Long = 0
     private val cacheKeysBySource = mutableMapOf<String, MutableSet<String>>()
 
     /** Completes once the current configure attempt finishes (null = no cache). */
@@ -156,16 +153,15 @@ internal object MediaCache {
             return
         }
         // Another engine still plays through the live cache; re-creating it
-        // under them would break their reads, so remember the request and
-        // apply it when the count drops.
+        // under them would break their reads. The new budget applies on the
+        // next configure after that engine detaches.
         if (cache != null && refCount > 1) {
             if (configuredMaxBytes != maxBytes) {
                 Log.w(
                     TAG,
-                    "MediaCache budget change to $maxBytes bytes deferred while " +
-                        "another engine is attached; applied after detach."
+                    "MediaCache budget change to $maxBytes bytes ignored while " +
+                        "another engine is attached; reconfigure after detach."
                 )
-                pendingMaxBytes = maxBytes
             }
             return
         }
@@ -303,7 +299,6 @@ internal object MediaCache {
         runCatching { databaseProvider?.close() }
         databaseProvider = null
         configuredMaxBytes = 0
-        pendingMaxBytes = 0
         cacheKeysBySource.clear()
         // Unblock any loader thread still waiting on the previous attempt.
         readiness.complete(null)

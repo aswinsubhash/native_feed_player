@@ -179,6 +179,10 @@ internal class ExoPlayerManager(
     internal fun activeControllerCount(): Int = managedPlayers.size
 
     @VisibleForTesting
+    internal fun playerCameFromPreloadManager(controllerId: Int): Boolean =
+        managedPlayers[controllerId]?.player?.let(playersFromPreloadManager::contains) == true
+
+    @VisibleForTesting
     internal fun playerFor(controllerId: Int): ExoPlayer? =
         managedPlayers[controllerId]?.player
 
@@ -500,6 +504,7 @@ internal class ExoPlayerManager(
         surfaceByController.clear()
         metricsByController.clear()
         releaseAllPooledPlayers()
+        playersFromPreloadManager.clear()
         registry.clear()
         creationOrder.clear()
         autoPausedControllerIds.clear()
@@ -615,7 +620,13 @@ internal class ExoPlayerManager(
         }
     }
 
-    /** Enforces the player budget by releasing recycled players first. */
+    /**
+     * Defensive guard on the combined active + recycled player count. Under
+     * the current invariants (active ≤ maxActivePlayers, pool ≤
+     * maxActivePlayers, maxTotalPlayers = 2 × maxActivePlayers) this never
+     * trips; it exists so a future change to those limits cannot silently
+     * exceed the budget.
+     */
     private fun enforceTotalPlayerBudget(protectedControllerId: Int? = null) {
         while (totalLivePlayers() > maxTotalPlayers && recycledPlayers.isNotEmpty()) {
             val player = recycledPlayers.removeFirst()
@@ -865,10 +876,12 @@ internal class ExoPlayerManager(
         // previous controller's rate or volume into the next one.
         player.setPlaybackSpeed(1f)
         player.volume = 1f
-        playersFromPreloadManager.remove(player)
         if (recycledPlayers.size < maxActivePlayers) {
+            // Pooled players keep their builder pairing so preloaded sources
+            // can be reused with them.
             recycledPlayers.addLast(player)
         } else {
+            playersFromPreloadManager.remove(player)
             player.release()
         }
     }
