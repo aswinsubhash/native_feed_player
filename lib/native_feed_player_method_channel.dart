@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+// The injected event streams intentionally use external parameter names.
+// ignore_for_file: prefer_initializing_formals
+
 import 'native_feed_player_platform_interface.dart';
 import 'src/controller_release.dart';
 import 'src/feed_player_config.dart';

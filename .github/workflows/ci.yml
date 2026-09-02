@@ -28,6 +28,8 @@ jobs:
           cache: true
 
       - run: flutter pub get
+      - name: Restore analysis options after Flutter migration
+        run: git checkout -- analysis_options.yaml example/analysis_options.yaml
 
       - name: Verify formatting
         run: |
@@ -79,6 +81,8 @@ jobs:
           cache: true
 
       - run: flutter pub get
+      - name: Restore analysis options after Flutter migration
+        run: git checkout -- analysis_options.yaml example/analysis_options.yaml
       - run: flutter analyze
       - run: flutter test
 
@@ -194,6 +198,11 @@ jobs:
           cache: true
 
       - run: flutter pub get
+      - name: Install example dependencies
+        working-directory: example
+        run: flutter pub get
+      - name: Restore analysis options after Flutter migration
+        run: git checkout -- analysis_options.yaml example/analysis_options.yaml
 
       - name: Enable KVM
         run: |
@@ -225,6 +234,11 @@ jobs:
 
       - run: flutter config --enable-swift-package-manager
       - run: flutter pub get
+      - name: Install example dependencies
+        working-directory: example
+        run: flutter pub get
+      - name: Restore analysis options after Flutter migration
+        run: git checkout -- analysis_options.yaml example/analysis_options.yaml
 
       - name: Boot simulator
         run: |
@@ -260,5 +274,7 @@ jobs:
           cache: true
 
       - run: flutter pub get
+      - name: Restore analysis options after Flutter migration
+        run: git checkout -- analysis_options.yaml example/analysis_options.yaml
 
       - run: flutter pub publish --dry-run

@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+// Constructor parameter names are part of the public API.
+// ignore_for_file: prefer_initializing_formals
+
 import '../native_feed_player_platform_interface.dart';
 import 'controller_release.dart';
 import 'feed_player_exception.dart';
