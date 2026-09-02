@@ -222,6 +222,7 @@ jobs:
   ios-integration:
     name: Integration tests (iOS)
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -258,7 +259,7 @@ jobs:
 
       - name: Run integration tests
         working-directory: example
-        run: flutter pub get && flutter test --no-pub integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
+        run: flutter pub get && flutter test --no-pub --reporter expanded integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
 
   publish-dry-run:
     name: Publish dry run
