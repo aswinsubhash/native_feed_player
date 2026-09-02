@@ -174,6 +174,10 @@ final class AVPlayerManager {
   private var muted: Bool = false
   private var volume: Float = 1.0
   private var handleAudioFocus: Bool = true
+  private var manageAudioSession: Bool = true
+  /// Whether the plugin activated the audio session; re-activation is skipped
+  /// until the session is reset so policy updates do not block the main thread.
+  private var audioSessionActivated = false
 
   /// Controllers paused by backgrounding, to be resumed on return.
   private var autoPausedControllerIds = Set<Int>()
@@ -228,9 +232,17 @@ final class AVPlayerManager {
   }
 
   deinit {
-    positionTimer?.invalidate()
-    positionTimer = nil
-    stopObservingAppLifecycle()
+    // Timer invalidation must happen on the timer's runloop; deinit can run
+    // on any thread. Observer removal is thread-safe.
+    let timer = positionTimer
+    if Thread.isMainThread {
+      timer?.invalidate()
+      stopObservingAppLifecycle()
+    } else {
+      DispatchQueue.main.async {
+        timer?.invalidate()
+      }
+    }
     resourceLoader.shutdown()
   }
 
@@ -334,6 +346,8 @@ final class AVPlayerManager {
     player.removeAllItems()
     player.automaticallyWaitsToMinimizeStalling = true
     player.volume = muted ? 0 : volume
+    // A recycled player must not inherit the previous controller's mute.
+    player.isMuted = muted
 
     let managed = ManagedController(
       id: controllerId,
@@ -485,6 +499,7 @@ final class AVPlayerManager {
     muted = policy.muted
     volume = min(max(Float(policy.volume), 0), 1)
     handleAudioFocus = policy.handleAudioFocus && !policy.muted
+    manageAudioSession = policy.manageAudioSession
 
     configureAudioSession()
     for managed in controllers.values {
@@ -495,21 +510,40 @@ final class AVPlayerManager {
   }
 
   private func configureAudioSession() {
+    // The host app owns the session when it opts out; never touch it.
+    guard manageAudioSession else {
+      return
+    }
     let session = AVAudioSession.sharedInstance()
     do {
       if muted {
         // Preserve external audio while muted.
-        try session.setCategory(.ambient, mode: .moviePlayback, options: [.mixWithOthers])
+        if session.category != .ambient || session.mode != .moviePlayback
+          || session.categoryOptions != [.mixWithOthers]
+        {
+          try session.setCategory(.ambient, mode: .moviePlayback, options: [.mixWithOthers])
+        }
       } else if handleAudioFocus {
-        try session.setCategory(.playback, mode: .moviePlayback)
+        if session.category != .playback || session.mode != .moviePlayback
+          || !session.categoryOptions.isEmpty
+        {
+          try session.setCategory(.playback, mode: .moviePlayback)
+        }
       } else {
-        try session.setCategory(
-          .playback,
-          mode: .moviePlayback,
-          options: [.mixWithOthers]
-        )
+        if session.category != .playback || session.mode != .moviePlayback
+          || session.categoryOptions != [.mixWithOthers]
+        {
+          try session.setCategory(
+            .playback,
+            mode: .moviePlayback,
+            options: [.mixWithOthers]
+          )
+        }
       }
-      try session.setActive(true, options: [])
+      if !audioSessionActivated {
+        try session.setActive(true, options: [])
+        audioSessionActivated = true
+      }
     } catch {
       // Audio-session failure does not stop playback.
     }
@@ -712,6 +746,8 @@ final class AVPlayerManager {
     drainPooledPlayers(keep: 0)
     positionTimer?.invalidate()
     positionTimer = nil
+    // A fresh session must re-activate the audio session.
+    audioSessionActivated = false
   }
 
   // MARK: - Prebuffering
@@ -1457,6 +1493,12 @@ final class AVPlayerManager {
 
   private func recycleOrReleasePlayer(_ player: AVQueuePlayer) {
     player.pause()
+    // Reset player-global state so a recycled player cannot leak the previous
+    // controller's rate, volume, or mute into the next one.
+    player.rate = 0
+    player.volume = 1.0
+    player.isMuted = false
+    player.cancelPendingPrerolls()
     player.removeAllItems()
     player.actionAtItemEnd = .pause
     if pooledPlayers.count < maxActivePlayers {

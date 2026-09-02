@@ -7,9 +7,11 @@ struct RegisteredSource {
   let rank: Int
   let kind: FeedMediaKindMessage
   let headers: [String: String]
+  /// Optional stable cache identity replacing `uri` in cache keys.
+  var cacheKey: String? = nil
 
   var cacheIdentity: String {
-    MediaCacheIdentity.make(uri: uri, headers: headers)
+    MediaCacheIdentity.make(uri: uri, headers: headers, cacheKey: cacheKey)
   }
 }
 

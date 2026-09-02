@@ -237,6 +237,99 @@ final class CachingResourceLoaderTests: XCTestCase {
     XCTAssertFalse(CachingResourceLoader.isSuccessfulHTTPStatus(401))
     XCTAssertFalse(CachingResourceLoader.isSuccessfulHTTPStatus(500))
   }
+
+  func testPartialContentWithoutRangeHeaderIsRejected() {
+    // A 206 to a plain GET is a partial body masquerading as a full file.
+    XCTAssertFalse(
+      CachingResourceLoader.isCacheableResponse(206, requestHadRangeHeader: false)
+    )
+    // A 206 answering an explicit range request is legitimate.
+    XCTAssertTrue(
+      CachingResourceLoader.isCacheableResponse(206, requestHadRangeHeader: true)
+    )
+    XCTAssertTrue(
+      CachingResourceLoader.isCacheableResponse(200, requestHadRangeHeader: false)
+    )
+    XCTAssertFalse(
+      CachingResourceLoader.isCacheableResponse(404, requestHadRangeHeader: true)
+    )
+  }
+
+  func testCacheKeyReplacesUriInIdentityButHeadersStillMatter() {
+    let base = MediaCacheIdentity.make(
+      uri: "https://cdn.test/video.mp4?sig=one",
+      headers: [:],
+      cacheKey: "episode-42"
+    )
+    let rotatedSignature = MediaCacheIdentity.make(
+      uri: "https://cdn.test/video.mp4?sig=two",
+      headers: [:],
+      cacheKey: "episode-42"
+    )
+    let differentKey = MediaCacheIdentity.make(
+      uri: "https://cdn.test/video.mp4?sig=one",
+      headers: [:],
+      cacheKey: "episode-43"
+    )
+    let differentHeaders = MediaCacheIdentity.make(
+      uri: "https://cdn.test/video.mp4?sig=one",
+      headers: ["Authorization": "Bearer t"],
+      cacheKey: "episode-42"
+    )
+
+    XCTAssertEqual(base, rotatedSignature)
+    XCTAssertNotEqual(base, differentKey)
+    XCTAssertNotEqual(base, differentHeaders)
+  }
+
+  func testChunkedServingBoundsSingleResponses() {
+    // The serving contract: one respond() call never exceeds the chunk size,
+    // so an open-ended request cannot materialise a whole cached file.
+    XCTAssertGreaterThan(CachingResourceLoader.chunkSize, 0)
+    XCTAssertLessThanOrEqual(CachingResourceLoader.chunkSize, 1024 * 1024)
+  }
+}
+
+final class MediaDiskCacheTests: XCTestCase {
+  override func tearDown() {
+    MediaDiskCache.shared.configure(enabled: false, maxBytes: 0)
+    super.tearDown()
+  }
+
+  func testConfigureIsAsynchronousButConsistentAfterBarrier() {
+    MediaDiskCache.shared.configure(enabled: true, maxBytes: 1024 * 1024)
+
+    // isEnabled flips synchronously without blocking on the cache queue.
+    XCTAssertTrue(MediaDiskCache.shared.isEnabled)
+
+    MediaDiskCache.shared.waitForPendingWorkForTesting()
+
+    // After the barrier, index loading and budget enforcement have run.
+    XCTAssertTrue(MediaDiskCache.shared.isEnabled)
+  }
+
+  func testTruncatedCacheFileIsEvictedInsteadOfServed() throws {
+    MediaDiskCache.shared.configure(enabled: true, maxBytes: 64 * 1024 * 1024)
+    MediaDiskCache.shared.waitForPendingWorkForTesting()
+
+    let identity = MediaCacheIdentity.make(uri: "https://example.test/truncated.mp4", headers: [:])
+    let payload = Data(repeating: 0xAB, count: 4096)
+    let temporary = FileManager.default.temporaryDirectory
+      .appendingPathComponent("nfp-test-\(UUID().uuidString)")
+    try payload.write(to: temporary)
+    MediaDiskCache.shared.store(temporaryFile: temporary, identity: identity, contentType: "video/mp4")
+    MediaDiskCache.shared.waitForPendingWorkForTesting()
+
+    XCTAssertNotNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
+
+    // Simulate external truncation (crash mid-move, OS eviction).
+    let url = MediaDiskCache.shared.fileURL(forKey: identity)
+    try Data(repeating: 0xCD, count: 1024).write(to: url)
+
+    XCTAssertNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
+    MediaDiskCache.shared.waitForPendingWorkForTesting()
+    XCTAssertNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
+  }
 }
 
 final class AdaptivePreloadPolicyTests: XCTestCase {
@@ -346,6 +439,28 @@ final class BufferedEventSinkTests: XCTestCase {
 }
 
 final class AVPlayerManagerSessionTests: XCTestCase {
+  private func config(
+    manageAudioSession: Bool = true,
+    muted: Bool = true,
+    handleAudioFocus: Bool = false
+  ) -> FeedPlayerConfigMessage {
+    FeedPlayerConfigMessage(
+      maxActivePlayers: 3,
+      preloadAhead: 2,
+      preloadBehind: 1,
+      maxConcurrentPreloads: 2,
+      positionUpdateIntervalMs: 200,
+      renderMode: .platformView,
+      cache: CachePolicyMessage(enabled: false, maxBytes: 0),
+      audio: AudioPolicyMessage(
+        muted: muted,
+        volume: 1,
+        handleAudioFocus: handleAudioFocus,
+        manageAudioSession: manageAudioSession
+      )
+    )
+  }
+
   func testInitializeReplacesPreviousSession() throws {
     var released: [(Int, ReleaseReasonMessage)] = []
     let manager = AVPlayerManager(
@@ -355,16 +470,7 @@ final class AVPlayerManagerSessionTests: XCTestCase {
       onMetrics: { _ in },
       onVideoSize: { _ in }
     )
-    let config = FeedPlayerConfigMessage(
-      maxActivePlayers: 3,
-      preloadAhead: 2,
-      preloadBehind: 1,
-      maxConcurrentPreloads: 2,
-      positionUpdateIntervalMs: 200,
-      renderMode: .platformView,
-      cache: CachePolicyMessage(enabled: false, maxBytes: 0),
-      audio: AudioPolicyMessage(muted: true, volume: 1, handleAudioFocus: false)
-    )
+    let config = config()
 
     manager.initialize(config: config)
     try manager.setSources([
@@ -379,6 +485,50 @@ final class AVPlayerManagerSessionTests: XCTestCase {
     XCTAssertEqual(released.count, 1)
     XCTAssertEqual(released.first?.0, 1)
     XCTAssertEqual(released.first?.1, .disposed)
+  }
+
+  func testManageAudioSessionFalseLeavesTheHostSessionUntouched() throws {
+    let session = AVAudioSession.sharedInstance()
+    try? session.setCategory(.playback, mode: .moviePlayback, options: [.duckOthers])
+    defer {
+      try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+    }
+
+    let manager = AVPlayerManager(
+      onState: { _, _, _ in },
+      onReleased: { _, _ in },
+      onPosition: { _ in },
+      onMetrics: { _ in },
+      onVideoSize: { _ in }
+    )
+
+    manager.initialize(config: config(manageAudioSession: false, muted: false))
+
+    // The plugin must not have rewritten the category or dropped the
+    // host app's options.
+    XCTAssertEqual(session.category, .playback)
+    XCTAssertTrue(session.categoryOptions.contains(.duckOthers))
+  }
+
+  func testManageAudioSessionTrueReconfiguresTheHostSession() throws {
+    let session = AVAudioSession.sharedInstance()
+    try? session.setCategory(.playback, mode: .moviePlayback, options: [.duckOthers])
+    defer {
+      try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+    }
+
+    let manager = AVPlayerManager(
+      onState: { _, _, _ in },
+      onReleased: { _, _ in },
+      onPosition: { _ in },
+      onMetrics: { _ in },
+      onVideoSize: { _ in }
+    )
+
+    manager.initialize(config: config(manageAudioSession: true, muted: false))
+
+    XCTAssertEqual(session.category, .playback)
+    XCTAssertFalse(session.categoryOptions.contains(.duckOthers))
   }
 
   func testStaleRenderViewDetachKeepsReplacementAttached() throws {
@@ -398,7 +548,7 @@ final class AVPlayerManagerSessionTests: XCTestCase {
         positionUpdateIntervalMs: 200,
         renderMode: .platformView,
         cache: CachePolicyMessage(enabled: false, maxBytes: 0),
-        audio: AudioPolicyMessage(muted: true, volume: 1, handleAudioFocus: false)
+        audio: AudioPolicyMessage(muted: true, volume: 1, handleAudioFocus: false, manageAudioSession: true)
       )
     )
     try manager.setSources([
@@ -638,7 +788,7 @@ final class AVPlayerManagerSessionTests: XCTestCase {
       positionUpdateIntervalMs: 200,
       renderMode: .platformView,
       cache: CachePolicyMessage(enabled: false, maxBytes: 0),
-      audio: AudioPolicyMessage(muted: true, volume: 1, handleAudioFocus: false)
+      audio: AudioPolicyMessage(muted: true, volume: 1, handleAudioFocus: false, manageAudioSession: true)
     )
   }
 }

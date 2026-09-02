@@ -172,12 +172,43 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
     if let binaryMessenger {
       NativeFeedPlayerHostApiSetup.setUp(binaryMessenger: binaryMessenger, api: nil)
+      self.binaryMessenger = nil
     }
-    textureOutputs?.clear()
-    manager?.disposeAll()
-    videoViews.removeAll()
-    attachedControllerByViewId.removeAll()
-    renderViewPool.clear()
+    // Texture and player teardown touches UIKit and the texture registry;
+    // deinit can run on any thread, so hop to main. detachFromEngine is the
+    // primary teardown path and already ran this on the platform thread.
+    let manager = self.manager
+    let textureOutputs = self.textureOutputs
+    if Thread.isMainThread {
+      textureOutputs?.clear()
+      manager?.disposeAll()
+      videoViews.removeAll()
+      attachedControllerByViewId.removeAll()
+      renderViewPool.clear()
+    } else {
+      DispatchQueue.main.async {
+        textureOutputs?.clear()
+        manager?.disposeAll()
+      }
+    }
+  }
+
+  public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
+    if let observer = memoryWarningObserver {
+      NotificationCenter.default.removeObserver(observer)
+      memoryWarningObserver = nil
+    }
+    try? disposeAll()
+    stateEvents.detach()
+    positionEvents.detach()
+    metricsEvents.detach()
+    videoSizeEvents.detach()
+    lifecycleEvents.detach()
+    if let binaryMessenger {
+      NativeFeedPlayerHostApiSetup.setUp(binaryMessenger: binaryMessenger, api: nil)
+    }
+    binaryMessenger = nil
+    textureOutputs = nil
   }
 
   // MARK: - Host API
@@ -562,7 +593,8 @@ extension FeedSourceMessage {
       uri: uri,
       rank: Int(rank),
       kind: kind,
-      headers: headers
+      headers: headers,
+      cacheKey: cacheKey
     )
   }
 }

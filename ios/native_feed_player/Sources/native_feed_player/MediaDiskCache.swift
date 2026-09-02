@@ -8,10 +8,15 @@ import Foundation
 enum MediaCacheIdentity {
   static let schemaVersion = "native-feed-player-cache-v2"
 
-  static func make(uri: String, headers: [String: String]) -> String {
+  static func make(uri: String, headers: [String: String], cacheKey: String? = nil) -> String {
     var material = Data()
     append(schemaVersion, to: &material)
-    append(uri, to: &material)
+    // A caller-supplied cacheKey replaces the URI so signed or expiring URLs
+    // share one entry; headers stay in the digest either way.
+    let identity = cacheKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      ? cacheKey!
+      : uri
+    append(identity, to: &material)
     for (name, value) in canonicalHeaders(headers) {
       append(name, to: &material)
       append(value, to: &material)
@@ -73,10 +78,21 @@ final class MediaDiskCache {
 
   private let queue = DispatchQueue(label: "native_feed_player.cache", attributes: .concurrent)
   private let fileManager = FileManager.default
+  /// Guards the configuration so `isEnabled` never blocks on the cache queue
+  /// while a configure barrier is queued behind pending disk work.
+  private let stateLock = NSLock()
+  private var enabledState = false
+  private var maxBytesState: Int64 = 0
 
   private var entries: [String: Entry] = [:]
-  private var maxBytes: Int64 = 0
-  private var enabled = false
+  private var maxBytes: Int64 {
+    get { stateLock.withLock { maxBytesState } }
+    set { stateLock.withLock { maxBytesState = newValue } }
+  }
+  private var enabled: Bool {
+    get { stateLock.withLock { enabledState } }
+    set { stateLock.withLock { enabledState = newValue } }
+  }
   /// Pending LRU-stamp writes, coalesced onto one delayed barrier.
   private var indexWritePending = false
   private var indexWriteScheduled = false
@@ -92,21 +108,31 @@ final class MediaDiskCache {
 
   // MARK: - Configuration
 
+  /// Configures the cache without blocking the caller: the enabled/maxBytes
+  /// state flips immediately, while index loading and budget enforcement run
+  /// on the cache queue. Lookups serialise behind that barrier, so they never
+  /// observe a half-loaded index.
   func configure(enabled: Bool, maxBytes: Int64) {
-    queue.sync(flags: .barrier) {
-      self.enabled = enabled
-      self.maxBytes = maxBytes
-      guard enabled else {
-        return
-      }
-      try? fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
-      loadIndexLocked()
-      enforceBudgetLocked()
+    self.enabled = enabled
+    self.maxBytes = maxBytes
+    guard enabled else {
+      return
+    }
+    queue.async(flags: .barrier) {
+      try? self.fileManager.createDirectory(at: self.rootURL, withIntermediateDirectories: true)
+      self.loadIndexLocked()
+      self.enforceBudgetLocked()
     }
   }
 
+  /// Blocks until all queued cache work (including a pending configure) has
+  /// finished. Testing hook only.
+  func waitForPendingWorkForTesting() {
+    queue.sync(flags: .barrier) {}
+  }
+
   var isEnabled: Bool {
-    queue.sync { enabled }
+    stateLock.withLock { enabledState }
   }
 
   // MARK: - Lookup
@@ -133,8 +159,14 @@ final class MediaDiskCache {
         return nil
       }
       let url = fileURL(forKey: identity)
-      guard fileManager.fileExists(atPath: url.path) else {
-        entries.removeValue(forKey: identity)
+      // Verify the on-disk size still matches the index: a truncated file
+      // (crash mid-move, external eviction) must not be served with the
+      // recorded content length.
+      let sizeOnDisk = (try? fileManager.attributesOfItem(atPath: url.path))?[
+        .size
+      ] as? Int64
+      guard sizeOnDisk == entry.byteCount else {
+        removeEntryLocked(key: identity)
         saveIndexLocked()
         return nil
       }

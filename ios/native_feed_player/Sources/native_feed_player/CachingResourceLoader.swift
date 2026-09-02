@@ -7,6 +7,10 @@ import Foundation
 final class CachingResourceLoader: NSObject {
   static let scheme = "nfpcache"
 
+  /// Upper bound on bytes handed to a single `respond(with:)` call so open
+  /// ended requests never materialise a whole cached file in memory.
+  static let chunkSize = 512 * 1024
+
   private struct RequestContext {
     let headers: [String: String]
   }
@@ -47,6 +51,15 @@ final class CachingResourceLoader: NSObject {
     (200...299).contains(statusCode)
   }
 
+  /// A 206 without a client Range header is a partial body masquerading as a
+  /// full response; caching it would record a truncated file as complete.
+  static func isCacheableResponse(_ statusCode: Int, requestHadRangeHeader: Bool) -> Bool {
+    guard isSuccessfulHTTPStatus(statusCode) else {
+      return false
+    }
+    return statusCode != 206 || requestHadRangeHeader
+  }
+
   fileprivate final class Download: NSObject {
     let identity: String
     let handle: FileHandle
@@ -62,6 +75,9 @@ final class CachingResourceLoader: NSObject {
     /// Queue-confined read handle reused across pending-request slices; the
     /// write handle stays positioned at the end of the file.
     var readHandle: FileHandle?
+    /// Whether the upstream request carried a Range header; a 206 is only a
+    /// complete response when it does.
+    var requestHadRangeHeader = false
 
     init(identity: String, temporaryURL: URL, handle: FileHandle) {
       self.identity = identity
@@ -189,16 +205,17 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
       return false
     }
 
-    // Serve complete entries from disk.
-    if let cached = MediaDiskCache.shared.cachedFile(forIdentity: identity) {
-      serveFromFile(loadingRequest, cached: cached)
-      queue.async {
-        self.contextsByIdentity.removeValue(forKey: identity)
-      }
-      return true
-    }
-
+    // All disk IO and request completion happens on `queue`; the delegate
+    // queue returns immediately so AVFoundation is never blocked behind a
+    // cache read.
     queue.async {
+      // Serve complete entries from disk.
+      if let cached = MediaDiskCache.shared.cachedFile(forIdentity: identity) {
+        self.serveFromFile(loadingRequest, cached: cached)
+        self.contextsByIdentity.removeValue(forKey: identity)
+        return
+      }
+
       let download = self.downloadsByIdentity[identity]
         ?? self.startDownload(identity: identity, originalURL: originalURL)
       guard let download else {
@@ -250,10 +267,24 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
       let handle = try FileHandle(forReadingFrom: cached.url)
       defer { try? handle.closeCompat() }
       try handle.seekCompat(toOffset: UInt64(max(0, dataRequest.currentOffset)))
-      let wanted = dataRequest.requestedLength - Int(
-        dataRequest.currentOffset - dataRequest.requestedOffset
+      // Bound the response to one chunk: with byte-range access supported,
+      // AVFoundation issues follow-up requests for the remaining ranges
+      // instead of one loading request holding the whole file in memory.
+      let alreadyServed = Int64(dataRequest.currentOffset - dataRequest.requestedOffset)
+      let wanted = min(
+        Int64(dataRequest.requestedLength) - alreadyServed,
+        cached.byteCount - dataRequest.currentOffset,
+        Int64(CachingResourceLoader.chunkSize)
       )
-      let data = try handle.readCompat(upToCount: max(0, wanted)) ?? Data()
+      guard wanted > 0 else {
+        request.finishLoading()
+        return
+      }
+      let data = try handle.readCompat(upToCount: Int(wanted)) ?? Data()
+      if data.isEmpty {
+        request.finishLoading()
+        return
+      }
       dataRequest.respond(with: data)
       request.finishLoading()
     } catch {
@@ -304,9 +335,14 @@ extension CachingResourceLoader {
 
     let download = Download(identity: identity, temporaryURL: temporaryURL, handle: handle)
     var request = URLRequest(url: originalURL)
+    var hadRangeHeader = false
     for (field, value) in contextsByIdentity[identity]?.headers ?? [:] {
       request.setValue(value, forHTTPHeaderField: field)
+      if field.lowercased() == "range" {
+        hadRangeHeader = true
+      }
     }
+    download.requestHadRangeHeader = hadRangeHeader
     let task = session.dataTask(with: request)
     download.task = task
     downloadsByIdentity[identity] = download
@@ -357,7 +393,10 @@ extension CachingResourceLoader {
 
       let outstanding = Int64(dataRequest.requestedLength)
         - (offset - dataRequest.requestedOffset)
-      let length = Int(min(available, outstanding))
+      // Cap each response so a completed download is never served as one
+      // giant allocation; the request stays pending and is re-served from
+      // the new offset until it is satisfied.
+      let length = Int(min(Int64(CachingResourceLoader.chunkSize), available, outstanding))
       if length > 0, let data = readPrefix(download, offset: offset, length: length) {
         dataRequest.respond(with: data)
       }
@@ -439,7 +478,10 @@ extension CachingResourceLoader: URLSessionDataDelegate {
         return
       }
       if let http = response as? HTTPURLResponse,
-        !CachingResourceLoader.isSuccessfulHTTPStatus(http.statusCode)
+        !CachingResourceLoader.isCacheableResponse(
+          http.statusCode,
+          requestHadRangeHeader: download.requestHadRangeHeader
+        )
       {
         self.failAndClean(
           download,
