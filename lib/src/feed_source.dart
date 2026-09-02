@@ -21,6 +21,7 @@ class FeedSource {
     required this.uri,
     this.headers = const <String, String>{},
     this.kind = FeedMediaKind.auto,
+    this.cacheKey,
   });
 
   final String id;
@@ -31,12 +32,18 @@ class FeedSource {
   final Map<String, String> headers;
   final FeedMediaKind kind;
 
+  /// Optional stable cache identity. When set, it replaces [uri] in the cache
+  /// key so signed or expiring URLs (`?sig=`, `?expires=`) still share one
+  /// cache entry. Headers remain part of the identity either way.
+  final String? cacheKey;
+
   @override
   bool operator ==(Object other) =>
       other is FeedSource &&
       other.id == id &&
       other.uri == uri &&
       other.kind == kind &&
+      other.cacheKey == cacheKey &&
       mapEquals(other.headers, headers);
 
   @override
@@ -44,6 +51,7 @@ class FeedSource {
     id,
     uri,
     kind,
+    cacheKey,
     Object.hashAllUnordered(
       headers.entries.map(
         (MapEntry<String, String> entry) => Object.hash(entry.key, entry.value),
@@ -71,12 +79,21 @@ extension FeedSourceMessaging on FeedSource {
     if (uri.trim().isEmpty) {
       throw ArgumentError.value(uri, 'uri', 'Must not be empty.');
     }
+    final Uri? parsed = Uri.tryParse(uri);
+    if (parsed == null || parsed.scheme.isEmpty) {
+      throw ArgumentError.value(
+        uri,
+        'uri',
+        'Must be an absolute URI with a scheme.',
+      );
+    }
     return FeedSourceMessage(
       id: id,
       uri: uri,
       rank: rank,
       kind: kind.toMessage(),
       headers: headers,
+      cacheKey: cacheKey,
     );
   }
 }

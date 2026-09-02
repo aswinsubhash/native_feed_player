@@ -146,7 +146,12 @@ data class FeedSourceMessage (
   /** Position in the feed, used only to rank preload priority. */
   val rank: Long,
   val kind: FeedMediaKindMessage,
-  val headers: Map<String, String>
+  val headers: Map<String, String>,
+  /**
+   * Optional stable cache identity. When set, it replaces the URI in the
+   * cache key so signed or expiring URLs still share one cache entry.
+   */
+  val cacheKey: String? = null
 )
  {
   companion object {
@@ -156,7 +161,8 @@ data class FeedSourceMessage (
       val rank = pigeonVar_list[2] as Long
       val kind = pigeonVar_list[3] as FeedMediaKindMessage
       val headers = pigeonVar_list[4] as Map<String, String>
-      return FeedSourceMessage(id, uri, rank, kind, headers)
+      val cacheKey = pigeonVar_list[5] as String?
+      return FeedSourceMessage(id, uri, rank, kind, headers, cacheKey)
     }
   }
   fun toList(): List<Any?> {
@@ -166,6 +172,7 @@ data class FeedSourceMessage (
       rank,
       kind,
       headers,
+      cacheKey,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -215,7 +222,13 @@ data class CachePolicyMessage (
 data class AudioPolicyMessage (
   val muted: Boolean,
   val volume: Double,
-  val handleAudioFocus: Boolean
+  /** Whether audible playback requests platform audio focus. */
+  val handleAudioFocus: Boolean,
+  /**
+   * iOS only. When false the plugin never reconfigures AVAudioSession; the
+   * host app owns category, mode, and activation.
+   */
+  val manageAudioSession: Boolean
 )
  {
   companion object {
@@ -223,7 +236,8 @@ data class AudioPolicyMessage (
       val muted = pigeonVar_list[0] as Boolean
       val volume = pigeonVar_list[1] as Double
       val handleAudioFocus = pigeonVar_list[2] as Boolean
-      return AudioPolicyMessage(muted, volume, handleAudioFocus)
+      val manageAudioSession = pigeonVar_list[3] as Boolean
+      return AudioPolicyMessage(muted, volume, handleAudioFocus, manageAudioSession)
     }
   }
   fun toList(): List<Any?> {
@@ -231,6 +245,7 @@ data class AudioPolicyMessage (
       muted,
       volume,
       handleAudioFocus,
+      manageAudioSession,
     )
   }
   override fun equals(other: Any?): Boolean {

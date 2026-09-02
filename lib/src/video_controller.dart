@@ -97,6 +97,9 @@ class FeedController {
   /// Playback rate, clamped natively to 0.25..4.
   Future<void> setPlaybackSpeed(double speed) {
     _ensureAlive();
+    if (!speed.isFinite || speed <= 0.0) {
+      throw ArgumentError.value(speed, 'speed', 'Must be finite and positive.');
+    }
     return _platform.setPlaybackSpeed(controllerId, speed);
   }
 

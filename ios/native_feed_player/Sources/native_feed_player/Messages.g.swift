@@ -173,6 +173,9 @@ struct FeedSourceMessage: Hashable {
   var rank: Int64
   var kind: FeedMediaKindMessage
   var headers: [String: String]
+  /// Optional stable cache identity. When set, it replaces the URI in the
+  /// cache key so signed or expiring URLs still share one cache entry.
+  var cacheKey: String? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -182,13 +185,15 @@ struct FeedSourceMessage: Hashable {
     let rank = pigeonVar_list[2] as! Int64
     let kind = pigeonVar_list[3] as! FeedMediaKindMessage
     let headers = pigeonVar_list[4] as! [String: String]
+    let cacheKey: String? = nilOrValue(pigeonVar_list[5])
 
     return FeedSourceMessage(
       id: id,
       uri: uri,
       rank: rank,
       kind: kind,
-      headers: headers
+      headers: headers,
+      cacheKey: cacheKey
     )
   }
   func toList() -> [Any?] {
@@ -198,6 +203,7 @@ struct FeedSourceMessage: Hashable {
       rank,
       kind,
       headers,
+      cacheKey,
     ]
   }
   static func == (lhs: FeedSourceMessage, rhs: FeedSourceMessage) -> Bool {
@@ -240,7 +246,11 @@ struct CachePolicyMessage: Hashable {
 struct AudioPolicyMessage: Hashable {
   var muted: Bool
   var volume: Double
+  /// Whether audible playback requests platform audio focus.
   var handleAudioFocus: Bool
+  /// iOS only. When false the plugin never reconfigures AVAudioSession; the
+  /// host app owns category, mode, and activation.
+  var manageAudioSession: Bool
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -248,11 +258,13 @@ struct AudioPolicyMessage: Hashable {
     let muted = pigeonVar_list[0] as! Bool
     let volume = pigeonVar_list[1] as! Double
     let handleAudioFocus = pigeonVar_list[2] as! Bool
+    let manageAudioSession = pigeonVar_list[3] as! Bool
 
     return AudioPolicyMessage(
       muted: muted,
       volume: volume,
-      handleAudioFocus: handleAudioFocus
+      handleAudioFocus: handleAudioFocus,
+      manageAudioSession: manageAudioSession
     )
   }
   func toList() -> [Any?] {
@@ -260,6 +272,7 @@ struct AudioPolicyMessage: Hashable {
       muted,
       volume,
       handleAudioFocus,
+      manageAudioSession,
     ]
   }
   static func == (lhs: AudioPolicyMessage, rhs: AudioPolicyMessage) -> Bool {

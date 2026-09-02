@@ -44,7 +44,9 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
           .asBroadcastStream();
 
   late final Stream<PositionEvent> _positions =
-      (_positionEventStream ?? positionEvents()).asBroadcastStream();
+      (_positionEventStream ?? positionEvents())
+          .map(_cachePosition)
+          .asBroadcastStream();
 
   late final Stream<MetricsEvent> _metrics =
       (_metricsEventStream ?? metricsEvents())
@@ -71,20 +73,22 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       <int, PlaybackStatusUpdate>{};
   final Map<int, VideoMetrics> _latestMetrics = <int, VideoMetrics>{};
   final Map<int, VideoSize> _latestVideoSizes = <int, VideoSize>{};
+  final Map<int, PlaybackPosition> _latestPositions = <int, PlaybackPosition>{};
   StreamSubscription<PlaybackStateEvent>? _stateCacheSubscription;
   StreamSubscription<MetricsEvent>? _metricsCacheSubscription;
   StreamSubscription<VideoSizeEvent>? _videoSizeCacheSubscription;
+  StreamSubscription<PositionEvent>? _positionCacheSubscription;
+  StreamSubscription<ControllerLifecycleEvent>? _lifecycleCacheSubscription;
 
   @override
-  late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle.map((
-    ControllerLifecycleEvent event,
-  ) {
-    _forgetStreams(event.controllerId);
-    return ControllerReleaseEvent(
-      controllerId: event.controllerId,
-      reason: releaseReasonFromMessage(event.reason),
-    );
-  }).asBroadcastStream();
+  late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle
+      .map(
+        (ControllerLifecycleEvent event) => ControllerReleaseEvent(
+          controllerId: event.controllerId,
+          reason: releaseReasonFromMessage(event.reason),
+        ),
+      )
+      .asBroadcastStream();
 
   @override
   Future<void> initialize(FeedPlayerConfig config) async {
@@ -92,6 +96,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _latestStates.clear();
     _latestMetrics.clear();
     _latestVideoSizes.clear();
+    _latestPositions.clear();
     _stateCacheSubscription ??= _states.listen(
       (_) {},
       onError: _reportCacheStreamError,
@@ -102,6 +107,16 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     );
     _videoSizeCacheSubscription ??= _videoSizes.listen(
       (_) {},
+      onError: _reportCacheStreamError,
+    );
+    _positionCacheSubscription ??= _positions.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
+    // Keeps per-controller caches from outliving released controllers even
+    // when no one is listening to [releaseEvents].
+    _lifecycleCacheSubscription ??= _lifecycle.listen(
+      (ControllerLifecycleEvent event) => _forgetStreams(event.controllerId),
       onError: _reportCacheStreamError,
     );
     await hostApi.initialize(config.toMessage());
@@ -184,9 +199,23 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Stream<PlaybackPosition> positionStream(int controllerId) {
     return _positionStreams.putIfAbsent(controllerId, () {
-      return _positions
-          .where((PositionEvent event) => event.controllerId == controllerId)
-          .map(PlaybackPosition.fromMessage);
+      return Stream<PlaybackPosition>.multi((
+        MultiStreamController<PlaybackPosition> output,
+      ) {
+        final PlaybackPosition? latest = _latestPositions[controllerId];
+        if (latest != null) {
+          output.addSync(latest);
+        }
+        final StreamSubscription<PositionEvent> subscription = _positions
+            .where((PositionEvent event) => event.controllerId == controllerId)
+            .listen(
+              (PositionEvent event) =>
+                  output.add(PlaybackPosition.fromMessage(event)),
+              onError: output.addError,
+              onDone: output.close,
+            );
+        output.onCancel = subscription.cancel;
+      }, isBroadcast: true);
     });
   }
 
@@ -260,6 +289,9 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<void> setPlaybackSpeed(int controllerId, double speed) async {
+    if (!speed.isFinite || speed <= 0.0) {
+      throw ArgumentError.value(speed, 'speed', 'Must be finite and positive.');
+    }
     await hostApi.setPlaybackSpeed(
       ControllerDoubleRequest(controllerId: controllerId, value: speed),
     );
@@ -358,9 +390,13 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     await _stateCacheSubscription?.cancel();
     await _metricsCacheSubscription?.cancel();
     await _videoSizeCacheSubscription?.cancel();
+    await _positionCacheSubscription?.cancel();
+    await _lifecycleCacheSubscription?.cancel();
     _stateCacheSubscription = null;
     _metricsCacheSubscription = null;
     _videoSizeCacheSubscription = null;
+    _positionCacheSubscription = null;
+    _lifecycleCacheSubscription = null;
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();
@@ -368,6 +404,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _latestStates.clear();
     _latestMetrics.clear();
     _latestVideoSizes.clear();
+    _latestPositions.clear();
   }
 
   MetricsEvent _cacheMetrics(MetricsEvent event) {
@@ -391,6 +428,11 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     return event;
   }
 
+  PositionEvent _cachePosition(PositionEvent event) {
+    _latestPositions[event.controllerId] = PlaybackPosition.fromMessage(event);
+    return event;
+  }
+
   List<FeedSourceMessage> _toMessages(
     List<FeedSource> sources, {
     int startRank = 0,
@@ -409,6 +451,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _videoSizeStreams.remove(controllerId);
     _latestStates.remove(controllerId);
     _latestVideoSizes.remove(controllerId);
+    _latestPositions.remove(controllerId);
   }
 
   void _validateIds(List<String> sourceIds) {

@@ -117,12 +117,24 @@ void main() {
       expect(message.audio.muted, isFalse);
       expect(message.audio.volume, 0.25);
       expect(message.audio.handleAudioFocus, isTrue);
+      expect(message.audio.manageAudioSession, isTrue);
+    });
+
+    test('manageAudioSession=false reaches the wire format', () {
+      const FeedPlayerConfig config = FeedPlayerConfig(
+        audio: AudioPolicy(manageAudioSession: false),
+      );
+
+      expect(config.toMessage().audio.manageAudioSession, isFalse);
     });
   });
 
   group('FeedSource', () {
     test('ranks are assigned by caller order, not identity', () {
-      const FeedSource source = FeedSource(id: 'a', uri: 'a.mp4');
+      const FeedSource source = FeedSource(
+        id: 'a',
+        uri: 'https://example.test/a.mp4',
+      );
 
       expect(source.toMessage(7).rank, 7);
       expect(source.toMessage(0).id, 'a');
@@ -131,7 +143,7 @@ void main() {
     test('media kind and headers reach the wire format', () {
       const FeedSource source = FeedSource(
         id: 'a',
-        uri: 'a.m3u8',
+        uri: 'https://example.test/a.m3u8',
         kind: FeedMediaKind.hls,
         headers: <String, String>{'Authorization': 'Bearer t'},
       );
@@ -145,17 +157,17 @@ void main() {
     test('headers participate in equality and hashing', () {
       const FeedSource first = FeedSource(
         id: 'a',
-        uri: 'a.mp4',
+        uri: 'https://example.test/a.mp4',
         headers: <String, String>{'a': '1', 'b': '2'},
       );
       const FeedSource reordered = FeedSource(
         id: 'a',
-        uri: 'a.mp4',
+        uri: 'https://example.test/a.mp4',
         headers: <String, String>{'b': '2', 'a': '1'},
       );
       const FeedSource different = FeedSource(
         id: 'a',
-        uri: 'a.mp4',
+        uri: 'https://example.test/a.mp4',
         headers: <String, String>{'a': 'changed', 'b': '2'},
       );
 
@@ -186,6 +198,46 @@ void main() {
       expect(
         () => const FeedSource(id: 'a', uri: ' ').toMessage(0),
         throwsArgumentError,
+      );
+    });
+
+    test('wire conversion rejects URIs without a scheme', () {
+      expect(
+        () => const FeedSource(
+          id: 'a',
+          uri: 'example.test/video.mp4',
+        ).toMessage(0),
+        throwsArgumentError,
+      );
+      expect(
+        () => const FeedSource(id: 'a', uri: '/local/video.mp4').toMessage(0),
+        throwsArgumentError,
+      );
+    });
+
+    test('cacheKey reaches the wire format and participates in equality', () {
+      const FeedSource source = FeedSource(
+        id: 'a',
+        uri: 'https://cdn.example.test/video.mp4?sig=rotating',
+        cacheKey: 'episode-42',
+      );
+
+      final FeedSourceMessage message = source.toMessage(0);
+      expect(message.cacheKey, 'episode-42');
+      expect(message.uri, 'https://cdn.example.test/video.mp4?sig=rotating');
+
+      const FeedSource sameKeyDifferentUri = FeedSource(
+        id: 'a',
+        uri: 'https://cdn.example.test/video.mp4?sig=other',
+        cacheKey: 'episode-42',
+      );
+      expect(source, isNot(sameKeyDifferentUri));
+      expect(
+        const FeedSource(
+          id: 'a',
+          uri: 'https://x.test/v.mp4',
+        ).toMessage(0).cacheKey,
+        isNull,
       );
     });
   });

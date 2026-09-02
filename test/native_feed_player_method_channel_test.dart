@@ -156,8 +156,8 @@ void main() {
 
   test('setSources assigns sequential ranks', () async {
     await platform.setSources(<FeedSource>[
-      const FeedSource(id: 'a', uri: 'a.mp4'),
-      const FeedSource(id: 'b', uri: 'b.mp4'),
+      const FeedSource(id: 'a', uri: 'https://example.test/a.mp4'),
+      const FeedSource(id: 'b', uri: 'https://example.test/b.mp4'),
     ]);
 
     expect(
@@ -168,8 +168,8 @@ void main() {
 
   test('appendSources continues ranks from the offset', () async {
     await platform.appendSources(<FeedSource>[
-      const FeedSource(id: 'c', uri: 'c.mp4'),
-      const FeedSource(id: 'd', uri: 'd.mp4'),
+      const FeedSource(id: 'c', uri: 'https://example.test/c.mp4'),
+      const FeedSource(id: 'd', uri: 'https://example.test/d.mp4'),
     ], rankOffset: 5);
 
     expect(
@@ -184,7 +184,7 @@ void main() {
     await platform.setSources(<FeedSource>[
       const FeedSource(
         id: 'a',
-        uri: 'a.m3u8',
+        uri: 'https://example.test/a.m3u8',
         kind: FeedMediaKind.hls,
         headers: <String, String>{'Authorization': 'Bearer token'},
       ),
@@ -284,6 +284,51 @@ void main() {
     positions.add(PositionEvent(controllerId: 7, positionMs: 0, durationMs: 0));
 
     expect((await next).duration, isNull);
+  });
+
+  test(
+    'position stream replays the latest position for a late subscriber',
+    () async {
+      await platform.initialize(const FeedPlayerConfig());
+      positions.add(
+        PositionEvent(
+          controllerId: 7,
+          positionMs: 4200,
+          bufferedPositionMs: 9000,
+          durationMs: 30000,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final PlaybackPosition position = await platform
+          .positionStream(7)
+          .first
+          .timeout(const Duration(seconds: 1));
+
+      expect(position.position, const Duration(milliseconds: 4200));
+      expect(position.bufferedPosition, const Duration(milliseconds: 9000));
+      expect(position.duration, const Duration(seconds: 30));
+    },
+  );
+
+  test('setPlaybackSpeed rejects non-finite and non-positive speeds', () async {
+    await platform.initialize(const FeedPlayerConfig());
+    await platform.createController(
+      sourceId: 'a',
+      autoPlay: false,
+      looping: false,
+    );
+
+    await expectLater(
+      platform.setPlaybackSpeed(7, double.nan),
+      throwsArgumentError,
+    );
+    await expectLater(
+      platform.setPlaybackSpeed(7, double.infinity),
+      throwsArgumentError,
+    );
+    await expectLater(platform.setPlaybackSpeed(7, 0.0), throwsArgumentError);
+    await expectLater(platform.setPlaybackSpeed(7, -1.5), throwsArgumentError);
   });
 
   test('metrics stream maps the native payload', () async {

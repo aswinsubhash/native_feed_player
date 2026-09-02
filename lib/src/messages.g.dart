@@ -68,6 +68,7 @@ class FeedSourceMessage {
     required this.rank,
     required this.kind,
     required this.headers,
+    this.cacheKey,
   });
 
   /// Caller-owned stable identifier. Survives pagination and reordering.
@@ -82,8 +83,12 @@ class FeedSourceMessage {
 
   Map<String, String> headers;
 
+  /// Optional stable cache identity. When set, it replaces the URI in the
+  /// cache key so signed or expiring URLs still share one cache entry.
+  String? cacheKey;
+
   List<Object?> _toList() {
-    return <Object?>[id, uri, rank, kind, headers];
+    return <Object?>[id, uri, rank, kind, headers, cacheKey];
   }
 
   Object encode() {
@@ -98,6 +103,7 @@ class FeedSourceMessage {
       rank: result[2]! as int,
       kind: result[3]! as FeedMediaKindMessage,
       headers: (result[4] as Map<Object?, Object?>?)!.cast<String, String>(),
+      cacheKey: result[5] as String?,
     );
   }
 
@@ -163,16 +169,22 @@ class AudioPolicyMessage {
     required this.muted,
     required this.volume,
     required this.handleAudioFocus,
+    required this.manageAudioSession,
   });
 
   bool muted;
 
   double volume;
 
+  /// Whether audible playback requests platform audio focus.
   bool handleAudioFocus;
 
+  /// iOS only. When false the plugin never reconfigures AVAudioSession; the
+  /// host app owns category, mode, and activation.
+  bool manageAudioSession;
+
   List<Object?> _toList() {
-    return <Object?>[muted, volume, handleAudioFocus];
+    return <Object?>[muted, volume, handleAudioFocus, manageAudioSession];
   }
 
   Object encode() {
@@ -185,6 +197,7 @@ class AudioPolicyMessage {
       muted: result[0]! as bool,
       volume: result[1]! as double,
       handleAudioFocus: result[2]! as bool,
+      manageAudioSession: result[3]! as bool,
     );
   }
 

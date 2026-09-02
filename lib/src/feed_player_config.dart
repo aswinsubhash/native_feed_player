@@ -30,6 +30,7 @@ class AudioPolicy {
     this.muted = false,
     this.volume = 1.0,
     this.handleAudioFocus = true,
+    this.manageAudioSession = true,
   }) : assert(volume >= 0.0 && volume <= 1.0, 'volume must be within 0..1');
 
   /// Whether playback starts without audible output.
@@ -39,11 +40,22 @@ class AudioPolicy {
   /// Whether audible playback requests platform audio focus.
   final bool handleAudioFocus;
 
-  AudioPolicy copyWith({bool? muted, double? volume, bool? handleAudioFocus}) {
+  /// iOS only. When false the plugin never reconfigures `AVAudioSession`; the
+  /// host app owns category, mode, and activation. Android audio focus is
+  /// still controlled by [handleAudioFocus].
+  final bool manageAudioSession;
+
+  AudioPolicy copyWith({
+    bool? muted,
+    double? volume,
+    bool? handleAudioFocus,
+    bool? manageAudioSession,
+  }) {
     return AudioPolicy(
       muted: muted ?? this.muted,
       volume: volume ?? this.volume,
       handleAudioFocus: handleAudioFocus ?? this.handleAudioFocus,
+      manageAudioSession: manageAudioSession ?? this.manageAudioSession,
     );
   }
 
@@ -59,6 +71,7 @@ class AudioPolicy {
       muted: muted,
       volume: volume,
       handleAudioFocus: handleAudioFocus,
+      manageAudioSession: manageAudioSession,
     );
   }
 }
