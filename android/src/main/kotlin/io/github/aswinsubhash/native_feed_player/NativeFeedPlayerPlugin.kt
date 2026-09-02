@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
+import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -120,8 +121,13 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             },
             onPosition = { event -> positionEvents.emit(event) },
             onMetrics = { event -> metricsEvents.emit(event) },
-            onVideoSize = { event -> videoSizeEvents.emit(event) }
+            onVideoSize = { event -> videoSizeEvents.emit(event) },
+            cacheExecutor = cacheExecutor ?: Executor { it.run() }
         )
+
+        // Share one process-wide cache across engines; the last detach
+        // releases the SimpleCache directory lock.
+        MediaCache.retain()
 
         registerActivityCallbacks(flutterPluginBinding.applicationContext)
 
@@ -150,9 +156,11 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         stateEvents.detach()
         positionEvents.detach()
         metricsEvents.detach()
+        videoSizeEvents.detach()
         lifecycleEvents.detach()
         NativeFeedPlayerHostApi.setUp(binaryMessenger = binding.binaryMessenger, api = null)
         binaryMessenger = null
+        MediaCache.release()
     }
 
     override fun initialize(config: FeedPlayerConfigMessage) {
@@ -435,7 +443,13 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             override fun onActivityResumed(activity: Activity) = Unit
             override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-            override fun onActivityDestroyed(activity: Activity) = Unit
+
+            override fun onActivityDestroyed(activity: Activity) {
+                // Pooled TextureViews retain the activity context; dropping
+                // them prevents the destroyed activity from leaking across
+                // configuration changes.
+                textureViewPool.clear()
+            }
         }
         application.registerActivityLifecycleCallbacks(callbacks)
         activityCallbacks = callbacks
@@ -483,5 +497,6 @@ private fun FeedSourceMessage.toRegisteredSource(): RegisteredSource = Registere
     uri = uri,
     rank = rank.toInt(),
     kind = kind,
-    headers = headers
+    headers = headers,
+    cacheKey = cacheKey
 )

@@ -31,7 +31,12 @@ internal class ExoPlayerManagerLifecycleTest {
         positionUpdateIntervalMs = 200,
         renderMode = RenderModeMessage.PLATFORM_VIEW,
         cache = CachePolicyMessage(enabled = false, maxBytes = 0),
-        audio = AudioPolicyMessage(muted = true, volume = 1.0, handleAudioFocus = false)
+        audio = AudioPolicyMessage(
+            muted = true,
+            volume = 1.0,
+            handleAudioFocus = false,
+            manageAudioSession = true
+        )
     )
 
     private fun manager(

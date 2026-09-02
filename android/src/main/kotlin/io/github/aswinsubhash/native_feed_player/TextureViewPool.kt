@@ -22,6 +22,9 @@ internal class TextureViewPool(
 
     fun release(textureView: TextureView) {
         detachFromParent(textureView)
+        // ExoPlayer installs an internal surface listener while attached;
+        // clearing it keeps a recycled view from talking to a dead player.
+        textureView.surfaceTextureListener = null
         if (pooledViews.size < maxPoolSize) {
             pooledViews.addLast(textureView)
         }

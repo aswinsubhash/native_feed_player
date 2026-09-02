@@ -9,7 +9,9 @@ internal data class RegisteredSource(
     val uri: String,
     val rank: Int,
     val kind: FeedMediaKindMessage,
-    val headers: Map<String, String>
+    val headers: Map<String, String>,
+    /** Optional stable cache identity replacing [uri] in cache keys. */
+    val cacheKey: String? = null
 )
 
 /** Viewport travel direction. */

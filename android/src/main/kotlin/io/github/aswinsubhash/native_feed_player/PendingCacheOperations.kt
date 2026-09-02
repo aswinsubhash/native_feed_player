@@ -17,7 +17,9 @@ internal class PendingCacheOperations {
 
     fun attach() {
         synchronized(lock) {
-            check(pending.isEmpty())
+            // Detach already failed every pending reply; a re-attach must not
+            // crash on leftovers from a worker that raced the detach.
+            pending.clear()
             detached = false
         }
     }

@@ -47,6 +47,12 @@ internal class FeedPreloadManager(
     private val delegate: DefaultPreloadManager
     private val addedItemsByIdentity = mutableMapOf<String, MediaItem>()
 
+    /** Sources that failed to build; retried only after [reset]. */
+    private val failedIdentities = mutableSetOf<String>()
+
+    /** Notifies the owner when a source cannot be turned into a MediaSource. */
+    var onSourceFailed: ((RegisteredSource, Throwable) -> Unit)? = null
+
     private var currentRank: Int = 0
     private var maxPreloadDistance: Int = 2
 
@@ -91,10 +97,18 @@ internal class FeedPreloadManager(
 
         for (source in window) {
             val identity = source.cacheIdentity
-            if (addedItemsByIdentity.containsKey(identity)) {
+            if (addedItemsByIdentity.containsKey(identity) || identity in failedIdentities) {
                 continue
             }
-            val mediaSource = MediaCache.createMediaSource(source)
+            // A malformed or unsupported source must not crash the looper
+            // callback; skip it and let the caller surface the failure.
+            val mediaSource = try {
+                MediaCache.createMediaSource(source)
+            } catch (error: Throwable) {
+                failedIdentities.add(identity)
+                onSourceFailed?.invoke(source, error)
+                continue
+            }
             val item = mediaSource.mediaItem
             delegate.add(mediaSource, source.rank)
             addedItemsByIdentity[identity] = item
@@ -113,6 +127,7 @@ internal class FeedPreloadManager(
     fun reset() {
         delegate.reset()
         addedItemsByIdentity.clear()
+        failedIdentities.clear()
     }
 
     fun sourceCount(): Int = addedItemsByIdentity.size
