@@ -522,11 +522,12 @@ final class AVPlayerManager {
       // reports back the options it was given, so the comparison is stable
       // and skips redundant setCategory calls.
       if muted {
-        // Preserve external audio while muted.
-        if session.category != .ambient || session.mode != .moviePlayback
+        // Preserve external audio while muted. .moviePlayback is only valid
+        // with .playback, so the ambient path uses the default mode.
+        if session.category != .ambient || session.mode != .default
           || session.categoryOptions != [.mixWithOthers]
         {
-          try session.setCategory(.ambient, mode: .moviePlayback, options: [.mixWithOthers])
+          try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
         }
       } else if handleAudioFocus {
         if session.category != .playback || session.mode != .moviePlayback
@@ -882,7 +883,11 @@ final class AVPlayerManager {
 
     let asset: AVURLAsset
     if (shouldCache(source) || !source.headers.isEmpty) && !isHLS(source),
-      let interceptURL = resourceLoader.prepareURL(for: source.uri, headers: source.headers)
+      let interceptURL = resourceLoader.prepareURL(
+        for: source.uri,
+        headers: source.headers,
+        cacheKey: source.cacheKey
+      )
     {
       asset = AVURLAsset(url: interceptURL)
       asset.resourceLoader.setDelegate(resourceLoader, queue: resourceLoaderQueue)

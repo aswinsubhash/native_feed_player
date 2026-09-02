@@ -18,8 +18,12 @@ final class CachingResourceLoader: NSObject {
   /// Wraps a remote URL so AVFoundation routes it through this delegate.
   /// The opaque identity in the scheme prevents assets with different request
   /// credentials from sharing loader or disk state.
-  static func interceptURL(for uri: String, headers: [String: String] = [:]) -> URL? {
-    let identity = MediaCacheIdentity.make(uri: uri, headers: headers)
+  static func interceptURL(
+    for uri: String,
+    headers: [String: String] = [:],
+    cacheKey: String? = nil
+  ) -> URL? {
+    let identity = MediaCacheIdentity.make(uri: uri, headers: headers, cacheKey: cacheKey)
     guard var components = URLComponents(string: uri), let originalScheme = components.scheme
     else {
       return nil
@@ -126,8 +130,16 @@ final class CachingResourceLoader: NSObject {
 
   /// Registers the short-lived request context before AVFoundation can ask the
   /// resource loader for bytes.
-  func prepareURL(for uri: String, headers: [String: String]) -> URL? {
-    guard let intercepted = CachingResourceLoader.interceptURL(for: uri, headers: headers),
+  func prepareURL(
+    for uri: String,
+    headers: [String: String],
+    cacheKey: String? = nil
+  ) -> URL? {
+    guard let intercepted = CachingResourceLoader.interceptURL(
+      for: uri,
+      headers: headers,
+      cacheKey: cacheKey
+    ),
       let identity = CachingResourceLoader.identity(from: intercepted)
     else {
       return nil
@@ -286,6 +298,7 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
       // respond() accumulates until finishLoading(), so chunking bounds the
       // live allocation while still satisfying the full range — finishing
       // after a partial response would risk stalls for open-ended requests.
+      let openEnded = dataRequest.requestsAllDataToEndOfResource
       while !request.isCancelled {
         let alreadyServed = Int64(dataRequest.currentOffset - dataRequest.requestedOffset)
         let plan = CachingResourceLoader.chunkPlan(
@@ -300,9 +313,11 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
         guard let data = try handle.readCompat(upToCount: Int(plan)), !data.isEmpty else {
           break
         }
+        guard !request.isCancelled else {
+          break
+        }
         dataRequest.respond(with: data)
         let served = Int64(dataRequest.currentOffset - dataRequest.requestedOffset)
-        let openEnded = Int64(dataRequest.requestedLength) == Int64(Int.max)
         if served >= Int64(dataRequest.requestedLength)
           || (openEnded && dataRequest.currentOffset >= cached.byteCount)
         {

@@ -111,14 +111,14 @@ final class MediaDiskCache {
 
   // MARK: - Configuration
 
-  /// Configures the cache without blocking the caller. The load barrier is
-  /// enqueued *before* `enabled` flips so any lookup submitted after the
-  /// caller observes `isEnabled == true` is ordered behind a fully loaded
-  /// index.
+  /// Configures the cache without blocking the caller. `maxBytes` is only
+  /// read inside barriers, so it must be visible before the load barrier
+  /// runs; `enabled` flips last so any lookup submitted after the caller
+  /// observes `isEnabled == true` is ordered behind a fully loaded index.
   func configure(enabled: Bool, maxBytes: Int64) {
+    self.maxBytes = maxBytes
     guard enabled else {
       self.enabled = false
-      self.maxBytes = maxBytes
       return
     }
     queue.async(flags: .barrier) {
@@ -127,7 +127,6 @@ final class MediaDiskCache {
       self.enforceBudgetLocked()
     }
     self.enabled = true
-    self.maxBytes = maxBytes
   }
 
   /// Blocks until all queued cache work (including a pending configure) has

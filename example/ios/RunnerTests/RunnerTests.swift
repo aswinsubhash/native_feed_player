@@ -230,6 +230,24 @@ final class CachingResourceLoaderTests: XCTestCase {
     )
   }
 
+  func testInterceptedUrlIdentityHonoursCacheKey() {
+    let a = CachingResourceLoader.interceptURL(
+      for: "https://cdn.test/v.mp4?sig=one", headers: [:], cacheKey: "episode-42")
+    let b = CachingResourceLoader.interceptURL(
+      for: "https://cdn.test/v.mp4?sig=two", headers: [:], cacheKey: "episode-42")
+    let c = CachingResourceLoader.interceptURL(
+      for: "https://cdn.test/v.mp4?sig=one", headers: [:], cacheKey: "episode-43")
+
+    // The loader's identity must match RegisteredSource.cacheIdentity, which
+    // already honours cacheKey; same cacheKey shares one entry.
+    XCTAssertEqual(a?.scheme, b?.scheme)
+    XCTAssertNotEqual(a?.scheme, c?.scheme)
+    XCTAssertEqual(
+      CachingResourceLoader.identity(from: a!),
+      MediaCacheIdentity.make(uri: "https://cdn.test/v.mp4?sig=one", headers: [:], cacheKey: "episode-42")
+    )
+  }
+
   func testOnlySuccessfulHttpResponsesAreCacheable() {
     XCTAssertTrue(CachingResourceLoader.isSuccessfulHTTPStatus(200))
     XCTAssertTrue(CachingResourceLoader.isSuccessfulHTTPStatus(206))
@@ -366,19 +384,32 @@ final class MediaDiskCacheTests: XCTestCase {
     MediaDiskCache.shared.evictAll {
       MediaDiskCache.shared.configure(enabled: false, maxBytes: 0)
     }
+    // The next test's configure must not race this teardown on the cache queue.
+    MediaDiskCache.shared.waitForPendingWorkForTesting()
     super.tearDown()
   }
 
-  func testConfigureIsAsynchronousButConsistentAfterBarrier() {
-    MediaDiskCache.shared.configure(enabled: true, maxBytes: 1024 * 1024)
-
-    // isEnabled flips synchronously without blocking on the cache queue.
-    XCTAssertTrue(MediaDiskCache.shared.isEnabled)
-
+  func testConfigureAppliesTheNewBudgetToTheLoadBarrier() throws {
+    // Seed a 4 KB entry under a generous budget.
+    MediaDiskCache.shared.configure(enabled: true, maxBytes: 64 * 1024 * 1024)
     MediaDiskCache.shared.waitForPendingWorkForTesting()
+    let identity = MediaCacheIdentity.make(
+      uri: "https://example.test/budget-\(UUID().uuidString).mp4",
+      headers: [:]
+    )
+    let temporary = FileManager.default.temporaryDirectory
+      .appendingPathComponent("nfp-test-\(UUID().uuidString)")
+    try Data(repeating: 0xAB, count: 4096).write(to: temporary)
+    MediaDiskCache.shared.store(temporaryFile: temporary, identity: identity, contentType: "video/mp4")
+    MediaDiskCache.shared.waitForPendingWorkForTesting()
+    XCTAssertNotNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
 
-    // After the barrier, index loading and budget enforcement have run.
+    // Reconfigure with a 1 KB budget: the load barrier must enforce the NEW
+    // budget, not the previous one, and evict the 4 KB entry.
+    MediaDiskCache.shared.configure(enabled: true, maxBytes: 1024)
     XCTAssertTrue(MediaDiskCache.shared.isEnabled)
+    MediaDiskCache.shared.waitForPendingWorkForTesting()
+    XCTAssertNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
   }
 
   func testTruncatedCacheFileIsEvictedInsteadOfServed() throws {
@@ -605,6 +636,30 @@ final class AVPlayerManagerSessionTests: XCTestCase {
 
     XCTAssertEqual(session.category, .playback)
     XCTAssertFalse(session.categoryOptions.contains(.duckOthers))
+  }
+
+  func testMutedPolicyConfiguresAnAmbientSessionInsteadOfThrowing() throws {
+    let session = AVAudioSession.sharedInstance()
+    try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+    defer {
+      try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+    }
+
+    let manager = AVPlayerManager(
+      onState: { _, _, _ in },
+      onReleased: { _, _ in },
+      onPosition: { _ in },
+      onMetrics: { _ in },
+      onVideoSize: { _ in }
+    )
+
+    manager.initialize(config: config(manageAudioSession: true, muted: true))
+
+    // .moviePlayback + .ambient made setCategory throw, so a muted feed never
+    // actually reconfigured the session. The ambient path now succeeds.
+    XCTAssertEqual(session.category, .ambient)
+    XCTAssertEqual(session.mode, .default)
+    XCTAssertTrue(session.categoryOptions.contains(.mixWithOthers))
   }
 
   func testStaleRenderViewDetachKeepsReplacementAttached() throws {
