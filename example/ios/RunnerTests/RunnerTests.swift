@@ -869,15 +869,10 @@ final class AVPlayerManagerSessionTests: XCTestCase {
   }
 
   func testPlaybackFailureRemainsTerminalAndEmitsOnce() throws {
-    let failed = expectation(description: "playback failed")
-    failed.assertForOverFulfill = true
     var states: [PlaybackStatusMessage] = []
     let manager = AVPlayerManager(
       onState: { _, status, _ in
         states.append(status)
-        if status == .error {
-          failed.fulfill()
-        }
       },
       onReleased: { _, _ in },
       onPosition: { _ in },
@@ -885,13 +880,24 @@ final class AVPlayerManagerSessionTests: XCTestCase {
       onVideoSize: { _ in }
     )
     manager.initialize(config: testConfig())
-    try manager.setSources([
-      RegisteredSource(id: "broken", uri: "https://127.0.0.1:1/broken.mp4", rank: 0, kind: .auto, headers: [:])
-    ])
+    let source = RegisteredSource(
+      id: "broken",
+      uri: "https://example.test/broken.mp4",
+      rank: 0,
+      kind: .auto,
+      headers: [:]
+    )
+    try manager.setSources([source])
+    try manager.createController(controllerId: 22, sourceId: source.id, autoPlay: false, looping: false)
 
-    try manager.createController(controllerId: 22, sourceId: "broken", autoPlay: true, looping: false)
-    wait(for: [failed], timeout: 2)
-    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    manager.handleResourceFailure(
+      identity: source.cacheIdentity,
+      error: URLError(.cannotConnectToHost)
+    )
+    manager.handleResourceFailure(
+      identity: source.cacheIdentity,
+      error: URLError(.cannotConnectToHost)
+    )
 
     XCTAssertEqual(states.last, .error, "terminal error was overwritten: \(states)")
     XCTAssertEqual(states.filter { $0 == .error }.count, 1)

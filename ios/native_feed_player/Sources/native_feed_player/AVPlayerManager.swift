@@ -671,7 +671,7 @@ final class AVPlayerManager {
     markFirstFrame(controllerId)
   }
 
-  private func handleResourceFailure(identity: String, error: Error) {
+  func handleResourceFailure(identity: String, error: Error) {
     assertMainQueue()
     for managed in controllers.values where managed.requestIdentity == identity {
       reportPlaybackFailure(
