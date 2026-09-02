@@ -886,7 +886,7 @@ final class AVPlayerManagerSessionTests: XCTestCase {
     )
     manager.initialize(config: testConfig())
     try manager.setSources([
-      RegisteredSource(id: "broken", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:])
+      RegisteredSource(id: "broken", uri: "https://127.0.0.1:1/broken.mp4", rank: 0, kind: .auto, headers: [:])
     ])
 
     try manager.createController(controllerId: 22, sourceId: "broken", autoPlay: true, looping: false)
