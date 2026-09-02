@@ -218,6 +218,7 @@ jobs:
           profile: pixel_6
           script: |
             cd example
+            flutter pub get
             flutter test --no-pub integration_test/plugin_integration_test.dart -d "$(adb get-serialno)"
 
   ios-integration:
@@ -259,7 +260,7 @@ jobs:
 
       - name: Run integration tests
         working-directory: example
-        run: flutter test --no-pub integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
+        run: flutter pub get && flutter test --no-pub integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
 
   publish-dry-run:
     name: Publish dry run
