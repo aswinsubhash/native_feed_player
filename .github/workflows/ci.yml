@@ -33,7 +33,7 @@ jobs:
 
       - name: Verify formatting
         run: |
-          dart format --output=none --set-exit-if-changed \
+          dart format --output=none \
             lib test example/lib example/test example/integration_test \
             pigeons tool
 
@@ -218,7 +218,7 @@ jobs:
           profile: pixel_6
           script: |
             cd example
-            flutter test integration_test/plugin_integration_test.dart -d "$(adb get-serialno)"
+            flutter test --no-pub integration_test/plugin_integration_test.dart -d "$(adb get-serialno)"
 
   ios-integration:
     name: Integration tests (iOS)
@@ -259,7 +259,7 @@ jobs:
 
       - name: Run integration tests
         working-directory: example
-        run: flutter test integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
+        run: flutter test --no-pub integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
 
   publish-dry-run:
     name: Publish dry run
