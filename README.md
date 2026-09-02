@@ -127,6 +127,7 @@ await player.initialize(
 | `cache.maxBytes` | `256 MB` | LRU. Conservative so it stays safe on low-storage devices. |
 | `audio.muted` | `false` | Set to `true` for feeds that should start silently. |
 | `audio.handleAudioFocus` | `true` | Requests appropriate platform audio focus while playback is audible. |
+| `audio.manageAudioSession` | `true` | iOS only. When `false`, the plugin never reconfigures `AVAudioSession`; the host app owns category, mode, and activation. |
 
 Invalid tuning is rejected with `ArgumentError` in debug and release builds.
 Call `setVisibleSource` only with a registered source id, on scroll settle (or
@@ -139,6 +140,19 @@ Cached bytes are reused across sessions, so a second pass over a feed avoids the
 network. Cache entries are partitioned by a SHA-256 identity derived from the URI
 and canonical request headers. Raw authorization headers are never stored in
 cache keys or metadata; rotating a token intentionally creates a new partition.
+
+Sources whose URIs carry volatile query parameters (signed or expiring URLs) can
+opt out of that partitioning with `FeedSource.cacheKey`: when set, it replaces
+the URI in the identity so every rotation of the signature shares one cache
+entry. Headers remain part of the identity either way.
+
+```dart
+FeedSource(
+  id: 'clip-1',
+  uri: 'https://cdn.example.com/one.mp4?sig=rotating-token',
+  cacheKey: 'clip-1',
+)
+```
 
 ```dart
 await player.cacheUsageBytes();
