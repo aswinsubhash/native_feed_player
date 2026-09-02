@@ -292,28 +292,12 @@ class _MyAppState extends State<MyApp> {
     unawaited(_positionSub?.cancel());
     unawaited(_metricsSub?.cancel());
     _pageController.dispose();
-    final Map<String, FeedController> controllers = Map.of(_controllers);
     _controllers.clear();
     final FeedPlayer player = _player;
     // State.dispose cannot await; run the native teardown to completion and
     // report failures instead of dropping them on an orphaned future.
+    // FeedPlayer.dispose releases every live controller and the platform.
     unawaited(() async {
-      for (final FeedController controller in controllers.values) {
-        try {
-          await controller.dispose();
-        } on ControllerReleasedError {
-          // Already released by the native scheduler.
-        } catch (error, stackTrace) {
-          FlutterError.reportError(
-            FlutterErrorDetails(
-              exception: error,
-              stack: stackTrace,
-              library: 'native_feed_player_example',
-              context: ErrorDescription('while disposing a feed controller'),
-            ),
-          );
-        }
-      }
       try {
         await player.dispose();
       } catch (error, stackTrace) {

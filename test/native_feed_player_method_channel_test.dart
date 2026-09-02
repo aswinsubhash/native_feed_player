@@ -100,11 +100,15 @@ void main() {
   late StreamController<VideoSizeEvent> videoSizes;
   late StreamController<ControllerLifecycleEvent> lifecycle;
   late MethodChannelFeedPlayer platform;
+  int positionListenCount = 0;
 
   setUp(() {
+    positionListenCount = 0;
     hostApi = FakeHostApi();
     states = StreamController<PlaybackStateEvent>.broadcast();
-    positions = StreamController<PositionEvent>.broadcast();
+    positions = StreamController<PositionEvent>.broadcast(
+      onListen: () => positionListenCount += 1,
+    );
     metrics = StreamController<MetricsEvent>.broadcast();
     videoSizes = StreamController<VideoSizeEvent>.broadcast();
     lifecycle = StreamController<ControllerLifecycleEvent>.broadcast();
@@ -290,6 +294,9 @@ void main() {
     'position stream replays the latest position for a late subscriber',
     () async {
       await platform.initialize(const FeedPlayerConfig());
+      // Arm the lazy position cache before events flow.
+      platform.positionStream(7).listen((_) {});
+      await Future<void>.delayed(Duration.zero);
       positions.add(
         PositionEvent(
           controllerId: 7,
@@ -330,6 +337,70 @@ void main() {
     await expectLater(platform.setPlaybackSpeed(7, 0.0), throwsArgumentError);
     await expectLater(platform.setPlaybackSpeed(7, -1.5), throwsArgumentError);
   });
+
+  test(
+    'position channel is subscribed lazily on first positionStream',
+    () async {
+      expect(positionListenCount, 0);
+
+      await platform.initialize(const FeedPlayerConfig());
+
+      expect(
+        positionListenCount,
+        0,
+        reason: 'initialize must not subscribe the position channel',
+      );
+
+      platform.positionStream(7).listen((_) {});
+      await Future<void>.delayed(Duration.zero);
+
+      expect(positionListenCount, 1);
+    },
+  );
+
+  test(
+    'release events forget caches before downstream listeners run',
+    () async {
+      await platform.initialize(const FeedPlayerConfig());
+
+      // Accessing releaseEvents registers the cache-forgetting listener first,
+      // mirroring FeedPlayer, which subscribes in its constructor.
+      Object? replayedAfterRelease;
+      platform.releaseEvents.listen((ControllerReleaseEvent event) async {
+        try {
+          await platform
+              .positionStream(event.controllerId)
+              .first
+              .timeout(const Duration(milliseconds: 50));
+          replayedAfterRelease = true;
+        } on TimeoutException {
+          replayedAfterRelease = false;
+        }
+      });
+
+      positions.add(
+        PositionEvent(controllerId: 7, positionMs: 4200, durationMs: 30000),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      lifecycle.add(
+        ControllerLifecycleEvent(
+          controllerId: 7,
+          reason: ReleaseReasonMessage.disposed,
+        ),
+      );
+      // The listener's replay probe waits 50 ms of real time before concluding.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      expect(
+        replayedAfterRelease,
+        isFalse,
+        reason:
+            'the cached position must be forgotten before the release '
+            'event reaches downstream listeners',
+      );
+    },
+  );
 
   test('metrics stream maps the native payload', () async {
     final Future<VideoMetrics> next = platform.metricsStream(7).first;

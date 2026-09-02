@@ -35,6 +35,10 @@ class FeedSource {
   /// Optional stable cache identity. When set, it replaces [uri] in the cache
   /// key so signed or expiring URLs (`?sig=`, `?expires=`) still share one
   /// cache entry. Headers remain part of the identity either way.
+  ///
+  /// Changing [cacheKey] changes the source's cache identity, so [setSources]
+  /// releases and re-creates any live controller for it — the same treatment
+  /// as a [uri] change.
   final String? cacheKey;
 
   @override
@@ -67,7 +71,8 @@ class FeedSource {
         ? uri
         : '${uri.substring(0, queryStart)}'
               '${fragmentStart == -1 ? '' : uri.substring(fragmentStart)}';
-    return 'FeedSource(id: $id, uri: $safeUri, kind: ${kind.name})';
+    return 'FeedSource(id: $id, uri: $safeUri, kind: ${kind.name}'
+        '${cacheKey == null ? '' : ', cacheKey: $cacheKey'})';
   }
 }
 

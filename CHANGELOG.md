@@ -11,6 +11,7 @@
 - Move Android `SimpleCache` construction and iOS cache index loading off the platform main thread.
 - Skip unplayable Android preload sources instead of crashing the main looper callback.
 - Bound iOS resource-loader responses to fixed chunks so open-ended requests cannot read a whole cached file into memory.
+- Serve iOS cached files to completion in bounded chunks on the same loading request.
 - Reject iOS 206 responses that lack a client Range header instead of caching partial bodies as complete files.
 - Verify iOS cached file sizes against the index and evict truncated entries.
 - Reference-count the Android media cache across Flutter engines and release it on engine detach.

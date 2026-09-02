@@ -80,15 +80,30 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   StreamSubscription<PositionEvent>? _positionCacheSubscription;
   StreamSubscription<ControllerLifecycleEvent>? _lifecycleCacheSubscription;
 
+  /// Subscribes the per-controller cache cleaner to [_lifecycle]. Called from
+  /// the [releaseEvents] initializer so it is always the *first* listener on
+  /// the broadcast stream — caches must be forgotten before any downstream
+  /// release handler runs — and from [initialize] as a fallback for callers
+  /// that never listen to [releaseEvents].
+  void _ensureLifecycleCache() {
+    _lifecycleCacheSubscription ??= _lifecycle.listen(
+      (ControllerLifecycleEvent event) => _forgetStreams(event.controllerId),
+      onError: _reportCacheStreamError,
+    );
+  }
+
   @override
-  late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle
-      .map(
-        (ControllerLifecycleEvent event) => ControllerReleaseEvent(
-          controllerId: event.controllerId,
-          reason: releaseReasonFromMessage(event.reason),
-        ),
-      )
-      .asBroadcastStream();
+  late final Stream<ControllerReleaseEvent> releaseEvents = () {
+    _ensureLifecycleCache();
+    return _lifecycle
+        .map(
+          (ControllerLifecycleEvent event) => ControllerReleaseEvent(
+            controllerId: event.controllerId,
+            reason: releaseReasonFromMessage(event.reason),
+          ),
+        )
+        .asBroadcastStream();
+  }();
 
   @override
   Future<void> initialize(FeedPlayerConfig config) async {
@@ -109,16 +124,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       (_) {},
       onError: _reportCacheStreamError,
     );
-    _positionCacheSubscription ??= _positions.listen(
-      (_) {},
-      onError: _reportCacheStreamError,
-    );
-    // Keeps per-controller caches from outliving released controllers even
-    // when no one is listening to [releaseEvents].
-    _lifecycleCacheSubscription ??= _lifecycle.listen(
-      (ControllerLifecycleEvent event) => _forgetStreams(event.controllerId),
-      onError: _reportCacheStreamError,
-    );
+    _ensureLifecycleCache();
     await hostApi.initialize(config.toMessage());
   }
 
@@ -198,6 +204,14 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Stream<PlaybackPosition> positionStream(int controllerId) {
+    // The position channel is subscribed lazily: native only emits for
+    // controllers that render or play, so subscribing on first use keeps the
+    // channel silent until a UI actually wants positions. The latest value
+    // is cached from then on, so every later subscriber replays it.
+    _positionCacheSubscription ??= _positions.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
     return _positionStreams.putIfAbsent(controllerId, () {
       return Stream<PlaybackPosition>.multi((
         MultiStreamController<PlaybackPosition> output,

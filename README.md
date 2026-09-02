@@ -144,7 +144,9 @@ cache keys or metadata; rotating a token intentionally creates a new partition.
 Sources whose URIs carry volatile query parameters (signed or expiring URLs) can
 opt out of that partitioning with `FeedSource.cacheKey`: when set, it replaces
 the URI in the identity so every rotation of the signature shares one cache
-entry. Headers remain part of the identity either way.
+entry. Headers remain part of the identity either way. Changing `cacheKey`
+changes the source's identity, so `setSources` releases and re-creates any live
+controller for it — the same treatment as a `uri` change.
 
 ```dart
 FeedSource(

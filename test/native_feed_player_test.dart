@@ -330,6 +330,27 @@ void main() {
       expect(platform.volumeCalls, isEmpty);
     });
 
+    test(
+      'invalid playback speed is rejected before it reaches the platform',
+      () async {
+        await player.setSources(<FeedSource>[_source('a')]);
+        final FeedController controller = await player.controllerFor('a');
+
+        expect(() => controller.setPlaybackSpeed(0), throwsArgumentError);
+        expect(() => controller.setPlaybackSpeed(-1.5), throwsArgumentError);
+        expect(
+          () => controller.setPlaybackSpeed(double.nan),
+          throwsArgumentError,
+        );
+        expect(
+          () => controller.setPlaybackSpeed(double.infinity),
+          throwsArgumentError,
+        );
+
+        expect(platform.speedCalls, isEmpty);
+      },
+    );
+
     test('setMuted updates the retained audio policy', () async {
       expect(player.config.audio.muted, isFalse);
 

@@ -226,12 +226,18 @@ void main() {
       expect(message.cacheKey, 'episode-42');
       expect(message.uri, 'https://cdn.example.test/video.mp4?sig=rotating');
 
-      const FeedSource sameKeyDifferentUri = FeedSource(
+      // cacheKey participates in equality on its own: identical everything
+      // else, different cacheKey.
+      const FeedSource withKey = FeedSource(
         id: 'a',
-        uri: 'https://cdn.example.test/video.mp4?sig=other',
+        uri: 'https://x.test/v.mp4',
         cacheKey: 'episode-42',
       );
-      expect(source, isNot(sameKeyDifferentUri));
+      const FeedSource withoutKey = FeedSource(
+        id: 'a',
+        uri: 'https://x.test/v.mp4',
+      );
+      expect(withKey, isNot(withoutKey));
       expect(
         const FeedSource(
           id: 'a',

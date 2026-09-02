@@ -154,8 +154,12 @@ class RecordingFeedPlayerPlatform
   @override
   Future<void> setMuted(int controllerId, bool muted) async {}
 
+  final List<(int, double)> playbackSpeedCalls = <(int, double)>[];
+
   @override
-  Future<void> setPlaybackSpeed(int controllerId, double speed) async {}
+  Future<void> setPlaybackSpeed(int controllerId, double speed) async {
+    playbackSpeedCalls.add((controllerId, speed));
+  }
 
   @override
   Future<void> setLooping(int controllerId, bool looping) async {}
