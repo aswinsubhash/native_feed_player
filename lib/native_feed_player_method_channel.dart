@@ -80,11 +80,11 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   StreamSubscription<PositionEvent>? _positionCacheSubscription;
   StreamSubscription<ControllerLifecycleEvent>? _lifecycleCacheSubscription;
 
-  /// Subscribes the per-controller cache cleaner to [_lifecycle]. Called from
-  /// the [releaseEvents] initializer so it is always the *first* listener on
-  /// the broadcast stream — caches must be forgotten before any downstream
-  /// release handler runs — and from [initialize] as a fallback for callers
-  /// that never listen to [releaseEvents].
+  /// Fallback subscription that forgets per-controller caches on release for
+  /// callers that never listen to [releaseEvents]. When [releaseEvents] is
+  /// listened, the forget happens inside its mapper instead, which does not
+  /// depend on broadcast subscription order — the platform is a singleton
+  /// that outlives any one FeedPlayer, so ordering cannot be relied upon.
   void _ensureLifecycleCache() {
     _lifecycleCacheSubscription ??= _lifecycle.listen(
       (ControllerLifecycleEvent event) => _forgetStreams(event.controllerId),
@@ -93,17 +93,18 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   }
 
   @override
-  late final Stream<ControllerReleaseEvent> releaseEvents = () {
-    _ensureLifecycleCache();
-    return _lifecycle
-        .map(
-          (ControllerLifecycleEvent event) => ControllerReleaseEvent(
-            controllerId: event.controllerId,
-            reason: releaseReasonFromMessage(event.reason),
-          ),
-        )
-        .asBroadcastStream();
-  }();
+  late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle.map((
+    ControllerLifecycleEvent event,
+  ) {
+    // Forget before emitting so any listener re-entering the
+    // per-controller streams sees a clean cache. _forgetStreams is
+    // idempotent, so the fallback subscription running too is harmless.
+    _forgetStreams(event.controllerId);
+    return ControllerReleaseEvent(
+      controllerId: event.controllerId,
+      reason: releaseReasonFromMessage(event.reason),
+    );
+  }).asBroadcastStream();
 
   @override
   Future<void> initialize(FeedPlayerConfig config) async {
@@ -405,12 +406,13 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     await _metricsCacheSubscription?.cancel();
     await _videoSizeCacheSubscription?.cancel();
     await _positionCacheSubscription?.cancel();
-    await _lifecycleCacheSubscription?.cancel();
+    // The lifecycle fallback stays subscribed: this platform is a singleton
+    // that outlives any one FeedPlayer, and releaseEvents never re-runs its
+    // initializer, so a later FeedPlayer still needs the fallback alive.
     _stateCacheSubscription = null;
     _metricsCacheSubscription = null;
     _videoSizeCacheSubscription = null;
     _positionCacheSubscription = null;
-    _lifecycleCacheSubscription = null;
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();

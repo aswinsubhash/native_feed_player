@@ -361,10 +361,8 @@ void main() {
   test(
     'release events forget caches before downstream listeners run',
     () async {
-      await platform.initialize(const FeedPlayerConfig());
-
-      // Accessing releaseEvents registers the cache-forgetting listener first,
-      // mirroring FeedPlayer, which subscribes in its constructor.
+      // Mirrors FeedPlayer, which subscribes to releaseEvents in its
+      // constructor — BEFORE calling initialize().
       Object? replayedAfterRelease;
       platform.releaseEvents.listen((ControllerReleaseEvent event) async {
         try {
@@ -377,6 +375,8 @@ void main() {
           replayedAfterRelease = false;
         }
       });
+
+      await platform.initialize(const FeedPlayerConfig());
 
       positions.add(
         PositionEvent(controllerId: 7, positionMs: 4200, durationMs: 30000),
@@ -398,6 +398,52 @@ void main() {
         reason:
             'the cached position must be forgotten before the release '
             'event reaches downstream listeners',
+      );
+    },
+  );
+
+  test(
+    'cache eviction survives dispose and a second consumer of releaseEvents',
+    () async {
+      platform.releaseEvents.listen((_) {});
+      await platform.initialize(const FeedPlayerConfig());
+      await platform.dispose();
+
+      // A second FeedPlayer on the same singleton platform.
+      Object? replayed;
+      platform.releaseEvents.listen((ControllerReleaseEvent event) async {
+        try {
+          await platform
+              .positionStream(event.controllerId)
+              .first
+              .timeout(const Duration(milliseconds: 50));
+          replayed = true;
+        } on TimeoutException {
+          replayed = false;
+        }
+      });
+      await platform.initialize(const FeedPlayerConfig());
+      platform.positionStream(7).listen((_) {});
+      await Future<void>.delayed(Duration.zero);
+      positions.add(
+        PositionEvent(controllerId: 7, positionMs: 1, durationMs: 10),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      lifecycle.add(
+        ControllerLifecycleEvent(
+          controllerId: 7,
+          reason: ReleaseReasonMessage.disposed,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      expect(
+        replayed,
+        isFalse,
+        reason:
+            'releaseEvents is late final and never re-runs, so eviction must '
+            'not depend on subscription order after a dispose cycle',
       );
     },
   );
