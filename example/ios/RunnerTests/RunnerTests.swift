@@ -288,11 +288,84 @@ final class CachingResourceLoaderTests: XCTestCase {
     XCTAssertGreaterThan(CachingResourceLoader.chunkSize, 0)
     XCTAssertLessThanOrEqual(CachingResourceLoader.chunkSize, 1024 * 1024)
   }
+
+  func testChunkPlanBoundedRequests() {
+    let chunk = Int64(CachingResourceLoader.chunkSize)
+    // A 3 MB file, request for bytes 0..<2 MB: first chunk, then remainder.
+    XCTAssertEqual(
+      CachingResourceLoader.chunkPlan(
+        requestedLength: 2_000_000, alreadyServed: 0, currentOffset: 0, byteCount: 3_000_000
+      ),
+      chunk
+    )
+    XCTAssertEqual(
+      CachingResourceLoader.chunkPlan(
+        requestedLength: 2_000_000,
+        alreadyServed: chunk,
+        currentOffset: chunk,
+        byteCount: 3_000_000
+      ),
+      min(2_000_000 - chunk, chunk)
+    )
+    // Fully served.
+    XCTAssertEqual(
+      CachingResourceLoader.chunkPlan(
+        requestedLength: 2_000_000,
+        alreadyServed: 2_000_000,
+        currentOffset: 2_000_000,
+        byteCount: 3_000_000
+      ),
+      0
+    )
+  }
+
+  func testChunkPlanOpenEndedAndEdgeCases() {
+    let chunk = Int64(CachingResourceLoader.chunkSize)
+    // Open-ended request (requestedLength == Int.max) against a 3 MB file.
+    XCTAssertEqual(
+      CachingResourceLoader.chunkPlan(
+        requestedLength: Int64(Int.max),
+        alreadyServed: 0,
+        currentOffset: 0,
+        byteCount: 3_000_000
+      ),
+      chunk
+    )
+    // Near the end of the file: clamp to what remains.
+    XCTAssertEqual(
+      CachingResourceLoader.chunkPlan(
+        requestedLength: Int64(Int.max),
+        alreadyServed: 2_999_000,
+        currentOffset: 2_999_000,
+        byteCount: 3_000_000
+      ),
+      1_000
+    )
+    // Past EOF or fully consumed: nothing to serve.
+    XCTAssertEqual(
+      CachingResourceLoader.chunkPlan(
+        requestedLength: Int64(Int.max),
+        alreadyServed: 3_000_000,
+        currentOffset: 3_000_000,
+        byteCount: 3_000_000
+      ),
+      0
+    )
+    // Tiny file smaller than one chunk.
+    XCTAssertEqual(
+      CachingResourceLoader.chunkPlan(
+        requestedLength: 500, alreadyServed: 0, currentOffset: 0, byteCount: 100
+      ),
+      100
+    )
+  }
 }
 
 final class MediaDiskCacheTests: XCTestCase {
   override func tearDown() {
-    MediaDiskCache.shared.configure(enabled: false, maxBytes: 0)
+    MediaDiskCache.shared.evictAll {
+      MediaDiskCache.shared.configure(enabled: false, maxBytes: 0)
+    }
     super.tearDown()
   }
 
@@ -312,7 +385,10 @@ final class MediaDiskCacheTests: XCTestCase {
     MediaDiskCache.shared.configure(enabled: true, maxBytes: 64 * 1024 * 1024)
     MediaDiskCache.shared.waitForPendingWorkForTesting()
 
-    let identity = MediaCacheIdentity.make(uri: "https://example.test/truncated.mp4", headers: [:])
+    let identity = MediaCacheIdentity.make(
+      uri: "https://example.test/truncated-\(UUID().uuidString).mp4",
+      headers: [:]
+    )
     let payload = Data(repeating: 0xAB, count: 4096)
     let temporary = FileManager.default.temporaryDirectory
       .appendingPathComponent("nfp-test-\(UUID().uuidString)")

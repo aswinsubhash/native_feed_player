@@ -233,16 +233,17 @@ final class AVPlayerManager {
 
   deinit {
     // Timer invalidation must happen on the timer's runloop; deinit can run
-    // on any thread. Observer removal is thread-safe.
+    // on any thread. NotificationCenter removal is thread-safe, so observers
+    // are always removed.
     let timer = positionTimer
     if Thread.isMainThread {
       timer?.invalidate()
-      stopObservingAppLifecycle()
     } else {
       DispatchQueue.main.async {
         timer?.invalidate()
       }
     }
+    stopObservingAppLifecycle()
     resourceLoader.shutdown()
   }
 
@@ -516,6 +517,10 @@ final class AVPlayerManager {
     }
     let session = AVAudioSession.sharedInstance()
     do {
+      // While manageAudioSession is on the plugin owns category, mode, and
+      // options, so compare against exactly what it would set. AVFoundation
+      // reports back the options it was given, so the comparison is stable
+      // and skips redundant setCategory calls.
       if muted {
         // Preserve external audio while muted.
         if session.category != .ambient || session.mode != .moviePlayback
@@ -1494,8 +1499,7 @@ final class AVPlayerManager {
   private func recycleOrReleasePlayer(_ player: AVQueuePlayer) {
     player.pause()
     // Reset player-global state so a recycled player cannot leak the previous
-    // controller's rate, volume, or mute into the next one.
-    player.rate = 0
+    // controller's volume or mute into the next one.
     player.volume = 1.0
     player.isMuted = false
     player.cancelPendingPrerolls()

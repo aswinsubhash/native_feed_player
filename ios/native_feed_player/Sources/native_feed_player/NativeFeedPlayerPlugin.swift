@@ -174,11 +174,13 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
       NativeFeedPlayerHostApiSetup.setUp(binaryMessenger: binaryMessenger, api: nil)
       self.binaryMessenger = nil
     }
-    // Texture and player teardown touches UIKit and the texture registry;
-    // deinit can run on any thread, so hop to main. detachFromEngine is the
-    // primary teardown path and already ran this on the platform thread.
+    // Texture and view teardown touches UIKit and the texture registry;
+    // deinit can run on any thread, so hop everything to main. detachFromEngine
+    // is the primary teardown path and already ran this on the platform thread.
     let manager = self.manager
     let textureOutputs = self.textureOutputs
+    let videoViews = self.videoViews
+    let renderViewPool = self.renderViewPool
     if Thread.isMainThread {
       textureOutputs?.clear()
       manager?.disposeAll()
@@ -189,7 +191,10 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
       DispatchQueue.main.async {
         textureOutputs?.clear()
         manager?.disposeAll()
+        videoViews.removeAll()
+        renderViewPool.clear()
       }
+      attachedControllerByViewId.removeAll()
     }
   }
 
@@ -209,6 +214,8 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
     binaryMessenger = nil
     textureOutputs = nil
+    // deinit must not tear the manager down a second time.
+    manager = nil
   }
 
   // MARK: - Host API

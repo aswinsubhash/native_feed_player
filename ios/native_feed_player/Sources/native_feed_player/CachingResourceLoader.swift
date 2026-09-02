@@ -60,6 +60,19 @@ final class CachingResourceLoader: NSObject {
     return statusCode != 206 || requestHadRangeHeader
   }
 
+  /// Bytes to serve in the next chunk of a cached-file request, or 0 when the
+  /// request is already satisfied. Pure so the boundary cases are unit-testable.
+  static func chunkPlan(
+    requestedLength: Int64,
+    alreadyServed: Int64,
+    currentOffset: Int64,
+    byteCount: Int64
+  ) -> Int64 {
+    let remainingInRequest = requestedLength - alreadyServed
+    let remainingInFile = byteCount - currentOffset
+    return min(remainingInRequest, remainingInFile, Int64(chunkSize))
+  }
+
   fileprivate final class Download: NSObject {
     let identity: String
     let handle: FileHandle
@@ -260,35 +273,49 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
       info.isByteRangeAccessSupported = true
     }
     guard let dataRequest = request.dataRequest else {
-      request.finishLoading()
+      if !request.isCancelled {
+        request.finishLoading()
+      }
       return
     }
     do {
       let handle = try FileHandle(forReadingFrom: cached.url)
       defer { try? handle.closeCompat() }
       try handle.seekCompat(toOffset: UInt64(max(0, dataRequest.currentOffset)))
-      // Bound the response to one chunk: with byte-range access supported,
-      // AVFoundation issues follow-up requests for the remaining ranges
-      // instead of one loading request holding the whole file in memory.
-      let alreadyServed = Int64(dataRequest.currentOffset - dataRequest.requestedOffset)
-      let wanted = min(
-        Int64(dataRequest.requestedLength) - alreadyServed,
-        cached.byteCount - dataRequest.currentOffset,
-        Int64(CachingResourceLoader.chunkSize)
-      )
-      guard wanted > 0 else {
-        request.finishLoading()
-        return
+      // Serve the requested range in bounded chunks on this one request:
+      // respond() accumulates until finishLoading(), so chunking bounds the
+      // live allocation while still satisfying the full range — finishing
+      // after a partial response would risk stalls for open-ended requests.
+      while !request.isCancelled {
+        let alreadyServed = Int64(dataRequest.currentOffset - dataRequest.requestedOffset)
+        let plan = CachingResourceLoader.chunkPlan(
+          requestedLength: Int64(dataRequest.requestedLength),
+          alreadyServed: alreadyServed,
+          currentOffset: dataRequest.currentOffset,
+          byteCount: cached.byteCount
+        )
+        guard plan > 0 else {
+          break
+        }
+        guard let data = try handle.readCompat(upToCount: Int(plan)), !data.isEmpty else {
+          break
+        }
+        dataRequest.respond(with: data)
+        let served = Int64(dataRequest.currentOffset - dataRequest.requestedOffset)
+        let openEnded = Int64(dataRequest.requestedLength) == Int64(Int.max)
+        if served >= Int64(dataRequest.requestedLength)
+          || (openEnded && dataRequest.currentOffset >= cached.byteCount)
+        {
+          break
+        }
       }
-      let data = try handle.readCompat(upToCount: Int(wanted)) ?? Data()
-      if data.isEmpty {
+      if !request.isCancelled {
         request.finishLoading()
-        return
       }
-      dataRequest.respond(with: data)
-      request.finishLoading()
     } catch {
-      request.finishLoading(with: error)
+      if !request.isCancelled {
+        request.finishLoading(with: error)
+      }
     }
   }
 }

@@ -13,9 +13,12 @@ enum MediaCacheIdentity {
     append(schemaVersion, to: &material)
     // A caller-supplied cacheKey replaces the URI so signed or expiring URLs
     // share one entry; headers stay in the digest either way.
-    let identity = cacheKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-      ? cacheKey!
-      : uri
+    let identity: String
+    if let key = cacheKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+      identity = key
+    } else {
+      identity = uri
+    }
     append(identity, to: &material)
     for (name, value) in canonicalHeaders(headers) {
       append(name, to: &material)
@@ -108,14 +111,14 @@ final class MediaDiskCache {
 
   // MARK: - Configuration
 
-  /// Configures the cache without blocking the caller: the enabled/maxBytes
-  /// state flips immediately, while index loading and budget enforcement run
-  /// on the cache queue. Lookups serialise behind that barrier, so they never
-  /// observe a half-loaded index.
+  /// Configures the cache without blocking the caller. The load barrier is
+  /// enqueued *before* `enabled` flips so any lookup submitted after the
+  /// caller observes `isEnabled == true` is ordered behind a fully loaded
+  /// index.
   func configure(enabled: Bool, maxBytes: Int64) {
-    self.enabled = enabled
-    self.maxBytes = maxBytes
     guard enabled else {
+      self.enabled = false
+      self.maxBytes = maxBytes
       return
     }
     queue.async(flags: .barrier) {
@@ -123,6 +126,8 @@ final class MediaDiskCache {
       self.loadIndexLocked()
       self.enforceBudgetLocked()
     }
+    self.enabled = true
+    self.maxBytes = maxBytes
   }
 
   /// Blocks until all queued cache work (including a pending configure) has
