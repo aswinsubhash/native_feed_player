@@ -343,6 +343,9 @@ class _NativeVideoViewState extends State<NativeVideoView> {
     final FeedController controller = widget.controller;
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
+        // Android renders through a TextureView scaled by the FittedBox
+        // above, so unlike iOS there is no native fit to forward and no
+        // reason to recreate the platform view when the fit changes.
         return AndroidView(
           viewType: _viewType,
           creationParamsCodec: const StandardMessageCodec(),
