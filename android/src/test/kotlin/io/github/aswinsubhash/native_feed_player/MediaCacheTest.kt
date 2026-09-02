@@ -2,11 +2,18 @@ package io.github.aswinsubhash.native_feed_player
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -26,6 +33,7 @@ internal class MediaCacheTest {
 
     @After
     fun tearDown() {
+        MediaCache.cacheFactory = null
         MediaCache.resetForTesting()
     }
 
@@ -129,5 +137,80 @@ internal class MediaCacheTest {
         assertEquals(base, rotatedSignature)
         assertNotEquals(base, differentKey)
         assertNotEquals(base, differentHeaders)
+    }
+
+    @Test
+    fun configure_raceWithTeardown_releasesStaleCache_andKeepsDirectoryReusable() {
+        val executor = Executors.newSingleThreadExecutor()
+        val cacheBuilt = CountDownLatch(1)
+        val releaseGate = CountDownLatch(1)
+        var builtCount = 0
+        MediaCache.cacheFactory = { dir, evictor, provider ->
+            builtCount += 1
+            cacheBuilt.countDown()
+            val cache = SimpleCache(dir, evictor, provider)
+            // Hold the configure task open so teardown() can race it.
+            releaseGate.await()
+            cache
+        }
+        try {
+            MediaCache.configure(context, true, 1024L * 1024, executor)
+            assertTrue(cacheBuilt.await(5, TimeUnit.SECONDS))
+
+            // Teardown races the in-flight configure and bumps the generation.
+            MediaCache.teardown()
+            releaseGate.countDown()
+
+            // The stale attempt must unwind without holding the directory.
+            assertNull(MediaCache.awaitCache(timeoutMs = 2_000))
+            assertNull(MediaCache.activeCache())
+
+            // The directory lock must be free: a fresh configure succeeds.
+            MediaCache.configure(context, true, 1024L * 1024, executor)
+            assertNotNull(MediaCache.awaitCache(timeoutMs = 2_000))
+            assertNotNull(MediaCache.activeCache())
+            assertTrue(builtCount >= 2)
+        } finally {
+            releaseGate.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun teardown_unblocksAwaitCacheImmediately() {
+        val executor = Executors.newSingleThreadExecutor()
+        val releaseGate = CountDownLatch(1)
+        MediaCache.cacheFactory = { dir, evictor, provider ->
+            SimpleCache(dir, evictor, provider).also { releaseGate.await() }
+        }
+        try {
+            MediaCache.configure(context, true, 1024L * 1024, executor)
+
+            val awaiterResult = AtomicReference<Any?>(UNRESOLVED)
+            val awaiter = Thread {
+                awaiterResult.set(MediaCache.awaitCache(timeoutMs = 10_000))
+            }
+            awaiter.start()
+            // Give the awaiter time to block on the pending future.
+            Thread.sleep(100)
+            assertEquals(UNRESOLVED, awaiterResult.get())
+
+            val startedAt = System.nanoTime()
+            MediaCache.teardown()
+            awaiter.join(2_000)
+
+            // The awaiter must have returned null well before its 10 s timeout.
+            assertNull(awaiterResult.get())
+            val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+            assertTrue(elapsedMs < 2_000, "teardown() took ${elapsedMs}ms to unblock awaitCache")
+        } finally {
+            releaseGate.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    private companion object {
+        /** Distinguishes "awaiter has not returned yet" from a null result. */
+        val UNRESOLVED: Any = Any()
     }
 }

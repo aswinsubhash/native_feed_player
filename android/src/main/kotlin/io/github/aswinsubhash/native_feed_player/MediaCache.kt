@@ -1,6 +1,7 @@
 package io.github.aswinsubhash.native_feed_player
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.annotation.VisibleForTesting
@@ -12,6 +13,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.ContentMetadata
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
@@ -103,6 +105,9 @@ internal object MediaCache {
     private var cache: SimpleCache? = null
     private var databaseProvider: StandaloneDatabaseProvider? = null
     private var configuredMaxBytes: Long = 0
+
+    /** Budget requested while another engine held the cache; applied on the next reconfigure. */
+    private var pendingMaxBytes: Long = 0
     private val cacheKeysBySource = mutableMapOf<String, MutableSet<String>>()
 
     /** Completes once the current configure attempt finishes (null = no cache). */
@@ -111,6 +116,7 @@ internal object MediaCache {
         CompletableFuture.completedFuture(null)
 
     /** Discards results of configure attempts superseded by newer calls. */
+    @Volatile
     private var configureGeneration = 0
 
     /** Live engine count; the cache is torn down when it reaches zero. */
@@ -130,6 +136,12 @@ internal object MediaCache {
         }
     }
 
+    /** Runs [callback] with the cache (or null) once the current configure attempt settles. */
+    fun onReady(executor: Executor, callback: (SimpleCache?) -> Unit) {
+        val current = readiness
+        current.whenCompleteAsync({ cache, _ -> callback(cache) }, executor)
+    }
+
     /**
      * Configures the cache. Disk work runs on [executor]; the call returns
      * immediately and playback degrades to uncached until [isReady].
@@ -144,15 +156,16 @@ internal object MediaCache {
             return
         }
         // Another engine still plays through the live cache; re-creating it
-        // under them would break their reads, so adopt the new budget only.
+        // under them would break their reads, so remember the request and
+        // apply it when the count drops.
         if (cache != null && refCount > 1) {
             if (configuredMaxBytes != maxBytes) {
                 Log.w(
                     TAG,
-                    "MediaCache budget change to $maxBytes bytes ignored while " +
-                        "another engine is attached; reconfigure after detach."
+                    "MediaCache budget change to $maxBytes bytes deferred while " +
+                        "another engine is attached; applied after detach."
                 )
-                configuredMaxBytes = maxBytes
+                pendingMaxBytes = maxBytes
             }
             return
         }
@@ -166,11 +179,24 @@ internal object MediaCache {
             val provider = StandaloneDatabaseProvider(appContext)
             var created: SimpleCache? = null
             try {
-                created = SimpleCache(
-                    File(appContext.cacheDir, CACHE_DIRECTORY),
-                    LeastRecentlyUsedCacheEvictor(maxBytes),
-                    provider
-                )
+                val factory = cacheFactory
+                created = if (factory != null) {
+                    factory(
+                        File(appContext.cacheDir, CACHE_DIRECTORY),
+                        LeastRecentlyUsedCacheEvictor(maxBytes),
+                        provider
+                    )
+                } else {
+                    SimpleCache(
+                        File(appContext.cacheDir, CACHE_DIRECTORY),
+                        LeastRecentlyUsedCacheEvictor(maxBytes),
+                        provider
+                    )
+                }
+                // Publish the cache and complete the future under one monitor:
+                // teardown() or a newer configure() running in between could
+                // otherwise release the cache we just stored (double release)
+                // or leave waiters blocked on a future that never resolves.
                 synchronized(this@MediaCache) {
                     if (generation == configureGeneration) {
                         databaseProvider = provider
@@ -178,14 +204,12 @@ internal object MediaCache {
                         cache = created
                         invalidateLegacyCacheKeys()
                         rebuildSourceKeyGroups()
+                        future.complete(created)
+                    } else {
+                        runCatching { created.release() }
+                        runCatching { provider.close() }
+                        future.complete(null)
                     }
-                }
-                if (generation == configureGeneration) {
-                    future.complete(created)
-                } else {
-                    runCatching { created.release() }
-                    runCatching { provider.close() }
-                    future.complete(null)
                 }
             } catch (error: Throwable) {
                 synchronized(this@MediaCache) {
@@ -196,10 +220,10 @@ internal object MediaCache {
                         configuredMaxBytes = 0
                         cacheKeysBySource.clear()
                     }
+                    runCatching { provider.close() }
+                    future.complete(null)
                 }
-                runCatching { provider.close() }
                 Log.w(TAG, "MediaCache failed to open; playing uncached.", error)
-                future.complete(null)
             }
         }
     }
@@ -279,7 +303,10 @@ internal object MediaCache {
         runCatching { databaseProvider?.close() }
         databaseProvider = null
         configuredMaxBytes = 0
+        pendingMaxBytes = 0
         cacheKeysBySource.clear()
+        // Unblock any loader thread still waiting on the previous attempt.
+        readiness.complete(null)
         readiness = CompletableFuture.completedFuture(null)
     }
 
@@ -290,12 +317,59 @@ internal object MediaCache {
         teardown()
     }
 
+    /** Test hook: overrides cache construction so tests can gate or instrument it. */
+    @VisibleForTesting
+    @Volatile
+    internal var cacheFactory: (
+        (File, LeastRecentlyUsedCacheEvictor, StandaloneDatabaseProvider) -> SimpleCache
+    )? = null
+
     /** Builds a source-specific chain so HLS manifests, keys, and segments inherit headers. */
-    fun createDataSourceFactory(source: RegisteredSource): DataSource.Factory {
-        // Resolving the cache is deferred to data-source creation, which runs
-        // on ExoPlayer's loader thread, so configure() never blocks the main
-        // thread and an in-flight open only delays the first read.
-        return DataSource.Factory { buildDataSourceFactory(source).createDataSource() }
+    fun createDataSourceFactory(source: RegisteredSource): DataSource.Factory =
+        DataSource.Factory { DeferredCacheDataSource(source, ::awaitCache) }
+
+    /**
+     * Resolves the cache the first time [open] runs, which Media3 guarantees
+     * happens on a loader thread — never the main thread. The constructor is
+     * deliberately cheap so creating the data source never blocks.
+     */
+    private class DeferredCacheDataSource(
+        private val source: RegisteredSource,
+        private val awaitCache: () -> SimpleCache?
+    ) : DataSource {
+        private val listeners = mutableListOf<TransferListener>()
+        private var delegate: DataSource? = null
+
+        override fun addTransferListener(transferListener: TransferListener) {
+            listeners.add(transferListener)
+            delegate?.addTransferListener(transferListener)
+        }
+
+        override fun open(dataSpec: DataSpec): Long {
+            val resolved = delegate ?: run {
+                val created = buildDataSourceFactory(source).createDataSource()
+                listeners.forEach(created::addTransferListener)
+                delegate = created
+                created
+            }
+            return resolved.open(dataSpec)
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+            requireDelegate().read(buffer, offset, length)
+
+        override fun getUri(): Uri? = delegate?.uri
+
+        override fun getResponseHeaders(): Map<String, List<String>> =
+            delegate?.responseHeaders ?: emptyMap()
+
+        override fun close() {
+            delegate?.close()
+            delegate = null
+        }
+
+        private fun requireDelegate(): DataSource =
+            delegate ?: error("DataSource.open() must be called before read().")
     }
 
     private fun buildDataSourceFactory(source: RegisteredSource): DataSource.Factory {

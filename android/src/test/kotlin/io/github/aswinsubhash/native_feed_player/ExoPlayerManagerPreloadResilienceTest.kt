@@ -143,6 +143,36 @@ internal class ExoPlayerManagerPreloadResilienceTest {
         assertNotNull(manager.playerFor(1))
         assertEquals(2, manager.activeControllerCount())
     }
+
+    @Test
+    fun budgetEviction_allControllersOnVisibleSource_stillEnforcesBudget() {
+        val released = mutableListOf<Pair<Int, ReleaseReasonMessage>>()
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val manager = ExoPlayerManager(
+            context = context,
+            onState = { _, _, _ -> },
+            onReleased = { id, reason -> released.add(id to reason) },
+            onPosition = { _ -> },
+            onMetrics = { _ -> },
+            onVideoSize = { _ -> }
+        ).also(managers::add)
+        manager.initialize(config(maxActivePlayers = 3, preloadAhead = 0, preloadBehind = 0))
+        manager.setSources(listOf(source("only", 0, "https://example.test/only.mp4")))
+
+        // Three live controllers for the visible source exceed the budget of
+        // maxActivePlayers * 2 = 6? No: 3 <= 6. Force the overage with a
+        // smaller budget instead.
+        manager.initialize(config(maxActivePlayers = 1, preloadAhead = 0, preloadBehind = 0))
+        manager.setSources(listOf(source("only", 0, "https://example.test/only.mp4")))
+
+        manager.createController(controllerId = 1, sourceId = "only", autoPlay = false, looping = false)
+        manager.createController(controllerId = 2, sourceId = "only", autoPlay = false, looping = false)
+
+        // The duplicate-visible rule caps active controllers at the limit and
+        // the budget loop must terminate rather than spin forever.
+        assertTrue(manager.activeControllerCount() <= 1)
+        assertTrue(released.isNotEmpty())
+    }
 }
 
 /** Pooling semantics; Robolectric supplies the application context. */

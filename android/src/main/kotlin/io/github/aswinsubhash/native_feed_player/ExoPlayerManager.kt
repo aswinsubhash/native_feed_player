@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.Surface
 import android.view.TextureView
 import androidx.annotation.OptIn
@@ -108,6 +109,10 @@ internal class ExoPlayerManager(
     /** Runs cache disk work off the main thread; direct in tests. */
     private val cacheExecutor: Executor = Executor { it.run() }
 ) {
+    private companion object {
+        const val TAG = "NativeFeedPlayer"
+    }
+
     private class ManagedPlayer(
         val player: ExoPlayer,
         val listener: Player.Listener,
@@ -135,6 +140,9 @@ internal class ExoPlayerManager(
     private val managedPlayers = mutableMapOf<Int, ManagedPlayer>()
     private val creationOrder = ArrayDeque<Int>()
     private val recycledPlayers = ArrayDeque<ExoPlayer>()
+
+    /** Players built by the current preload manager's shared builder. */
+    private val playersFromPreloadManager = mutableSetOf<ExoPlayer>()
     private var preloadManager: FeedPreloadManager? = null
 
     /** Invalidates deferred preload-manager builds across sessions. */
@@ -207,15 +215,15 @@ internal class ExoPlayerManager(
         )
 
         // Rebuild shared Media3 components for the new configuration. The
-        // preload manager needs the opened cache, so it is built once the
-        // background configure attempt settles instead of blocking here.
+        // preload manager needs the final cache state, so it is built exactly
+        // when the background configure attempt settles — however long that
+        // takes — instead of blocking here or guessing with a timeout.
         releaseAllPooledPlayers()
         preloadManager?.release()
         preloadManager = null
         preloadManagerGeneration += 1
         val managerGeneration = preloadManagerGeneration
-        cacheExecutor.execute {
-            MediaCache.awaitCache()
+        MediaCache.onReady(cacheExecutor) { _ ->
             handler.post {
                 if (managerGeneration != preloadManagerGeneration || preloadManager != null) {
                     return@post
@@ -224,13 +232,16 @@ internal class ExoPlayerManager(
                     .apply {
                         setMaxPreloadDistance(maxOf(preloadAhead, preloadBehind))
                         onSourceFailed = { source, error ->
-                            android.util.Log.w(
-                                "NativeFeedPlayer",
+                            Log.w(
+                                TAG,
                                 "Skipping unplayable preload source ${source.id}.",
                                 error
                             )
                         }
                     }
+                // Players pooled before the shared builder existed must not be
+                // paired with its preloaded sources.
+                shrinkPooledPlayers(targetSize = 0)
                 enforceVisibleWindowEviction()
                 schedulePreloadWindow()
             }
@@ -576,7 +587,7 @@ internal class ExoPlayerManager(
             } catch (error: Throwable) {
                 // A looper callback crash would kill the process; preload
                 // failures are reported through onSourceFailed instead.
-                android.util.Log.w("NativeFeedPlayer", "Preload window sync failed.", error)
+                Log.w(TAG, "Preload window sync failed.", error)
             }
         }
     }
@@ -607,7 +618,9 @@ internal class ExoPlayerManager(
     /** Enforces the player budget by releasing recycled players first. */
     private fun enforceTotalPlayerBudget(protectedControllerId: Int? = null) {
         while (totalLivePlayers() > maxTotalPlayers && recycledPlayers.isNotEmpty()) {
-            recycledPlayers.removeFirst().release()
+            val player = recycledPlayers.removeFirst()
+            playersFromPreloadManager.remove(player)
+            player.release()
         }
 
         val visibleSourceId = registry.visibleSourceId
@@ -617,7 +630,13 @@ internal class ExoPlayerManager(
                     it != protectedControllerId &&
                         managedPlayers[it]?.sourceId != visibleSourceId
                 }
-                .maxByOrNull { distanceOrFar(managedPlayers[it]?.sourceId) } ?: break
+                .maxByOrNull { distanceOrFar(managedPlayers[it]?.sourceId) }
+            // When every live controller plays the visible source, the budget
+            // still has to hold: evict the oldest one.
+                ?: creationOrder.firstOrNull {
+                    it != protectedControllerId && managedPlayers.containsKey(it)
+                }
+                ?: break
             releaseController(candidate, ReleaseReasonMessage.EVICTED)
         }
     }
@@ -652,7 +671,14 @@ internal class ExoPlayerManager(
     /** Uses preloaded media with a player from the same preload manager. */
     private fun obtainPlayerFor(source: RegisteredSource): ExoPlayer {
         val player = obtainReusablePlayer()
-        val preloadedSource = preloadManager?.mediaSourceFor(source)
+        // Media3 requires preloaded sources and their players to share one
+        // builder, so preloaded sources are only used with players the
+        // preload manager built.
+        val preloadedSource = if (playersFromPreloadManager.contains(player)) {
+            preloadManager?.mediaSourceFor(source)
+        } else {
+            null
+        }
         if (preloadedSource != null) {
             player.setMediaSource(preloadedSource)
         } else {
@@ -665,7 +691,11 @@ internal class ExoPlayerManager(
         if (recycledPlayers.isNotEmpty()) {
             return recycledPlayers.removeFirst()
         }
-        return preloadManager?.buildPlayer() ?: createFallbackPlayer()
+        return preloadManager?.buildPlayer().also { player ->
+            if (player != null) {
+                playersFromPreloadManager.add(player)
+            }
+        } ?: createFallbackPlayer()
     }
 
     private fun emitCurrentPlaybackState(controllerId: Int, player: ExoPlayer) {
@@ -835,6 +865,7 @@ internal class ExoPlayerManager(
         // previous controller's rate or volume into the next one.
         player.setPlaybackSpeed(1f)
         player.volume = 1f
+        playersFromPreloadManager.remove(player)
         if (recycledPlayers.size < maxActivePlayers) {
             recycledPlayers.addLast(player)
         } else {
@@ -844,7 +875,9 @@ internal class ExoPlayerManager(
 
     private fun shrinkPooledPlayers(targetSize: Int) {
         while (recycledPlayers.size > targetSize) {
-            recycledPlayers.removeFirst().release()
+            val player = recycledPlayers.removeFirst()
+            playersFromPreloadManager.remove(player)
+            player.release()
         }
     }
 
