@@ -217,9 +217,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           script: |
-            cd example
-            flutter pub get
-            flutter test --no-pub integration_test/plugin_integration_test.dart -d "$(adb get-serialno)"
+            cd example && flutter pub get && flutter test --no-pub integration_test/plugin_integration_test.dart -d "$(adb get-serialno)"
 
   ios-integration:
     name: Integration tests (iOS)
