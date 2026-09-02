@@ -307,7 +307,7 @@ void main() {
     await player.dispose();
   });
 
-  testWidgets('network failure surfaces a typed, retryable error', (
+  testWidgets('missing media surfaces a typed source error', (
     WidgetTester tester,
   ) async {
     final _BenchmarkCollector collector = _BenchmarkCollector(
@@ -337,9 +337,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     final PlaybackStatusUpdate update = await failure;
     expect(update.error, isNotNull);
-    // Both native mappers classify unreachable hosts as network failures.
-    expect(update.error!.code, 'network_failed');
-    expect(update.error!.isRecoverable, isTrue);
+    // The local server returns HTTP 404 for the missing media path.
+    expect(update.error!.code, 'source_not_found');
+    expect(update.error!.isRecoverable, isFalse);
 
     await player.setVisibleSource('online');
     final FeedController recovered = await player.controllerFor(
