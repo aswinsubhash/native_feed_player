@@ -35,6 +35,7 @@ class FeedSourceMessage {
     required this.rank,
     required this.kind,
     required this.headers,
+    this.cacheKey,
   });
 
   /// Caller-owned stable identifier. Survives pagination and reordering.
@@ -45,6 +46,10 @@ class FeedSourceMessage {
   final int rank;
   final FeedMediaKindMessage kind;
   final Map<String, String> headers;
+
+  /// Optional stable cache identity. When set, it replaces the URI in the
+  /// cache key so signed or expiring URLs still share one cache entry.
+  final String? cacheKey;
 }
 
 class CachePolicyMessage {
@@ -59,11 +64,18 @@ class AudioPolicyMessage {
     required this.muted,
     required this.volume,
     required this.handleAudioFocus,
+    required this.manageAudioSession,
   });
 
   final bool muted;
   final double volume;
+
+  /// Whether audible playback requests platform audio focus.
   final bool handleAudioFocus;
+
+  /// iOS only. When false the plugin never reconfigures AVAudioSession; the
+  /// host app owns category, mode, and activation.
+  final bool manageAudioSession;
 }
 
 class FeedPlayerConfigMessage {
@@ -282,12 +294,16 @@ abstract class NativeFeedPlayerHostApi {
 
   /// Drops persisted media bytes for the given sources, or all of them when
   /// the list is empty.
+  @async
   void evictCachedMedia(SourceIdsRequest request);
 
+  @async
   void clearMediaCache();
 
+  @async
   CacheStatusMessage cacheStatus(VisibleSourceRequest request);
 
+  @async
   int cacheUsageBytes();
 
   void attachView(AttachViewRequest request);

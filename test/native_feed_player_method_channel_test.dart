@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_feed_player/native_feed_player.dart';
 import 'package:native_feed_player/native_feed_player_method_channel.dart';
@@ -99,11 +100,15 @@ void main() {
   late StreamController<VideoSizeEvent> videoSizes;
   late StreamController<ControllerLifecycleEvent> lifecycle;
   late MethodChannelFeedPlayer platform;
+  int positionListenCount = 0;
 
   setUp(() {
+    positionListenCount = 0;
     hostApi = FakeHostApi();
     states = StreamController<PlaybackStateEvent>.broadcast();
-    positions = StreamController<PositionEvent>.broadcast();
+    positions = StreamController<PositionEvent>.broadcast(
+      onListen: () => positionListenCount += 1,
+    );
     metrics = StreamController<MetricsEvent>.broadcast();
     videoSizes = StreamController<VideoSizeEvent>.broadcast();
     lifecycle = StreamController<ControllerLifecycleEvent>.broadcast();
@@ -131,9 +136,11 @@ void main() {
         maxActivePlayers: 4,
         preloadAhead: 3,
         preloadBehind: 1,
-        maxConcurrentPreloads: 2,
-        cache: CachePolicy(maxBytes: 1024),
-        audio: AudioPolicy(muted: false, volume: 0.5),
+        maxConcurrentPreloads: 5,
+        positionUpdateInterval: Duration(milliseconds: 250),
+        renderMode: RenderMode.texture,
+        cache: CachePolicy(enabled: false, maxBytes: 1024),
+        audio: AudioPolicy(muted: false, volume: 0.5, handleAudioFocus: false),
       ),
     );
 
@@ -141,15 +148,20 @@ void main() {
     expect(config.maxActivePlayers, 4);
     expect(config.preloadAhead, 3);
     expect(config.preloadBehind, 1);
+    expect(config.maxConcurrentPreloads, 5);
+    expect(config.positionUpdateIntervalMs, 250);
+    expect(config.renderMode, RenderModeMessage.texture);
+    expect(config.cache.enabled, isFalse);
     expect(config.cache.maxBytes, 1024);
     expect(config.audio.muted, isFalse);
     expect(config.audio.volume, 0.5);
+    expect(config.audio.handleAudioFocus, isFalse);
   });
 
   test('setSources assigns sequential ranks', () async {
     await platform.setSources(<FeedSource>[
-      const FeedSource(id: 'a', uri: 'a.mp4'),
-      const FeedSource(id: 'b', uri: 'b.mp4'),
+      const FeedSource(id: 'a', uri: 'https://example.test/a.mp4'),
+      const FeedSource(id: 'b', uri: 'https://example.test/b.mp4'),
     ]);
 
     expect(
@@ -160,8 +172,8 @@ void main() {
 
   test('appendSources continues ranks from the offset', () async {
     await platform.appendSources(<FeedSource>[
-      const FeedSource(id: 'c', uri: 'c.mp4'),
-      const FeedSource(id: 'd', uri: 'd.mp4'),
+      const FeedSource(id: 'c', uri: 'https://example.test/c.mp4'),
+      const FeedSource(id: 'd', uri: 'https://example.test/d.mp4'),
     ], rankOffset: 5);
 
     expect(
@@ -176,7 +188,7 @@ void main() {
     await platform.setSources(<FeedSource>[
       const FeedSource(
         id: 'a',
-        uri: 'a.m3u8',
+        uri: 'https://example.test/a.m3u8',
         kind: FeedMediaKind.hls,
         headers: <String, String>{'Authorization': 'Bearer token'},
       ),
@@ -229,6 +241,30 @@ void main() {
     expect(update.error!.platformCode, 'NSURLErrorDomain:-1009');
   });
 
+  test('late state subscriber receives the latest update', () async {
+    await platform.initialize(const FeedPlayerConfig());
+    states.add(
+      PlaybackStateEvent(
+        controllerId: 7,
+        status: PlaybackStatusMessage.error,
+        error: PlaybackErrorMessage(
+          code: 'network_failed',
+          message: 'offline',
+          isRecoverable: true,
+        ),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final PlaybackStatusUpdate update = await platform
+        .stateStream(7)
+        .first
+        .timeout(const Duration(seconds: 1));
+
+    expect(update.state, VideoPlaybackState.error);
+    expect(update.error?.code, 'network_failed');
+  });
+
   test('position stream maps buffer and duration', () async {
     final Future<PlaybackPosition> next = platform.positionStream(7).first;
 
@@ -254,6 +290,164 @@ void main() {
     expect((await next).duration, isNull);
   });
 
+  test(
+    'position stream replays the latest position for a late subscriber',
+    () async {
+      await platform.initialize(const FeedPlayerConfig());
+      // Arm the lazy position cache before events flow.
+      platform.positionStream(7).listen((_) {});
+      await Future<void>.delayed(Duration.zero);
+      positions.add(
+        PositionEvent(
+          controllerId: 7,
+          positionMs: 4200,
+          bufferedPositionMs: 9000,
+          durationMs: 30000,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final PlaybackPosition position = await platform
+          .positionStream(7)
+          .first
+          .timeout(const Duration(seconds: 1));
+
+      expect(position.position, const Duration(milliseconds: 4200));
+      expect(position.bufferedPosition, const Duration(milliseconds: 9000));
+      expect(position.duration, const Duration(seconds: 30));
+    },
+  );
+
+  test('setPlaybackSpeed rejects non-finite and non-positive speeds', () async {
+    await platform.initialize(const FeedPlayerConfig());
+    await platform.createController(
+      sourceId: 'a',
+      autoPlay: false,
+      looping: false,
+    );
+
+    await expectLater(
+      platform.setPlaybackSpeed(7, double.nan),
+      throwsArgumentError,
+    );
+    await expectLater(
+      platform.setPlaybackSpeed(7, double.infinity),
+      throwsArgumentError,
+    );
+    await expectLater(platform.setPlaybackSpeed(7, 0.0), throwsArgumentError);
+    await expectLater(platform.setPlaybackSpeed(7, -1.5), throwsArgumentError);
+  });
+
+  test(
+    'position channel is subscribed lazily on first positionStream',
+    () async {
+      expect(positionListenCount, 0);
+
+      await platform.initialize(const FeedPlayerConfig());
+
+      expect(
+        positionListenCount,
+        0,
+        reason: 'initialize must not subscribe the position channel',
+      );
+
+      platform.positionStream(7).listen((_) {});
+      await Future<void>.delayed(Duration.zero);
+
+      expect(positionListenCount, 1);
+    },
+  );
+
+  test(
+    'release events forget caches before downstream listeners run',
+    () async {
+      // Mirrors FeedPlayer, which subscribes to releaseEvents in its
+      // constructor — BEFORE calling initialize().
+      Object? replayedAfterRelease;
+      platform.releaseEvents.listen((ControllerReleaseEvent event) async {
+        try {
+          await platform
+              .positionStream(event.controllerId)
+              .first
+              .timeout(const Duration(milliseconds: 50));
+          replayedAfterRelease = true;
+        } on TimeoutException {
+          replayedAfterRelease = false;
+        }
+      });
+
+      await platform.initialize(const FeedPlayerConfig());
+
+      positions.add(
+        PositionEvent(controllerId: 7, positionMs: 4200, durationMs: 30000),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      lifecycle.add(
+        ControllerLifecycleEvent(
+          controllerId: 7,
+          reason: ReleaseReasonMessage.disposed,
+        ),
+      );
+      // The listener's replay probe waits 50 ms of real time before concluding.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      expect(
+        replayedAfterRelease,
+        isFalse,
+        reason:
+            'the cached position must be forgotten before the release '
+            'event reaches downstream listeners',
+      );
+    },
+  );
+
+  test(
+    'cache eviction survives dispose and a second consumer of releaseEvents',
+    () async {
+      platform.releaseEvents.listen((_) {});
+      await platform.initialize(const FeedPlayerConfig());
+      await platform.dispose();
+
+      // A second FeedPlayer on the same singleton platform.
+      Object? replayed;
+      platform.releaseEvents.listen((ControllerReleaseEvent event) async {
+        try {
+          await platform
+              .positionStream(event.controllerId)
+              .first
+              .timeout(const Duration(milliseconds: 50));
+          replayed = true;
+        } on TimeoutException {
+          replayed = false;
+        }
+      });
+      await platform.initialize(const FeedPlayerConfig());
+      platform.positionStream(7).listen((_) {});
+      await Future<void>.delayed(Duration.zero);
+      positions.add(
+        PositionEvent(controllerId: 7, positionMs: 1, durationMs: 10),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      lifecycle.add(
+        ControllerLifecycleEvent(
+          controllerId: 7,
+          reason: ReleaseReasonMessage.disposed,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      expect(
+        replayed,
+        isFalse,
+        reason:
+            'releaseEvents is late final and never re-runs, so eviction must '
+            'not depend on subscription order after a dispose cycle',
+      );
+    },
+  );
+
   test('metrics stream maps the native payload', () async {
     final Future<VideoMetrics> next = platform.metricsStream(7).first;
 
@@ -274,6 +468,25 @@ void main() {
     expect(metric.firstFrameLatency, const Duration(milliseconds: 140));
     expect(metric.timestamp, DateTime.fromMillisecondsSinceEpoch(1234));
   });
+
+  test(
+    'metrics stream replays the latest metric for a late subscriber',
+    () async {
+      await platform.initialize(const FeedPlayerConfig());
+      metrics.add(
+        MetricsEvent(
+          controllerId: 7,
+          rebufferCount: 0,
+          droppedFrames: 0,
+          timestampMs: 1234,
+          firstFrameLatencyMs: 140,
+        ),
+      );
+
+      final VideoMetrics metric = await platform.metricsStream(7).first;
+      expect(metric.firstFrameLatency, const Duration(milliseconds: 140));
+    },
+  );
 
   test('video size stream is filtered per controller', () async {
     await platform.initialize(const FeedPlayerConfig());
@@ -345,5 +558,83 @@ void main() {
 
     await platform.evictCachedMedia(<String>['a']);
     expect(hostApi.evictRequest!.sourceIds, <String>['a']);
+  });
+
+  test(
+    'empty source identifiers are rejected at the platform boundary',
+    () async {
+      expect(
+        () => platform.createController(
+          sourceId: ' ',
+          autoPlay: false,
+          looping: true,
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(platform.setVisibleSource(''), throwsArgumentError);
+      await expectLater(platform.cacheStatus(' '), throwsArgumentError);
+      await expectLater(
+        platform.evictCachedMedia(<String>['valid', '']),
+        throwsArgumentError,
+      );
+      expect(hostApi.createRequest, isNull);
+      expect(hostApi.visibleRequest, isNull);
+    },
+  );
+
+  test('invalid volumes are rejected at the platform boundary', () async {
+    await expectLater(platform.setVolume(7, double.nan), throwsArgumentError);
+    await expectLater(
+      platform.setVolume(7, double.infinity),
+      throwsArgumentError,
+    );
+    await expectLater(platform.setVolume(7, -0.1), throwsArgumentError);
+    await expectLater(platform.setVolume(7, 1.1), throwsArgumentError);
+  });
+
+  group('event stream errors', () {
+    final List<FlutterErrorDetails> reported = <FlutterErrorDetails>[];
+    void Function(FlutterErrorDetails)? previousHandler;
+
+    setUp(() {
+      previousHandler = FlutterError.onError;
+      reported.clear();
+      FlutterError.onError = (FlutterErrorDetails details) {
+        reported.add(details);
+      };
+    });
+
+    tearDown(() {
+      FlutterError.onError = previousHandler;
+    });
+
+    test('cache subscription errors are reported, not unhandled', () async {
+      await platform.initialize(const FeedPlayerConfig());
+      final Object error = StateError('metrics channel failed');
+
+      metrics.addError(error);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(reported, hasLength(1));
+      expect(reported.single.exception, same(error));
+      expect(reported.single.library, 'native_feed_player');
+    });
+
+    test(
+      'per-controller streams still propagate errors to listeners',
+      () async {
+        await platform.initialize(const FeedPlayerConfig());
+        final Object error = StateError('state channel failed');
+        final Completer<Object> received = Completer<Object>();
+
+        final StreamSubscription<PlaybackStatusUpdate> subscription = platform
+            .stateStream(7)
+            .listen((_) {}, onError: received.complete);
+
+        states.addError(error);
+        expect(await received.future, same(error));
+        await subscription.cancel();
+      },
+    );
   });
 }

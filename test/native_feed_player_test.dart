@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_feed_player/native_feed_player.dart';
 import 'package:native_feed_player/native_feed_player_method_channel.dart';
@@ -23,19 +24,44 @@ class FakeFeedPlayerPlatform
   final List<AudioPolicy> audioPolicies = <AudioPolicy>[];
 
   FeedPlayerConfig? initializedWith;
+  Completer<void>? initializeGate;
+  Completer<void>? setSourcesGate;
+  Completer<void>? appendSourcesGate;
+  Completer<void>? removeSourcesGate;
+  Completer<int>? createControllerGate;
+  Completer<void>? disposeControllerGate;
+  Completer<void>? audioPolicyGate;
+  Completer<void>? disposeGate;
+  Object? initializeError;
+  Object? setSourcesError;
+  Object? removeSourcesError;
+  Object? disposeControllerError;
+  Object? audioPolicyError;
+  Object? disposeError;
   int nextControllerId = 1;
+  int createControllerCalls = 0;
 
   @override
   Stream<ControllerReleaseEvent> get releaseEvents => releaseController.stream;
 
   @override
   Future<void> initialize(FeedPlayerConfig config) async {
+    await initializeGate?.future;
+    final Object? error = initializeError;
+    if (error != null) {
+      throw error;
+    }
     initializedWith = config;
   }
 
   @override
   Future<void> setSources(List<FeedSource> sources) async {
     setSourceCalls.add(sources);
+    await setSourcesGate?.future;
+    final Object? error = setSourcesError;
+    if (error != null) {
+      throw error;
+    }
   }
 
   @override
@@ -44,10 +70,17 @@ class FakeFeedPlayerPlatform
     required int rankOffset,
   }) async {
     appendCalls.add((sources, rankOffset));
+    await appendSourcesGate?.future;
   }
 
   @override
-  Future<void> removeSources(List<String> sourceIds) async {}
+  Future<void> removeSources(List<String> sourceIds) async {
+    await removeSourcesGate?.future;
+    final Object? error = removeSourcesError;
+    if (error != null) {
+      throw error;
+    }
+  }
 
   @override
   Future<int> createController({
@@ -55,12 +88,22 @@ class FakeFeedPlayerPlatform
     required bool autoPlay,
     required bool looping,
   }) async {
+    createControllerCalls += 1;
+    final Completer<int>? gate = createControllerGate;
+    if (gate != null) {
+      return gate.future;
+    }
     return nextControllerId++;
   }
 
   @override
   Future<void> disposeController(int controllerId) async {
     disposedControllerIds.add(controllerId);
+    await disposeControllerGate?.future;
+    final Object? error = disposeControllerError;
+    if (error != null) {
+      throw error;
+    }
   }
 
   @override
@@ -107,6 +150,11 @@ class FakeFeedPlayerPlatform
   @override
   Future<void> setAudioPolicy(AudioPolicy policy) async {
     audioPolicies.add(policy);
+    await audioPolicyGate?.future;
+    final Object? error = audioPolicyError;
+    if (error != null) {
+      throw error;
+    }
   }
 
   @override
@@ -151,7 +199,13 @@ class FakeFeedPlayerPlatform
   Future<void> detachTexture(int controllerId) async {}
 
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() async {
+    await disposeGate?.future;
+    final Object? error = disposeError;
+    if (error != null) {
+      throw error;
+    }
+  }
 }
 
 FeedSource _source(String id) =>
@@ -230,14 +284,14 @@ void main() {
 
     test('appending a colliding id is rejected', () async {
       await player.setSources(<FeedSource>[_source('a')]);
-      expect(
-        () => player.appendSources(<FeedSource>[_source('a')]),
+      await expectLater(
+        player.appendSources(<FeedSource>[_source('a')]),
         throwsArgumentError,
       );
     });
 
     test('controllerFor requires a registered source', () async {
-      expect(() => player.controllerFor('missing'), throwsArgumentError);
+      await expectLater(player.controllerFor('missing'), throwsArgumentError);
     });
 
     test('controllerFor reuses a live controller', () async {
@@ -264,18 +318,38 @@ void main() {
       expect(platform.loopingCalls, <(int, bool)>[(id, false)]);
     });
 
-    test('volume is clamped before it reaches the platform', () async {
+    test('invalid volume is rejected before it reaches the platform', () async {
       await player.setSources(<FeedSource>[_source('a')]);
       final FeedController controller = await player.controllerFor('a');
 
-      await controller.setVolume(3.2);
-      await controller.setVolume(-1);
+      expect(() => controller.setVolume(3.2), throwsArgumentError);
+      expect(() => controller.setVolume(-1), throwsArgumentError);
+      expect(() => controller.setVolume(double.nan), throwsArgumentError);
+      expect(() => controller.setVolume(double.infinity), throwsArgumentError);
 
-      expect(
-        platform.volumeCalls.map(((int, double) call) => call.$2),
-        <double>[1.0, 0.0],
-      );
+      expect(platform.volumeCalls, isEmpty);
     });
+
+    test(
+      'invalid playback speed is rejected before it reaches the platform',
+      () async {
+        await player.setSources(<FeedSource>[_source('a')]);
+        final FeedController controller = await player.controllerFor('a');
+
+        expect(() => controller.setPlaybackSpeed(0), throwsArgumentError);
+        expect(() => controller.setPlaybackSpeed(-1.5), throwsArgumentError);
+        expect(
+          () => controller.setPlaybackSpeed(double.nan),
+          throwsArgumentError,
+        );
+        expect(
+          () => controller.setPlaybackSpeed(double.infinity),
+          throwsArgumentError,
+        );
+
+        expect(platform.speedCalls, isEmpty);
+      },
+    );
 
     test('setMuted updates the retained audio policy', () async {
       expect(player.config.audio.muted, isFalse);
@@ -286,6 +360,23 @@ void main() {
       expect(player.config.audio.muted, isTrue);
       expect(player.config.maxActivePlayers, 3);
       expect(player.config.cache.maxBytes, 256 * 1024 * 1024);
+    });
+
+    test('queued mute retains earlier audio policy updates', () async {
+      final Completer<void> gate = Completer<void>();
+      platform.audioPolicyGate = gate;
+
+      final Future<void> volumeUpdate = player.setAudioPolicy(
+        const AudioPolicy(volume: 0.25),
+      );
+      final Future<void> muteUpdate = player.setMuted(true);
+      await Future<void>.delayed(Duration.zero);
+      gate.complete();
+      await Future.wait(<Future<void>>[volumeUpdate, muteUpdate]);
+
+      expect(platform.audioPolicies, hasLength(2));
+      expect(platform.audioPolicies.last.volume, 0.25);
+      expect(platform.audioPolicies.last.muted, isTrue);
     });
 
     test('initialize replaces the previous session', () async {
@@ -300,9 +391,192 @@ void main() {
       expect(player.activeControllers, isEmpty);
     });
 
-    test('uninitialized use is rejected', () {
+    test('visible source must be registered', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+
+      await expectLater(
+        player.setVisibleSource('missing'),
+        throwsArgumentError,
+      );
+      expect(platform.visibleSourceIds, isEmpty);
+    });
+
+    test('empty source ids and uris are rejected before platform calls', () {
+      expect(
+        () => player.setSources(const <FeedSource>[
+          FeedSource(id: ' ', uri: 'a.mp4'),
+        ]),
+        throwsArgumentError,
+      );
+      expect(
+        () => player.setSources(const <FeedSource>[
+          FeedSource(id: 'a', uri: ' '),
+        ]),
+        throwsArgumentError,
+      );
+      expect(platform.setSourceCalls, isEmpty);
+    });
+
+    test('source mutations are serialized in invocation order', () async {
+      platform.setSourcesGate = Completer<void>();
+
+      final Future<void> set = player.setSources(<FeedSource>[_source('a')]);
+      final Future<void> append = player.appendSources(<FeedSource>[
+        _source('b'),
+      ]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(platform.setSourceCalls, hasLength(1));
+      expect(platform.appendCalls, isEmpty);
+
+      platform.setSourcesGate!.complete();
+      await set;
+      await append;
+
+      expect(platform.appendCalls.single.$2, 1);
+      expect(player.sources.map((FeedSource source) => source.id), <String>[
+        'a',
+        'b',
+      ]);
+    });
+
+    test('failed source replacement does not commit local state', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      platform.setSourcesError = StateError('set failed');
+
+      await expectLater(
+        player.setSources(<FeedSource>[_source('b')]),
+        throwsStateError,
+      );
+
+      expect(player.sources.map((FeedSource source) => source.id), <String>[
+        'a',
+      ]);
+
+      await player.appendSources(<FeedSource>[_source('b')]);
+      expect(player.sources.map((FeedSource source) => source.id), <String>[
+        'a',
+        'b',
+      ]);
+    });
+
+    test('failed removal preserves sources and controllers', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController controller = await player.controllerFor('a');
+      platform.removeSourcesError = StateError('remove failed');
+
+      await expectLater(player.removeSources(<String>['a']), throwsStateError);
+
+      expect(player.sources, hasLength(1));
+      expect(controller.isReleased, isFalse);
+      expect(player.activeControllers, contains(controller));
+    });
+
+    test('failed audio update preserves the retained policy', () async {
+      platform.audioPolicyError = StateError('audio failed');
+
+      await expectLater(
+        player.setAudioPolicy(const AudioPolicy(muted: true, volume: 0.25)),
+        throwsStateError,
+      );
+
+      expect(player.config.audio.muted, isFalse);
+      expect(player.config.audio.volume, 1.0);
+    });
+
+    test('failed reinitialize invalidates the current session', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController controller = await player.controllerFor('a');
+      platform.initializeError = StateError('initialize failed');
+
+      await expectLater(
+        player.initialize(config: const FeedPlayerConfig(maxActivePlayers: 5)),
+        throwsStateError,
+      );
+
+      expect(player.config.maxActivePlayers, 3);
+      expect(player.sources, isEmpty);
+      expect(controller.isReleased, isTrue);
+      expect(() => player.setSources(<FeedSource>[]), throwsStateError);
+    });
+
+    test('overlapping controller requests share one creation', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      platform.createControllerGate = Completer<int>();
+
+      final Future<FeedController> first = player.controllerFor('a');
+      final Future<FeedController> second = player.controllerFor('a');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(platform.createControllerCalls, 1);
+      platform.createControllerGate!.complete(42);
+
+      expect(identical(await first, await second), isTrue);
+      expect(platform.createControllerCalls, 1);
+    });
+
+    test('failed controller creation does not populate the cache', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final Completer<int> creation = Completer<int>();
+      platform.createControllerGate = creation;
+
+      final Future<FeedController> controller = player.controllerFor('a');
+      final Future<void> expectation = expectLater(
+        controller,
+        throwsStateError,
+      );
+      await Future<void>.delayed(Duration.zero);
+      creation.completeError(StateError('create failed'));
+      await expectation;
+
+      expect(player.activeControllers, isEmpty);
+      platform.createControllerGate = null;
+      expect((await player.controllerFor('a')).isReleased, isFalse);
+    });
+
+    test(
+      'replacing source metadata releases its existing controller',
+      () async {
+        await player.setSources(<FeedSource>[
+          const FeedSource(
+            id: 'a',
+            uri: 'https://example.test/a.mp4',
+            headers: <String, String>{'Authorization': 'first'},
+          ),
+        ]);
+        final FeedController controller = await player.controllerFor('a');
+
+        await player.setSources(<FeedSource>[
+          const FeedSource(
+            id: 'a',
+            uri: 'https://example.test/a.mp4',
+            headers: <String, String>{'Authorization': 'second'},
+          ),
+        ]);
+
+        expect(platform.disposedControllerIds, isEmpty);
+        expect(controller.isReleased, isTrue);
+        expect(player.activeControllers, isEmpty);
+      },
+    );
+
+    test('dispose remains terminal when platform disposal fails', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController controller = await player.controllerFor('a');
+      platform.disposeError = StateError('dispose failed');
+
+      await expectLater(player.dispose(), throwsStateError);
+
+      expect(controller.isReleased, isTrue);
+      expect(player.sources, isEmpty);
+      expect(() => player.initialize(), throwsStateError);
+      expect(() => player.setSources(<FeedSource>[]), throwsStateError);
+      await expectLater(player.dispose(), throwsStateError);
+    });
+
+    test('uninitialized use is rejected', () async {
       final FeedPlayer fresh = FeedPlayer(platform: FakeFeedPlayerPlatform());
-      expect(() => fresh.setSources(<FeedSource>[]), throwsStateError);
+      await expectLater(fresh.setSources(<FeedSource>[]), throwsStateError);
     });
   });
 
@@ -354,6 +628,26 @@ void main() {
       expect(second.isReleased, isFalse);
     });
 
+    test(
+      'a delayed release event cannot release a replacement controller',
+      () async {
+        final FeedController first = await player.controllerFor('a');
+        await first.dispose();
+        final FeedController replacement = await player.controllerFor('a');
+
+        platform.releaseController.add(
+          ControllerReleaseEvent(
+            controllerId: first.controllerId,
+            reason: ControllerReleaseReason.evicted,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(replacement.isReleased, isFalse);
+        expect(player.activeControllers, contains(replacement));
+      },
+    );
+
     test('commands on a released controller throw', () async {
       final FeedController controller = await player.controllerFor('a');
       platform.releaseController.add(
@@ -383,6 +677,37 @@ void main() {
       expect(controller.releaseReason, ControllerReleaseReason.disposed);
     });
 
+    test('failed controller disposal does not mark it released', () async {
+      final FeedController controller = await player.controllerFor('a');
+      platform.disposeControllerError = StateError('dispose failed');
+
+      await expectLater(controller.dispose(), throwsStateError);
+
+      expect(controller.isReleased, isFalse);
+      expect(player.activeControllers, contains(controller));
+      platform.disposeControllerError = null;
+      await controller.dispose();
+      expect(controller.isReleased, isTrue);
+    });
+
+    test(
+      'overlapping controller disposal uses one platform operation',
+      () async {
+        final FeedController controller = await player.controllerFor('a');
+        final Completer<void> gate = Completer<void>();
+        platform.disposeControllerGate = gate;
+
+        final Future<void> first = controller.dispose();
+        final Future<void> second = controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(platform.disposedControllerIds, <int>[controller.controllerId]);
+        gate.complete();
+        await Future.wait(<Future<void>>[first, second]);
+        expect(controller.isReleased, isTrue);
+      },
+    );
+
     test('removeSources releases the matching controller', () async {
       final FeedController controller = await player.controllerFor('a');
       await player.removeSources(<String>['a']);
@@ -400,6 +725,42 @@ void main() {
       expect(a.isReleased, isTrue);
       expect(b.isReleased, isTrue);
       expect(player.activeControllers, isEmpty);
+    });
+  });
+
+  group('FeedPlayer stream errors', () {
+    late FakeFeedPlayerPlatform platform;
+    late FeedPlayer player;
+    final List<FlutterErrorDetails> reported = <FlutterErrorDetails>[];
+    void Function(FlutterErrorDetails)? previousHandler;
+
+    setUp(() {
+      platform = FakeFeedPlayerPlatform();
+      previousHandler = FlutterError.onError;
+      reported.clear();
+      FlutterError.onError = (FlutterErrorDetails details) {
+        reported.add(details);
+      };
+      player = FeedPlayer(platform: platform);
+    });
+
+    tearDown(() async {
+      FlutterError.onError = previousHandler;
+      await platform.releaseController.close();
+    });
+
+    test('lifecycle stream errors are reported, not unhandled', () async {
+      final Object error = StateError('lifecycle channel failed');
+
+      platform.releaseController.addError(error);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(reported, hasLength(1));
+      expect(reported.single.exception, same(error));
+      expect(reported.single.library, 'native_feed_player');
+      // The player remains usable after a stream error.
+      await player.initialize();
+      expect(player.config.maxActivePlayers, 3);
     });
   });
 }

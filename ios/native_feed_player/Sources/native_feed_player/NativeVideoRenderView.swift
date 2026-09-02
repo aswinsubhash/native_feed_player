@@ -18,12 +18,14 @@ final class NativeVideoRenderView: UIView {
 
   func setFit(_ fit: String?) {
     switch fit {
-    case "contain", "scaleDown":
+    case "contain", "fitWidth", "fitHeight", "none", "scaleDown":
       playerLayer.videoGravity = .resizeAspect
     case "fill":
       playerLayer.videoGravity = .resize
-    default:
+    case "cover", nil:
       playerLayer.videoGravity = .resizeAspectFill
+    default:
+      playerLayer.videoGravity = .resizeAspect
     }
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -33,6 +35,41 @@ void main() {
       ),
     );
   }
+
+  test(
+    'first frame observation starts when the controller is created',
+    () async {
+      final FeedController controller = await player.controllerFor('a');
+
+      platform.emitMetrics(
+        controllerId: controller.controllerId,
+        firstFrameLatencyMs: 75,
+      );
+
+      expect(
+        await controller.firstFrameRendered,
+        const Duration(milliseconds: 75),
+      );
+    },
+  );
+
+  test(
+    'first frame observation fails when the controller is released',
+    () async {
+      final FeedController controller = await player.controllerFor('a');
+      final Future<void> expectation = expectLater(
+        controller.firstFrameRendered,
+        throwsA(isA<ControllerReleasedError>()),
+      );
+
+      platform.emitRelease(
+        controllerId: controller.controllerId,
+        reason: ControllerReleaseReason.evicted,
+      );
+
+      await expectation;
+    },
+  );
 
   testWidgets('attaches a texture and renders it', (WidgetTester tester) async {
     final FeedController controller = await player.controllerFor('a');
@@ -180,6 +217,117 @@ void main() {
     expect(platform.attachedTextureControllerIds, <int>[
       first.controllerId,
       second.controllerId,
+    ]);
+  });
+
+  testWidgets(
+    'stale texture completion is detached before attaching the next',
+    (WidgetTester tester) async {
+      final FeedController first = await player.controllerFor('a');
+      final FeedController second = await player.controllerFor('b');
+      final Completer<int> attachment = Completer<int>();
+      platform.nextAttachTexture = attachment;
+
+      await tester.pumpWidget(await wrap(first));
+      await tester.pump();
+      await tester.pumpWidget(await wrap(second));
+      attachment.complete(1001);
+      await tester.pump();
+      await tester.pump();
+
+      expect(platform.attachmentOperations, <String>[
+        'attachTexture:${first.controllerId}',
+        'detachTexture:${first.controllerId}',
+        'attachTexture:${second.controllerId}',
+      ]);
+      expect(tester.widget<Texture>(find.byType(Texture)).textureId, 1002);
+    },
+  );
+
+  testWidgets('detach completes before a replacement texture attaches', (
+    WidgetTester tester,
+  ) async {
+    final FeedController first = await player.controllerFor('a');
+    final FeedController second = await player.controllerFor('b');
+    await tester.pumpWidget(await wrap(first));
+    await tester.pump();
+    final Completer<void> detachment = Completer<void>();
+    platform.nextDetachTexture = detachment;
+
+    await tester.pumpWidget(await wrap(second));
+    await tester.pump();
+
+    expect(platform.attachedTextureControllerIds, <int>[first.controllerId]);
+    detachment.complete();
+    await tester.pump();
+    await tester.pump();
+
+    expect(platform.attachedTextureControllerIds, <int>[
+      first.controllerId,
+      second.controllerId,
+    ]);
+  });
+
+  testWidgets('changing render mode rebinds the same controller', (
+    WidgetTester tester,
+  ) async {
+    final FeedController controller = await player.controllerFor('a');
+    await tester.pumpWidget(await wrap(controller));
+    await tester.pump();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NativeVideoView(
+          controller: controller,
+          renderMode: RenderMode.platformView,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pumpWidget(await wrap(controller));
+    await tester.pump();
+    await tester.pump();
+
+    expect(platform.detachedTextureControllerIds, <int>[
+      controller.controllerId,
+    ]);
+    expect(platform.attachedTextureControllerIds, <int>[
+      controller.controllerId,
+      controller.controllerId,
+    ]);
+  });
+
+  testWidgets('attachment failures are reported to Flutter', (
+    WidgetTester tester,
+  ) async {
+    final FeedController controller = await player.controllerFor('a');
+    platform.attachTextureError = StateError('attach failed');
+
+    await tester.pumpWidget(await wrap(controller));
+    await tester.pump();
+
+    expect(tester.takeException(), isA<StateError>());
+    expect(find.byType(Texture), findsNothing);
+  });
+
+  testWidgets('released controllers clear their texture output', (
+    WidgetTester tester,
+  ) async {
+    final FeedController controller = await player.controllerFor('a');
+    await tester.pumpWidget(await wrap(controller));
+    await tester.pump();
+
+    platform.emitRelease(
+      controllerId: controller.controllerId,
+      reason: ControllerReleaseReason.evicted,
+    );
+    await controller.onReleased;
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(Texture), findsNothing);
+    expect(platform.detachedTextureControllerIds, <int>[
+      controller.controllerId,
     ]);
   });
 

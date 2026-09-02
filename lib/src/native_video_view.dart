@@ -42,10 +42,16 @@ class _NativeVideoViewState extends State<NativeVideoView> {
 
   int? _viewId;
   int? _textureId;
+  int? _attachedViewId;
   FeedController? _attachedController;
+  RenderMode? _attachedMode;
   StreamSubscription<VideoSize>? _videoSizeSub;
+  Future<void> _attachmentQueue = Future<void>.value();
   VideoSize _videoSize = VideoSize.zero;
   bool _hasFirstFrame = false;
+  bool _disposed = false;
+  int _generation = 0;
+  int _observationGeneration = 0;
 
   bool get _usesTexture => widget.renderMode == RenderMode.texture;
 
@@ -61,115 +67,268 @@ class _NativeVideoViewState extends State<NativeVideoView> {
     super.initState();
     _observe(widget.controller);
     if (_usesTexture) {
-      unawaited(_attachTexture(widget.controller));
+      _scheduleReconcile();
     }
   }
 
   @override
   void didUpdateWidget(covariant NativeVideoView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller.controllerId == widget.controller.controllerId) {
+    final bool controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
+    final bool modeChanged = oldWidget.renderMode != widget.renderMode;
+    if (!controllerChanged && !modeChanged) {
       return;
     }
-    _observe(widget.controller);
-    if (_usesTexture) {
-      _textureId = null;
-      unawaited(
-        _detach(
-          oldWidget.controller,
-        ).then((_) => _attachTexture(widget.controller)),
-      );
-      return;
+    _generation += 1;
+    _textureId = null;
+    if (modeChanged) {
+      _viewId = null;
     }
-    // Attach after the platform view is created.
-    unawaited(_rebind(previous: oldWidget.controller));
+    if (controllerChanged) {
+      _observe(widget.controller);
+    }
+    _scheduleReconcile();
   }
 
   @override
   void dispose() {
-    unawaited(_videoSizeSub?.cancel());
-    final FeedController? attached = _attachedController;
-    if (attached != null) {
-      unawaited(_detach(attached));
+    _disposed = true;
+    _generation += 1;
+    _observationGeneration += 1;
+    _textureId = null;
+    final Future<void>? cancellation = _videoSizeSub?.cancel();
+    if (cancellation != null) {
+      unawaited(
+        cancellation.catchError((Object error, StackTrace stackTrace) {
+          _reportAsyncError(error, stackTrace, 'cancelling video size updates');
+        }),
+      );
     }
+    _videoSizeSub = null;
+    _enqueueAttachment(_detachCurrent);
     super.dispose();
   }
 
   void _observe(FeedController controller) {
-    unawaited(_videoSizeSub?.cancel());
+    final int observation = ++_observationGeneration;
+    final Future<void>? cancellation = _videoSizeSub?.cancel();
+    if (cancellation != null) {
+      unawaited(
+        cancellation.catchError((Object error, StackTrace stackTrace) {
+          _reportAsyncError(error, stackTrace, 'cancelling video size updates');
+        }),
+      );
+    }
     _videoSize = VideoSize.zero;
     _hasFirstFrame = false;
 
-    _videoSizeSub = controller.videoSizeStream.listen((VideoSize size) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _videoSize = size);
-    });
+    _videoSizeSub = controller.videoSizeStream.listen(
+      (VideoSize size) {
+        if (!_isObserved(controller, observation)) {
+          return;
+        }
+        setState(() => _videoSize = size);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        _reportAsyncError(error, stackTrace, 'observing video size');
+      },
+    );
 
     unawaited(
-      controller.firstFrameRendered
-          .then((_) {
-            if (mounted && identical(widget.controller, controller)) {
-              setState(() => _hasFirstFrame = true);
-            }
-          })
-          .catchError((_) {
-            // Preserve the placeholder after a pre-frame release.
-          }),
+      controller.firstFrameRendered.then<void>(
+        (_) {
+          if (_isObserved(controller, observation)) {
+            setState(() => _hasFirstFrame = true);
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          // Preserve the placeholder after a pre-frame release.
+        },
+      ),
+    );
+    unawaited(
+      controller.onReleased.then((_) {
+        if (!_isObserved(controller, observation)) {
+          return;
+        }
+        _observationGeneration += 1;
+        final Future<void>? cancellation = _videoSizeSub?.cancel();
+        if (cancellation != null) {
+          unawaited(
+            cancellation.catchError((Object error, StackTrace stackTrace) {
+              _reportAsyncError(
+                error,
+                stackTrace,
+                'cancelling released video updates',
+              );
+            }),
+          );
+        }
+        _videoSizeSub = null;
+        if (mounted && !_disposed) {
+          setState(() {
+            _textureId = null;
+            _videoSize = VideoSize.zero;
+            _hasFirstFrame = false;
+          });
+        }
+        _scheduleReconcile();
+      }),
     );
   }
 
-  Future<void> _rebind({FeedController? previous}) async {
-    final int? viewId = _viewId;
-    if (previous != null && identical(_attachedController, previous)) {
-      await _detach(previous);
-    }
-    if (viewId == null) {
-      return;
-    }
-    await _attach(widget.controller, viewId);
+  bool _isObserved(FeedController controller, int observation) =>
+      mounted &&
+      !_disposed &&
+      observation == _observationGeneration &&
+      identical(widget.controller, controller);
+
+  void _scheduleReconcile() {
+    final int generation = _generation;
+    final FeedController controller = widget.controller;
+    final RenderMode mode = widget.renderMode;
+    final int? viewId = mode == RenderMode.platformView ? _viewId : null;
+    _enqueueAttachment(
+      () => _reconcile(
+        generation: generation,
+        controller: controller,
+        mode: mode,
+        viewId: viewId,
+      ),
+    );
   }
 
-  Future<void> _attach(FeedController controller, int viewId) async {
-    if (controller.isReleased) {
+  void _enqueueAttachment(Future<void> Function() operation) {
+    _attachmentQueue = _attachmentQueue.then((_) => operation()).catchError((
+      Object error,
+      StackTrace stackTrace,
+    ) {
+      _reportAsyncError(error, stackTrace, 'updating the video attachment');
+    });
+  }
+
+  Future<void> _reconcile({
+    required int generation,
+    required FeedController controller,
+    required RenderMode mode,
+    required int? viewId,
+  }) async {
+    final bool attachmentMatches =
+        identical(_attachedController, controller) &&
+        _attachedMode == mode &&
+        (mode == RenderMode.texture || _attachedViewId == viewId);
+    if (!attachmentMatches || controller.isReleased) {
+      await _detachCurrent();
+    } else {
       return;
     }
-    _attachedController = controller;
+
+    if (!_isCurrent(generation, controller, mode, viewId)) {
+      return;
+    }
+
+    if (mode == RenderMode.texture) {
+      final int textureId = await controller.platform.attachTexture(
+        controller.controllerId,
+      );
+      if (!_isCurrent(generation, controller, mode, viewId)) {
+        await controller.platform.detachTexture(controller.controllerId);
+        return;
+      }
+      _attachedController = controller;
+      _attachedMode = mode;
+      _attachedViewId = null;
+      setState(() => _textureId = textureId);
+      return;
+    }
+
+    if (viewId == null) {
+      // Attach after the platform view is created.
+      return;
+    }
     await controller.platform.attachView(
       controllerId: controller.controllerId,
       viewId: viewId,
     );
-  }
-
-  Future<void> _detach(FeedController controller) async {
-    if (identical(_attachedController, controller)) {
-      _attachedController = null;
-    }
-    if (_usesTexture) {
-      await controller.platform.detachTexture(controller.controllerId);
-      return;
-    }
-    await controller.platform.detachView(controllerId: controller.controllerId);
-  }
-
-  Future<void> _attachTexture(FeedController controller) async {
-    if (controller.isReleased) {
+    if (!_isCurrent(generation, controller, mode, viewId)) {
+      await controller.platform.detachView(
+        controllerId: controller.controllerId,
+      );
       return;
     }
     _attachedController = controller;
-    final int textureId = await controller.platform.attachTexture(
-      controller.controllerId,
-    );
-    if (!mounted || !identical(widget.controller, controller)) {
-      return;
-    }
-    setState(() => _textureId = textureId);
+    _attachedMode = mode;
+    _attachedViewId = viewId;
   }
 
-  Future<void> _onPlatformViewCreated(int viewId) async {
+  bool _isCurrent(
+    int generation,
+    FeedController controller,
+    RenderMode mode,
+    int? viewId,
+  ) =>
+      mounted &&
+      !_disposed &&
+      generation == _generation &&
+      identical(widget.controller, controller) &&
+      widget.renderMode == mode &&
+      !controller.isReleased &&
+      (mode == RenderMode.texture || _viewId == viewId);
+
+  Future<void> _detachCurrent() async {
+    final FeedController? controller = _attachedController;
+    final RenderMode? mode = _attachedMode;
+    if (controller == null || mode == null) {
+      return;
+    }
+    if (mode == RenderMode.texture) {
+      await controller.platform.detachTexture(controller.controllerId);
+    } else {
+      await controller.platform.detachView(
+        controllerId: controller.controllerId,
+      );
+    }
+    if (identical(_attachedController, controller) && _attachedMode == mode) {
+      _attachedController = null;
+      _attachedMode = null;
+      _attachedViewId = null;
+    }
+  }
+
+  void _onPlatformViewCreated(
+    int viewId,
+    int generation,
+    FeedController controller,
+  ) {
+    if (!mounted ||
+        _disposed ||
+        generation != _generation ||
+        !identical(widget.controller, controller) ||
+        widget.renderMode != RenderMode.platformView ||
+        controller.isReleased) {
+      return;
+    }
+    _generation += 1;
     _viewId = viewId;
-    await _attach(widget.controller, viewId);
+    _scheduleReconcile();
+  }
+
+  void _reportAsyncError(
+    Object error,
+    StackTrace stackTrace,
+    String operation,
+  ) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'native_feed_player',
+        context: ErrorDescription('while $operation'),
+      ),
+    );
   }
 
   Widget _buildOutput() {
@@ -180,12 +339,18 @@ class _NativeVideoViewState extends State<NativeVideoView> {
           : Texture(textureId: textureId);
     }
 
+    final int generation = _generation;
+    final FeedController controller = widget.controller;
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
+        // Android renders through a TextureView scaled by the FittedBox
+        // above, so unlike iOS there is no native fit to forward and no
+        // reason to recreate the platform view when the fit changes.
         return AndroidView(
           viewType: _viewType,
           creationParamsCodec: const StandardMessageCodec(),
-          onPlatformViewCreated: _onPlatformViewCreated,
+          onPlatformViewCreated: (int viewId) =>
+              _onPlatformViewCreated(viewId, generation, controller),
         );
       case TargetPlatform.iOS:
         return UiKitView(
@@ -193,7 +358,8 @@ class _NativeVideoViewState extends State<NativeVideoView> {
           viewType: _viewType,
           creationParams: <String, Object>{'fit': _effectiveFit.name},
           creationParamsCodec: const StandardMessageCodec(),
-          onPlatformViewCreated: _onPlatformViewCreated,
+          onPlatformViewCreated: (int viewId) =>
+              _onPlatformViewCreated(viewId, generation, controller),
         );
       case TargetPlatform.fuchsia:
       case TargetPlatform.linux:

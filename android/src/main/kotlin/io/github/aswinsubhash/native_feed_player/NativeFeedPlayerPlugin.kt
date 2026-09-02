@@ -6,9 +6,22 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
+import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicInteger
+
+internal fun removeControllerViewMappings(
+    attachedControllerByViewId: MutableMap<Int, Int>,
+    controllerId: Int
+) {
+    attachedControllerByViewId.entries.removeAll { it.value == controllerId }
+}
 
 class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPlayerHostApi {
     private companion object {
@@ -16,11 +29,19 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
 
         /** Process-wide IDs prevent collisions after engine reattachment. */
         private val controllerIdSeed = AtomicInteger(0)
+
+        val ENGINE_DETACHED_ERROR: FlutterError = FlutterError(
+            "engine_detached",
+            "NativeFeedPlayerPlugin was detached from the Flutter engine.",
+            null
+        )
     }
 
     private var appContext: Context? = null
     private var exoPlayerManager: ExoPlayerManager? = null
     private var binaryMessenger: BinaryMessenger? = null
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    private var cacheExecutor: ExecutorService? = null
 
     private val stateEvents = BufferedStreamHandler<PlaybackStateEvent>()
     private val positionEvents = BufferedStreamHandler<PositionEvent>()
@@ -36,11 +57,16 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private val videoViews = PlatformViewRegistry<Int, NativeVideoPlatformView>()
     private val attachedControllerByViewId = mutableMapOf<Int, Int>()
     private var textureOutputs: TextureOutputRegistry? = null
+    private val pendingCacheOperations = PendingCacheOperations()
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
+        pendingCacheOperations.attach()
         appContext = flutterPluginBinding.applicationContext
         appContext?.registerComponentCallbacks(this)
         binaryMessenger = flutterPluginBinding.binaryMessenger
+        cacheExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "native-feed-player-cache")
+        }
         textureOutputs = TextureOutputRegistry(flutterPluginBinding.textureRegistry)
 
         flutterPluginBinding.platformViewRegistry.registerViewFactory(
@@ -85,6 +111,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
                 )
             },
             onReleased = { controllerId, reason ->
+                releaseControllerOutputs(controllerId)
                 lifecycleEvents.emit(
                     ControllerLifecycleEvent(
                         controllerId = controllerId.toLong(),
@@ -94,8 +121,13 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             },
             onPosition = { event -> positionEvents.emit(event) },
             onMetrics = { event -> metricsEvents.emit(event) },
-            onVideoSize = { event -> videoSizeEvents.emit(event) }
+            onVideoSize = { event -> videoSizeEvents.emit(event) },
+            cacheExecutor = cacheExecutor ?: Executor { it.run() }
         )
+
+        // Share one process-wide cache across engines; the last detach
+        // releases the SimpleCache directory lock.
+        MediaCache.retain()
 
         registerActivityCallbacks(flutterPluginBinding.applicationContext)
 
@@ -113,15 +145,22 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         appContext = null
         exoPlayerManager?.disposeAll()
         exoPlayerManager = null
+        // Fail pending cache replies before the messenger goes away so Dart
+        // futures resolve deterministically; late worker results are dropped.
+        pendingCacheOperations.detach()
+        cacheExecutor?.shutdownNow()
+        cacheExecutor = null
         videoViews.clear()
         attachedControllerByViewId.clear()
         textureViewPool.clear()
         stateEvents.detach()
         positionEvents.detach()
         metricsEvents.detach()
+        videoSizeEvents.detach()
         lifecycleEvents.detach()
         NativeFeedPlayerHostApi.setUp(binaryMessenger = binding.binaryMessenger, api = null)
         binaryMessenger = null
+        MediaCache.release()
     }
 
     override fun initialize(config: FeedPlayerConfigMessage) {
@@ -164,6 +203,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     override fun disposeController(request: ControllerRequest) {
         val controllerId = request.controllerId.toInt()
         if (controllerId > 0) {
+            releaseControllerOutputs(controllerId)
             managerOrThrow().disposeController(controllerId)
         }
     }
@@ -213,18 +253,40 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         managerOrThrow().setVisibleSource(request.sourceId)
     }
 
-    override fun evictCachedMedia(request: SourceIdsRequest) {
-        managerOrThrow().evictCachedMedia(request.sourceIds)
+    override fun evictCachedMedia(
+        request: SourceIdsRequest,
+        callback: (Result<Unit>) -> Unit
+    ) {
+        val manager = managerOrThrow()
+        val evictAll = request.sourceIds.isEmpty()
+        val sourceIdentities = manager.cacheIdentities(request.sourceIds)
+        runCacheOperation(callback) {
+            if (evictAll) {
+                MediaCache.evictAll()
+            } else {
+                sourceIdentities.forEach(MediaCache::evict)
+            }
+        }
     }
 
-    override fun clearMediaCache() {
-        managerOrThrow().clearMediaCache()
+    override fun clearMediaCache(callback: (Result<Unit>) -> Unit) {
+        managerOrThrow()
+        runCacheOperation(callback) { MediaCache.evictAll() }
     }
 
-    override fun cacheStatus(request: VisibleSourceRequest): CacheStatusMessage =
-        managerOrThrow().cacheStatus(request.sourceId)
+    override fun cacheStatus(
+        request: VisibleSourceRequest,
+        callback: (Result<CacheStatusMessage>) -> Unit
+    ) {
+        val manager = managerOrThrow()
+        val sourceIdentity = manager.cacheIdentity(request.sourceId)
+        runCacheOperation(callback) { manager.cacheStatus(request.sourceId, sourceIdentity) }
+    }
 
-    override fun cacheUsageBytes(): Long = managerOrThrow().cacheUsageBytes()
+    override fun cacheUsageBytes(callback: (Result<Long>) -> Unit) {
+        managerOrThrow()
+        runCacheOperation(callback) { MediaCache.usageBytes() }
+    }
 
     override fun attachView(request: AttachViewRequest) {
         val controllerId = request.controllerId.toInt()
@@ -245,6 +307,16 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         if (previousController != null && previousController != controllerId) {
             manager.detachControllerFromView(previousController)
         }
+
+        val staleViewIds = attachedControllerByViewId
+            .filterValues { it == controllerId }
+            .keys
+            .filter { it != viewId }
+        manager.detachControllerFromView(controllerId)
+        for (staleViewId in staleViewIds) {
+            attachedControllerByViewId.remove(staleViewId)
+        }
+
         attachedControllerByViewId[viewId] = controllerId
         manager.attachControllerToView(controllerId, view.textureView)
     }
@@ -294,6 +366,47 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         textureOutputs?.clear { controllerId, _ -> manager?.unbindSurface(controllerId) }
     }
 
+    /** Removes every native output before Dart observes the controller release. */
+    private fun releaseControllerOutputs(controllerId: Int) {
+        val manager = exoPlayerManager
+        textureOutputs?.detach(controllerId) { manager?.unbindSurface(controllerId) }
+        manager?.detachControllerFromView(controllerId)
+        removeControllerViewMappings(attachedControllerByViewId, controllerId)
+    }
+
+    private fun <T> runCacheOperation(
+        callback: (Result<T>) -> Unit,
+        operation: () -> T
+    ) {
+        val executor = cacheExecutor
+        if (executor == null) {
+            callback(Result.failure(FlutterError("not_attached", "Cache executor is unavailable.", null)))
+            return
+        }
+        val token = pendingCacheOperations.register(
+            onDetached = { callback(Result.failure(ENGINE_DETACHED_ERROR)) }
+        )
+        if (token == null) {
+            callback(Result.failure(ENGINE_DETACHED_ERROR))
+            return
+        }
+        try {
+            executor.execute {
+                val result = runCatching(operation)
+                mainHandler.post {
+                    // Deliver only if detach did not already fail this reply.
+                    if (pendingCacheOperations.complete(token)) {
+                        callback(result)
+                    }
+                }
+            }
+        } catch (error: RejectedExecutionException) {
+            if (pendingCacheOperations.complete(token)) {
+                callback(Result.failure(error))
+            }
+        }
+    }
+
     override fun onTrimMemory(level: Int) {
         exoPlayerManager?.onTrimMemory(level)
     }
@@ -330,7 +443,13 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
             override fun onActivityResumed(activity: Activity) = Unit
             override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-            override fun onActivityDestroyed(activity: Activity) = Unit
+
+            override fun onActivityDestroyed(activity: Activity) {
+                // Pooled TextureViews retain the activity context; dropping
+                // them prevents the destroyed activity from leaking across
+                // configuration changes.
+                textureViewPool.clear()
+            }
         }
         application.registerActivityLifecycleCallbacks(callbacks)
         activityCallbacks = callbacks
@@ -378,5 +497,6 @@ private fun FeedSourceMessage.toRegisteredSource(): RegisteredSource = Registere
     uri = uri,
     rank = rank.toInt(),
     kind = kind,
-    headers = headers
+    headers = headers,
+    cacheKey = cacheKey
 )

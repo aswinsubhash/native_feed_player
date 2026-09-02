@@ -1,17 +1,18 @@
 # native_feed_player_example
 
-Demonstrates how to use the native_feed_player plugin.
+Demonstrates feed-oriented native video playback, both render modes, controller
+lifecycle handling, preloading, caching, and playback metrics.
 
-## Getting Started
+## Run
 
-This project is a starting point for a Flutter application.
+```bash
+flutter run
+```
 
-A few resources to get you started if this is your first Flutter project:
+Native integration tests use `assets/test_clip.mp4`, a one-second low-quality
+transcode of Flutter's standard gallery bee video, served from an in-process
+range-capable HTTP server so playback does not depend on external networking.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+flutter test integration_test/plugin_integration_test.dart -d <device-id>
+```

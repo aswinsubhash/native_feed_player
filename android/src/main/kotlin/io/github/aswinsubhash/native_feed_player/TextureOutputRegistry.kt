@@ -3,13 +3,29 @@ package io.github.aswinsubhash.native_feed_player
 import android.view.Surface
 import io.flutter.view.TextureRegistry
 
+internal class TextureOutput(
+    val id: Long,
+    val surface: Surface,
+    val release: () -> Unit
+)
+
 /** Maps ExoPlayer surfaces to Flutter texture entries. */
 internal class TextureOutputRegistry(
-    private val textureRegistry: TextureRegistry
+    private val createOutput: () -> TextureOutput
 ) {
-    private class TextureOutput(
-        val entry: TextureRegistry.SurfaceTextureEntry,
-        val surface: Surface
+    constructor(textureRegistry: TextureRegistry) : this(
+        createOutput = {
+            val entry = textureRegistry.createSurfaceTexture()
+            val surface = Surface(entry.surfaceTexture())
+            TextureOutput(
+                id = entry.id(),
+                surface = surface,
+                release = {
+                    surface.release()
+                    entry.release()
+                }
+            )
+        }
     )
 
     private val outputsByController = mutableMapOf<Int, TextureOutput>()
@@ -18,28 +34,25 @@ internal class TextureOutputRegistry(
     fun attach(controllerId: Int, bindSurface: (Surface) -> Unit): Long {
         outputsByController[controllerId]?.let { existing ->
             bindSurface(existing.surface)
-            return existing.entry.id()
+            return existing.id
         }
 
-        val entry = textureRegistry.createSurfaceTexture()
-        val surface = Surface(entry.surfaceTexture())
-        outputsByController[controllerId] = TextureOutput(entry = entry, surface = surface)
-        bindSurface(surface)
-        return entry.id()
+        val output = createOutput()
+        outputsByController[controllerId] = output
+        bindSurface(output.surface)
+        return output.id
     }
 
     fun detach(controllerId: Int, unbindSurface: (Surface) -> Unit) {
         val output = outputsByController.remove(controllerId) ?: return
         unbindSurface(output.surface)
-        output.surface.release()
-        output.entry.release()
+        output.release()
     }
 
     fun clear(unbindSurface: (Int, Surface) -> Unit) {
         for ((controllerId, output) in outputsByController) {
             unbindSurface(controllerId, output.surface)
-            output.surface.release()
-            output.entry.release()
+            output.release()
         }
         outputsByController.clear()
     }

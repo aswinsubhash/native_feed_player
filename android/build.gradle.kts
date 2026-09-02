@@ -4,15 +4,13 @@ version = "1.0-SNAPSHOT"
 val media3Version = "1.11.0"
 
 buildscript {
-    val kotlinVersion = "2.2.20"
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:8.11.1")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
+        classpath("com.android.tools.build:gradle:9.1.0")
     }
 }
 
@@ -25,7 +23,6 @@ allprojects {
 
 plugins {
     id("com.android.library")
-    id("kotlin-android")
 }
 
 android {
@@ -36,19 +33,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
-    sourceSets {
-        getByName("main") {
-            java.srcDirs("src/main/kotlin")
-        }
-        getByName("test") {
-            java.srcDirs("src/test/kotlin")
-        }
     }
 
     defaultConfig {
@@ -72,6 +56,12 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
 dependencies {
     // 1.11.0 brings DefaultPreloadManager, which preloads at the MediaSource
     // level instead of requiring a whole ExoPlayer per upcoming item.
@@ -80,6 +70,12 @@ dependencies {
     implementation("androidx.media3:media3-datasource:$media3Version")
     implementation("androidx.media3:media3-database:$media3Version")
 
-    testImplementation("org.jetbrains.kotlin:kotlin-test")
-    testImplementation("org.mockito:mockito-core:5.0.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.2.10")
+    testImplementation("org.mockito:mockito-core:5.23.0")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.13.4")
+    // Real-manager lifecycle tests run on the JVM through Robolectric.
+    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation("junit:junit:4.13.2")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.13.4")
+    testImplementation("androidx.test:core:1.6.1")
 }

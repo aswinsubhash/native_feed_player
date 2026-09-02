@@ -172,11 +172,50 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
     if let binaryMessenger {
       NativeFeedPlayerHostApiSetup.setUp(binaryMessenger: binaryMessenger, api: nil)
+      self.binaryMessenger = nil
     }
-    videoViews.removeAll()
-    attachedControllerByViewId.removeAll()
-    renderViewPool.clear()
-    manager?.disposeAll()
+    // Texture and view teardown touches UIKit and the texture registry;
+    // deinit can run on any thread, so hop everything to main. detachFromEngine
+    // is the primary teardown path and already ran this on the platform thread.
+    let manager = self.manager
+    let textureOutputs = self.textureOutputs
+    let videoViews = self.videoViews
+    let renderViewPool = self.renderViewPool
+    if Thread.isMainThread {
+      textureOutputs?.clear()
+      manager?.disposeAll()
+      videoViews.removeAll()
+      attachedControllerByViewId.removeAll()
+      renderViewPool.clear()
+    } else {
+      DispatchQueue.main.async {
+        textureOutputs?.clear()
+        manager?.disposeAll()
+        videoViews.removeAll()
+        renderViewPool.clear()
+      }
+      attachedControllerByViewId.removeAll()
+    }
+  }
+
+  public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
+    if let observer = memoryWarningObserver {
+      NotificationCenter.default.removeObserver(observer)
+      memoryWarningObserver = nil
+    }
+    try? disposeAll()
+    stateEvents.detach()
+    positionEvents.detach()
+    metricsEvents.detach()
+    videoSizeEvents.detach()
+    lifecycleEvents.detach()
+    if let binaryMessenger {
+      NativeFeedPlayerHostApiSetup.setUp(binaryMessenger: binaryMessenger, api: nil)
+    }
+    binaryMessenger = nil
+    textureOutputs = nil
+    // deinit must not tear the manager down a second time.
+    manager = nil
   }
 
   // MARK: - Host API
@@ -193,11 +232,19 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
   }
 
   func setSources(sources: [FeedSourceMessage]) throws {
-    try managerOrThrow().setSources(sources.map { $0.toRegisteredSource() })
+    do {
+      try managerOrThrow().setSources(sources.map { $0.toRegisteredSource() })
+    } catch let error as AVPlayerManager.PlaybackSetupError {
+      throw PigeonError(code: error.code, message: error.message, details: nil)
+    }
   }
 
   func appendSources(sources: [FeedSourceMessage]) throws {
-    try managerOrThrow().appendSources(sources.map { $0.toRegisteredSource() })
+    do {
+      try managerOrThrow().appendSources(sources.map { $0.toRegisteredSource() })
+    } catch let error as AVPlayerManager.PlaybackSetupError {
+      throw PigeonError(code: error.code, message: error.message, details: nil)
+    }
   }
 
   func removeSources(request: SourceIdsRequest) throws {
@@ -294,20 +341,50 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     try managerOrThrow().setVisibleSource(request.sourceId)
   }
 
-  func evictCachedMedia(request: SourceIdsRequest) throws {
-    try managerOrThrow().evictCachedMedia(request.sourceIds)
+  func evictCachedMedia(
+    request: SourceIdsRequest,
+    completion: @escaping (Result<Void, Error>) -> Void
+  ) {
+    do {
+      try managerOrThrow().evictCachedMedia(request.sourceIds) {
+        DispatchQueue.main.async { completion(.success(())) }
+      }
+    } catch {
+      DispatchQueue.main.async { completion(.failure(error)) }
+    }
   }
 
-  func clearMediaCache() throws {
-    try managerOrThrow().clearMediaCache()
+  func clearMediaCache(completion: @escaping (Result<Void, Error>) -> Void) {
+    do {
+      try managerOrThrow().clearMediaCache {
+        DispatchQueue.main.async { completion(.success(())) }
+      }
+    } catch {
+      DispatchQueue.main.async { completion(.failure(error)) }
+    }
   }
 
-  func cacheStatus(request: VisibleSourceRequest) throws -> CacheStatusMessage {
-    try managerOrThrow().cacheStatus(sourceId: request.sourceId)
+  func cacheStatus(
+    request: VisibleSourceRequest,
+    completion: @escaping (Result<CacheStatusMessage, Error>) -> Void
+  ) {
+    do {
+      try managerOrThrow().cacheStatus(sourceId: request.sourceId) { status in
+        DispatchQueue.main.async { completion(.success(status)) }
+      }
+    } catch {
+      DispatchQueue.main.async { completion(.failure(error)) }
+    }
   }
 
-  func cacheUsageBytes() throws -> Int64 {
-    try managerOrThrow().cacheUsageBytes()
+  func cacheUsageBytes(completion: @escaping (Result<Int64, Error>) -> Void) {
+    do {
+      try managerOrThrow().cacheUsageBytes { bytes in
+        DispatchQueue.main.async { completion(.success(bytes)) }
+      }
+    } catch {
+      DispatchQueue.main.async { completion(.failure(error)) }
+    }
   }
 
   func attachView(request: AttachViewRequest) throws {
@@ -332,6 +409,15 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     if let previous = attachedControllerByViewId[viewId], previous != controllerId {
       manager.detach(controllerId: previous)
     }
+    // A controller can render into only one platform view. Remove stale plugin
+    // mappings when Flutter reuses/replaces a view before disposal arrives.
+    let staleViewIds = attachedControllerByViewId.compactMap { otherViewId, attached in
+      attached == controllerId && otherViewId != viewId ? otherViewId : nil
+    }
+    for staleViewId in staleViewIds {
+      videoViews[staleViewId]?.renderView.setPlayer(nil)
+      attachedControllerByViewId.removeValue(forKey: staleViewId)
+    }
     attachedControllerByViewId[viewId] = controllerId
     manager.attach(controllerId: controllerId, renderView: platformView.renderView)
   }
@@ -343,7 +429,11 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     }
     let manager = try managerOrThrow()
     manager.detach(controllerId: controllerId)
-    for (viewId, attached) in attachedControllerByViewId where attached == controllerId {
+    let attachedViewIds = attachedControllerByViewId.compactMap { viewId, attached in
+      attached == controllerId ? viewId : nil
+    }
+    for viewId in attachedViewIds {
+      videoViews[viewId]?.renderView.setPlayer(nil)
       attachedControllerByViewId.removeValue(forKey: viewId)
     }
   }
@@ -357,14 +447,21 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
         details: nil
       )
     }
-    guard let player = try managerOrThrow().player(for: controllerId) else {
+    let manager = try managerOrThrow()
+    guard let player = manager.player(for: controllerId) else {
       throw PigeonError(
         code: "controller_not_found",
         message: "No live controller with id=\(controllerId).",
         details: nil
       )
     }
-    return textureOutputs.attach(controllerId: controllerId, player: player)
+    return textureOutputs.attach(
+      controllerId: controllerId,
+      player: player,
+      onFirstPixel: { [weak manager] in
+        manager?.markTextureFirstFrame(controllerId: controllerId)
+      }
+    )
   }
 
   func detachTexture(request: ControllerRequest) throws {
@@ -415,9 +512,7 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
       },
       onReleased: { [weak self] controllerId, reason in
         self?.onMain {
-          self?.lifecycleEvents.emit(
-            ControllerLifecycleEvent(controllerId: Int64(controllerId), reason: reason)
-          )
+          self?.handleManagerRelease(controllerId: controllerId, reason: reason)
         }
       },
       onPosition: { [weak self] event in
@@ -450,6 +545,22 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
     } else {
       DispatchQueue.main.async(execute: work)
     }
+  }
+
+  /// A manager release must sever every Flutter rendering edge before Dart is
+  /// told that the controller is gone.
+  private func handleManagerRelease(controllerId: Int, reason: ReleaseReasonMessage) {
+    textureOutputs?.detach(controllerId: controllerId)
+    let staleViewIds = attachedControllerByViewId.compactMap { viewId, attached in
+      attached == controllerId ? viewId : nil
+    }
+    for viewId in staleViewIds {
+      videoViews[viewId]?.renderView.setPlayer(nil)
+      attachedControllerByViewId.removeValue(forKey: viewId)
+    }
+    lifecycleEvents.emit(
+      ControllerLifecycleEvent(controllerId: Int64(controllerId), reason: reason)
+    )
   }
 
   private func handleVideoViewCreated(viewId: Int64, view: NativeVideoPlatformView) {
@@ -489,7 +600,8 @@ extension FeedSourceMessage {
       uri: uri,
       rank: Int(rank),
       kind: kind,
-      headers: headers
+      headers: headers,
+      cacheKey: cacheKey
     )
   }
 }

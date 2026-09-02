@@ -77,7 +77,8 @@ about the API.
 
 Only one native playback session is active per Flutter engine. Initializing a
 new `FeedPlayer` releases controllers and outputs from the previous session,
-including after a Flutter hot restart.
+including after a Flutter hot restart. Calling `dispose()` is terminal for that
+`FeedPlayer`; create a new instance for a later session.
 
 Controllers therefore fail loudly rather than silently:
 
@@ -126,14 +127,34 @@ await player.initialize(
 | `cache.maxBytes` | `256 MB` | LRU. Conservative so it stays safe on low-storage devices. |
 | `audio.muted` | `false` | Set to `true` for feeds that should start silently. |
 | `audio.handleAudioFocus` | `true` | Requests appropriate platform audio focus while playback is audible. |
+| `audio.manageAudioSession` | `true` | iOS only. When `false`, the plugin never reconfigures `AVAudioSession`; the host app owns category, mode, and activation. |
 
-Call `setVisibleSource` on scroll settle (or throttled during scroll) so the
-scheduler can infer direction and rank work correctly.
+Invalid tuning is rejected with `ArgumentError` in debug and release builds.
+Call `setVisibleSource` only with a registered source id, on scroll settle (or
+throttled during scroll), so the scheduler can infer direction and rank work
+correctly.
 
 ## Caching
 
 Cached bytes are reused across sessions, so a second pass over a feed avoids the
-network.
+network. Cache entries are partitioned by a SHA-256 identity derived from the URI
+and canonical request headers. Raw authorization headers are never stored in
+cache keys or metadata; rotating a token intentionally creates a new partition.
+
+Sources whose URIs carry volatile query parameters (signed or expiring URLs) can
+opt out of that partitioning with `FeedSource.cacheKey`: when set, it replaces
+the URI in the identity so every rotation of the signature shares one cache
+entry. Headers remain part of the identity either way. Changing `cacheKey`
+changes the source's identity, so `setSources` releases and re-creates any live
+controller for it — the same treatment as a `uri` change.
+
+```dart
+FeedSource(
+  id: 'clip-1',
+  uri: 'https://cdn.example.com/one.mp4?sig=rotating-token',
+  cacheKey: 'clip-1',
+)
+```
 
 ```dart
 await player.cacheUsageBytes();
@@ -149,8 +170,14 @@ await player.clearMediaCache();
 | Progressive (mp4/mov) | Cached | Cached |
 | HLS | Cached | **Not cached** |
 
+Authenticated iOS HLS must use signed URLs or cookies. Custom `FeedSource.headers`
+are rejected for HLS because AVFoundation exposes no public API that guarantees
+those headers on every playlist and segment request.
+
 Android caches through Media3's `CacheDataSource`, which sits below format
-handling. iOS caches through an `AVAssetResourceLoaderDelegate`, and
+handling. Per-source headers are applied to progressive files and every HLS
+playlist, segment, and key request. iOS caches through an
+`AVAssetResourceLoaderDelegate`, and
 AVFoundation resolves HLS playlists and segments internally where a
 resource-loader shim cannot reach them. HLS on iOS plays from the network with a
 tuned forward buffer instead.
@@ -201,6 +228,7 @@ controller.metricsStream.listen((m) => print(m.firstFrameLatency));
 ## Limitations
 
 - HLS is not disk-cached on iOS (see [Caching](#caching)).
+- iOS HLS sources with custom headers are rejected; use signed URLs or cookies.
 - The default render mode is unmeasured (see [Rendering](#rendering)).
 - No DRM, subtitles, or explicit track-selection APIs.
 - Android and iOS only; other platforms throw `UnsupportedPlatformError`.
@@ -215,13 +243,7 @@ Commands and events are generated. After editing
 `pigeons/native_feed_player_messages.dart`:
 
 ```bash
-dart run pigeon \
-  --input pigeons/native_feed_player_messages.dart \
-  --dart_out lib/src/messages.g.dart \
-  --kotlin_out android/src/main/kotlin/io/github/aswinsubhash/native_feed_player/Messages.g.kt \
-  --kotlin_package io.github.aswinsubhash.native_feed_player \
-  --swift_out ios/native_feed_player/Sources/native_feed_player/Messages.g.swift
-dart format lib/src/messages.g.dart
+dart run tool/generate_pigeon.dart
 ```
 
 CI regenerates and fails if the tree changes, since stale generated code is a
@@ -237,6 +259,6 @@ silent source of platform drift.
 
 ## Requirements
 
-- Flutter 3.41+, Dart 3.11+
-- Android: minSdk 24, Media3 1.11
-- iOS: 13.0+, with CocoaPods and Swift Package Manager support
+- Flutter 3.47+, Dart 3.13+
+- Android: minSdk 24, Media3 1.11, AGP built-in Kotlin
+- iOS: 15.0+, with CocoaPods and Swift Package Manager support

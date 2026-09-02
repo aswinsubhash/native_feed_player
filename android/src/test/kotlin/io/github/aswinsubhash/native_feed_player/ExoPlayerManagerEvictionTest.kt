@@ -1,8 +1,10 @@
 package io.github.aswinsubhash.native_feed_player
 
 import android.content.ComponentCallbacks2
+import androidx.media3.common.Player
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** Verifies explicit classification of non-severity-ordered trim levels. */
@@ -130,5 +132,73 @@ internal class VisibleWindowEvictionRuleTest {
         )
 
         assertEquals(setOf(2), evicted)
+    }
+}
+
+internal class AdaptivePreloadPolicyTest {
+    @Test
+    fun clusteredRebuffersDegrade_butSparseRebuffersDoNot() {
+        val policy = AdaptivePreloadPolicy()
+
+        assertFalse(policy.recordRebuffer(0))
+        assertFalse(policy.recordRebuffer(1_000))
+        assertTrue(policy.recordRebuffer(2_000))
+        assertEquals(0.5, policy.scale)
+
+        assertFalse(policy.recordRebuffer(40_000))
+        assertFalse(policy.recordRebuffer(80_000))
+        assertFalse(policy.recordRebuffer(120_000))
+        assertEquals(0.5, policy.scale)
+    }
+
+    @Test
+    fun recoveryRequiresStableTime_andOccursOneStepPerInterval() {
+        val policy = AdaptivePreloadPolicy()
+        policy.recordRebuffer(0)
+        policy.recordRebuffer(1)
+        policy.recordRebuffer(2)
+        policy.recordRebuffer(3)
+        policy.recordRebuffer(4)
+        policy.recordRebuffer(5)
+        assertEquals(0.25, policy.scale)
+
+        assertFalse(policy.recordSteadyPlayback(5 + AdaptivePreloadPolicy.RECOVERY_INTERVAL_MS - 1))
+        assertTrue(policy.recordSteadyPlayback(5 + AdaptivePreloadPolicy.RECOVERY_INTERVAL_MS))
+        assertEquals(0.5, policy.scale)
+        assertFalse(policy.recordSteadyPlayback(5 + AdaptivePreloadPolicy.RECOVERY_INTERVAL_MS + 1))
+        assertTrue(policy.recordSteadyPlayback(5 + 2 * AdaptivePreloadPolicy.RECOVERY_INTERVAL_MS))
+        assertEquals(1.0, policy.scale)
+    }
+}
+
+internal class PlaybackStatusMappingTest {
+    @Test
+    fun playerErrorAlwaysTakesPrecedence() {
+        for (state in listOf(Player.STATE_IDLE, Player.STATE_BUFFERING, Player.STATE_READY, Player.STATE_ENDED)) {
+            assertEquals(
+                PlaybackStatusMessage.ERROR,
+                mapPlaybackStatus(state, isPlaying = true, hasPlayerError = true, hasEverPlayed = true)
+            )
+        }
+    }
+
+    @Test
+    fun readyPlaybackDistinguishesInitialReadyPlayingAndPaused() {
+        assertEquals(
+            PlaybackStatusMessage.READY,
+            mapPlaybackStatus(Player.STATE_READY, false, false, false)
+        )
+        assertEquals(
+            PlaybackStatusMessage.PLAYING,
+            mapPlaybackStatus(Player.STATE_READY, true, false, true)
+        )
+        assertEquals(
+            PlaybackStatusMessage.PAUSED,
+            mapPlaybackStatus(Player.STATE_READY, false, false, true)
+        )
+        assertEquals(
+            PlaybackStatusMessage.COMPLETED,
+            mapPlaybackStatus(Player.STATE_ENDED, false, false, true)
+        )
     }
 }

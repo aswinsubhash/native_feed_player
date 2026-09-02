@@ -90,7 +90,7 @@
   physical devices.
 - [ ] **HLS is not disk-cached on iOS.** AVFoundation resolves playlists and
   segments internally, so the resource-loader cache only covers progressive
-  media. Android caches both.
-- [ ] **Plugin still applies the Kotlin Gradle Plugin.** Flutter's migrator
-  re-adds `android.builtInKotlin=false` / `android.newDsl=false` on every
-  build; migrating the plugin to built-in Kotlin removes the opt-out.
+  media. Custom-header HLS is rejected on iOS in favor of signed URLs or
+  cookies. Android caches both and applies headers to every child request.
+- [x] **Built-in Kotlin migration.** Flutter 3.47, AGP 9, and built-in Kotlin
+  remove the legacy Kotlin Gradle Plugin and its compatibility opt-out.

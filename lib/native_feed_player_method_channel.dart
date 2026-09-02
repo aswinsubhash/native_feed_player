@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+// The injected event streams intentionally use external parameter names.
+// ignore_for_file: prefer_initializing_formals
+
 import 'native_feed_player_platform_interface.dart';
 import 'src/controller_release.dart';
 import 'src/feed_player_config.dart';
@@ -39,13 +42,19 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   final Stream<ControllerLifecycleEvent>? _lifecycleEventStream;
 
   late final Stream<PlaybackStateEvent> _states =
-      (_playbackStateEventStream ?? playbackStateEvents()).asBroadcastStream();
+      (_playbackStateEventStream ?? playbackStateEvents())
+          .map(_cachePlaybackState)
+          .asBroadcastStream();
 
   late final Stream<PositionEvent> _positions =
-      (_positionEventStream ?? positionEvents()).asBroadcastStream();
+      (_positionEventStream ?? positionEvents())
+          .map(_cachePosition)
+          .asBroadcastStream();
 
   late final Stream<MetricsEvent> _metrics =
-      (_metricsEventStream ?? metricsEvents()).asBroadcastStream();
+      (_metricsEventStream ?? metricsEvents())
+          .map(_cacheMetrics)
+          .asBroadcastStream();
 
   late final Stream<VideoSizeEvent> _videoSizes =
       (_videoSizeEventStream ?? videoSizeEvents())
@@ -63,13 +72,36 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
       <int, Stream<VideoMetrics>>{};
   final Map<int, Stream<VideoSize>> _videoSizeStreams =
       <int, Stream<VideoSize>>{};
+  final Map<int, PlaybackStatusUpdate> _latestStates =
+      <int, PlaybackStatusUpdate>{};
+  final Map<int, VideoMetrics> _latestMetrics = <int, VideoMetrics>{};
   final Map<int, VideoSize> _latestVideoSizes = <int, VideoSize>{};
+  final Map<int, PlaybackPosition> _latestPositions = <int, PlaybackPosition>{};
+  StreamSubscription<PlaybackStateEvent>? _stateCacheSubscription;
+  StreamSubscription<MetricsEvent>? _metricsCacheSubscription;
   StreamSubscription<VideoSizeEvent>? _videoSizeCacheSubscription;
+  StreamSubscription<PositionEvent>? _positionCacheSubscription;
+  StreamSubscription<ControllerLifecycleEvent>? _lifecycleCacheSubscription;
+
+  /// Fallback subscription that forgets per-controller caches on release for
+  /// callers that never listen to [releaseEvents]. When [releaseEvents] is
+  /// listened, the forget happens inside its mapper instead, which does not
+  /// depend on broadcast subscription order — the platform is a singleton
+  /// that outlives any one FeedPlayer, so ordering cannot be relied upon.
+  void _ensureLifecycleCache() {
+    _lifecycleCacheSubscription ??= _lifecycle.listen(
+      (ControllerLifecycleEvent event) => _forgetStreams(event.controllerId),
+      onError: _reportCacheStreamError,
+    );
+  }
 
   @override
   late final Stream<ControllerReleaseEvent> releaseEvents = _lifecycle.map((
     ControllerLifecycleEvent event,
   ) {
+    // Forget before emitting so any listener re-entering the
+    // per-controller streams sees a clean cache. _forgetStreams is
+    // idempotent, so the fallback subscription running too is harmless.
     _forgetStreams(event.controllerId);
     return ControllerReleaseEvent(
       controllerId: event.controllerId,
@@ -80,9 +112,35 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Future<void> initialize(FeedPlayerConfig config) async {
     _ensureSupportedPlatform();
+    _latestStates.clear();
+    _latestMetrics.clear();
     _latestVideoSizes.clear();
-    _videoSizeCacheSubscription ??= _videoSizes.listen((_) {});
+    _latestPositions.clear();
+    _stateCacheSubscription ??= _states.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
+    _metricsCacheSubscription ??= _metrics.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
+    _videoSizeCacheSubscription ??= _videoSizes.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
+    _ensureLifecycleCache();
     await hostApi.initialize(config.toMessage());
+  }
+
+  static void _reportCacheStreamError(Object error, StackTrace stackTrace) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'native_feed_player',
+        context: ErrorDescription('while caching native playback events'),
+      ),
+    );
   }
 
   @override
@@ -100,6 +158,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<void> removeSources(List<String> sourceIds) async {
+    _validateIds(sourceIds);
     await hostApi.removeSources(SourceIdsRequest(sourceIds: sourceIds));
   }
 
@@ -109,6 +168,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     required bool autoPlay,
     required bool looping,
   }) {
+    _validateId(sourceId, 'sourceId');
     return hostApi.createController(
       CreateControllerRequest(
         sourceId: sourceId,
@@ -148,40 +208,91 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Stream<PlaybackPosition> positionStream(int controllerId) {
+    // The position channel is subscribed lazily: native only emits for
+    // controllers that render or play, so subscribing on first use keeps the
+    // channel silent until a UI actually wants positions. The latest value
+    // is cached from then on, so every later subscriber replays it.
+    _positionCacheSubscription ??= _positions.listen(
+      (_) {},
+      onError: _reportCacheStreamError,
+    );
     return _positionStreams.putIfAbsent(controllerId, () {
-      return _positions
-          .where((PositionEvent event) => event.controllerId == controllerId)
-          .map(PlaybackPosition.fromMessage);
+      return Stream<PlaybackPosition>.multi((
+        MultiStreamController<PlaybackPosition> output,
+      ) {
+        final PlaybackPosition? latest = _latestPositions[controllerId];
+        if (latest != null) {
+          output.addSync(latest);
+        }
+        final StreamSubscription<PositionEvent> subscription = _positions
+            .where((PositionEvent event) => event.controllerId == controllerId)
+            .listen(
+              (PositionEvent event) =>
+                  output.add(PlaybackPosition.fromMessage(event)),
+              onError: output.addError,
+              onDone: output.close,
+            );
+        output.onCancel = subscription.cancel;
+      }, isBroadcast: true);
     });
   }
 
   @override
   Stream<PlaybackStatusUpdate> stateStream(int controllerId) {
     return _stateStreams.putIfAbsent(controllerId, () {
-      return _states
-          .where(
-            (PlaybackStateEvent event) => event.controllerId == controllerId,
-          )
-          .map(
-            (PlaybackStateEvent event) => PlaybackStatusUpdate(
-              state: playbackStateFromMessage(event.status),
-              error: PlaybackError.fromMessage(event.error),
-            ),
-          );
+      return Stream<PlaybackStatusUpdate>.multi((
+        MultiStreamController<PlaybackStatusUpdate> output,
+      ) {
+        final PlaybackStatusUpdate? latest = _latestStates[controllerId];
+        if (latest != null) {
+          output.addSync(latest);
+        }
+        final StreamSubscription<PlaybackStateEvent> subscription = _states
+            .where(
+              (PlaybackStateEvent event) => event.controllerId == controllerId,
+            )
+            .listen(
+              (PlaybackStateEvent event) => output.add(_playbackUpdate(event)),
+              onError: output.addError,
+              onDone: output.close,
+            );
+        output.onCancel = subscription.cancel;
+      }, isBroadcast: true);
     });
   }
 
   @override
   Stream<VideoMetrics> metricsStream(int controllerId) {
     return _metricsStreams.putIfAbsent(controllerId, () {
-      return _metrics
-          .where((MetricsEvent event) => event.controllerId == controllerId)
-          .map(VideoMetrics.fromMessage);
+      return Stream<VideoMetrics>.multi((
+        MultiStreamController<VideoMetrics> output,
+      ) {
+        final VideoMetrics? latest = _latestMetrics[controllerId];
+        if (latest != null) {
+          output.addSync(latest);
+        }
+        final StreamSubscription<MetricsEvent> subscription = _metrics
+            .where((MetricsEvent event) => event.controllerId == controllerId)
+            .listen(
+              (MetricsEvent event) =>
+                  output.add(VideoMetrics.fromMessage(event)),
+              onError: output.addError,
+              onDone: output.close,
+            );
+        output.onCancel = subscription.cancel;
+      }, isBroadcast: true);
     });
   }
 
   @override
   Future<void> setVolume(int controllerId, double volume) async {
+    if (!volume.isFinite || volume < 0.0 || volume > 1.0) {
+      throw ArgumentError.value(
+        volume,
+        'volume',
+        'Must be finite and within 0..1.',
+      );
+    }
     await hostApi.setVolume(
       ControllerDoubleRequest(controllerId: controllerId, value: volume),
     );
@@ -196,6 +307,9 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<void> setPlaybackSpeed(int controllerId, double speed) async {
+    if (!speed.isFinite || speed <= 0.0) {
+      throw ArgumentError.value(speed, 'speed', 'Must be finite and positive.');
+    }
     await hostApi.setPlaybackSpeed(
       ControllerDoubleRequest(controllerId: controllerId, value: speed),
     );
@@ -236,11 +350,13 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<void> setVisibleSource(String sourceId) async {
+    _validateId(sourceId, 'sourceId');
     await hostApi.setVisibleSource(VisibleSourceRequest(sourceId: sourceId));
   }
 
   @override
   Future<void> evictCachedMedia(List<String> sourceIds) async {
+    _validateIds(sourceIds);
     await hostApi.evictCachedMedia(SourceIdsRequest(sourceIds: sourceIds));
   }
 
@@ -251,6 +367,7 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
 
   @override
   Future<CacheStatus> cacheStatus(String sourceId) async {
+    _validateId(sourceId, 'sourceId');
     final CacheStatusMessage message = await hostApi.cacheStatus(
       VisibleSourceRequest(sourceId: sourceId),
     );
@@ -288,17 +405,50 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
   @override
   Future<void> dispose() async {
     await hostApi.disposeAll();
+    await _stateCacheSubscription?.cancel();
+    await _metricsCacheSubscription?.cancel();
     await _videoSizeCacheSubscription?.cancel();
+    await _positionCacheSubscription?.cancel();
+    // The lifecycle fallback stays subscribed: this platform is a singleton
+    // that outlives any one FeedPlayer, and releaseEvents never re-runs its
+    // initializer, so a later FeedPlayer still needs the fallback alive.
+    _stateCacheSubscription = null;
+    _metricsCacheSubscription = null;
     _videoSizeCacheSubscription = null;
+    _positionCacheSubscription = null;
     _stateStreams.clear();
     _positionStreams.clear();
     _metricsStreams.clear();
     _videoSizeStreams.clear();
+    _latestStates.clear();
+    _latestMetrics.clear();
     _latestVideoSizes.clear();
+    _latestPositions.clear();
   }
+
+  MetricsEvent _cacheMetrics(MetricsEvent event) {
+    _latestMetrics[event.controllerId] = VideoMetrics.fromMessage(event);
+    return event;
+  }
+
+  PlaybackStateEvent _cachePlaybackState(PlaybackStateEvent event) {
+    _latestStates[event.controllerId] = _playbackUpdate(event);
+    return event;
+  }
+
+  PlaybackStatusUpdate _playbackUpdate(PlaybackStateEvent event) =>
+      PlaybackStatusUpdate(
+        state: playbackStateFromMessage(event.status),
+        error: PlaybackError.fromMessage(event.error),
+      );
 
   VideoSizeEvent _cacheVideoSize(VideoSizeEvent event) {
     _latestVideoSizes[event.controllerId] = VideoSize.fromMessage(event);
+    return event;
+  }
+
+  PositionEvent _cachePosition(PositionEvent event) {
+    _latestPositions[event.controllerId] = PlaybackPosition.fromMessage(event);
     return event;
   }
 
@@ -316,8 +466,23 @@ class MethodChannelFeedPlayer extends FeedPlayerPlatform {
     _stateStreams.remove(controllerId);
     _positionStreams.remove(controllerId);
     _metricsStreams.remove(controllerId);
+    _latestMetrics.remove(controllerId);
     _videoSizeStreams.remove(controllerId);
+    _latestStates.remove(controllerId);
     _latestVideoSizes.remove(controllerId);
+    _latestPositions.remove(controllerId);
+  }
+
+  void _validateIds(List<String> sourceIds) {
+    for (final String sourceId in sourceIds) {
+      _validateId(sourceId, 'sourceIds');
+    }
+  }
+
+  void _validateId(String id, String name) {
+    if (id.trim().isEmpty) {
+      throw ArgumentError.value(id, name, 'Must not be empty.');
+    }
   }
 
   void _ensureSupportedPlatform() {

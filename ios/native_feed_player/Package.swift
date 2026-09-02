@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "native_feed_player",
     platforms: [
-        .iOS("13.0")
+        .iOS("15.0")
     ],
     products: [
         .library(name: "native-feed-player", targets: ["native_feed_player"])

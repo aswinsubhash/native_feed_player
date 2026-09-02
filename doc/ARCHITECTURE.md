@@ -90,9 +90,14 @@ it, swapping when the user scrolls backwards. Within the window, work is ordered
 nearest-first, capped by `maxConcurrentPreloads`, and sources sharing a URI are
 collapsed to the nearest occurrence.
 
-Under sustained rebuffering the window halves down to a floor that still keeps
-the immediate neighbour prepared, recovering a step at a time once playback
-settles. Critical memory pressure drops straight to the floor.
+Rebuffers accumulate within a bounded time window. At the threshold the preload
+window halves down to a floor that still keeps the immediate neighbour prepared;
+it recovers one step only after a sustained uninterrupted playback interval.
+Critical memory pressure drops straight to the floor, clears prepared work, and
+does not immediately reallocate: the OS provides no "pressure ended" signal, so
+the window stays empty until the next feed interaction (viewport change,
+controller creation, source mutation) or until sustained playback restores the
+adaptive scale (about 30 s on Android, 15 s on iOS).
 
 ### Eviction
 
@@ -119,18 +124,23 @@ selector, and playback looper — a preloaded source is only valid on a player
 from that builder, and the manager must be released before them.
 
 Bytes flow through `CacheDataSource` over a `SimpleCache` with an LRU evictor.
-Per-source HTTP headers are injected by a `ResolvingDataSource` at request time,
-which keeps a single shared factory instance.
+Each source receives its own data-source context, so headers reach progressive
+requests and every HLS playlist, segment, and key request. Cache keys are
+partitioned by a versioned SHA-256 identity over URI and canonical headers; no
+raw credential material is persisted.
 
 **iOS.** In-window sources get real `AVPlayerItem`s with a forward buffer scaled
 by distance, and the immediate neighbour is prerolled so decoding is warm before
 the swipe. Progressive media plays through an `AVAssetResourceLoaderDelegate`
 over a private URL scheme, which serves playback from one sequential download
-while writing the same bytes to disk. Only complete, error-free bodies are
-adopted into the cache.
+while writing the same bytes to disk. Only complete 2xx responses are adopted
+into the header-partitioned cache; cancellation and failed responses finish all
+pending AVFoundation requests.
 
 HLS is excluded from iOS caching: AVFoundation resolves playlists and segments
-internally, out of reach of a resource-loader shim.
+internally, out of reach of a resource-loader shim. HLS sources with custom
+headers are rejected on iOS because no public AVFoundation API guarantees those
+headers on every child request; callers must use signed URLs or cookies.
 
 ## Metrics
 
@@ -167,5 +177,6 @@ platform views (a native view composited by Flutter) or textures
 
 1. Fill the rendering benchmark table on physical devices and settle the
    default.
-2. Make the iOS unit-test job blocking by fixing the host teardown crash.
-3. Run the physical device matrix with non-zero metric samples.
+2. Run the physical device matrix with non-zero metric samples in both render
+   modes.
+3. Track authenticated cache growth across token rotation and long sessions.

@@ -2,6 +2,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:native_feed_player/native_feed_player.dart';
 import 'package:native_feed_player/src/messages.g.dart';
 
+class _InvalidCachePolicy extends CachePolicy {
+  const _InvalidCachePolicy() : super(maxBytes: 1);
+
+  @override
+  int get maxBytes => 0;
+}
+
+class _InvalidAudioPolicy extends AudioPolicy {
+  const _InvalidAudioPolicy();
+
+  @override
+  double get volume => double.nan;
+}
+
+class _InvalidFeedPlayerConfig extends FeedPlayerConfig {
+  const _InvalidFeedPlayerConfig();
+
+  @override
+  int get maxActivePlayers => 0;
+}
+
 void main() {
   group('FeedPlayerConfig', () {
     test('defaults suit a forward-travelling feed', () {
@@ -41,6 +62,17 @@ void main() {
       );
       expect(() => CachePolicy(maxBytes: 0), throwsAssertionError);
       expect(() => AudioPolicy(volume: 1.5), throwsAssertionError);
+    });
+
+    test('wire validation remains active independently of assertions', () {
+      expect(const _InvalidCachePolicy().toMessage, throwsArgumentError);
+      expect(const _InvalidAudioPolicy().toMessage, throwsArgumentError);
+      expect(const _InvalidFeedPlayerConfig().toMessage, throwsArgumentError);
+
+      final FeedPlayerConfig config = FeedPlayerConfig(
+        positionUpdateInterval: Duration(microseconds: int.parse('1')),
+      );
+      expect(config.toMessage, throwsArgumentError);
     });
 
     test('copyWith changes one field and preserves the rest', () {
@@ -85,12 +117,24 @@ void main() {
       expect(message.audio.muted, isFalse);
       expect(message.audio.volume, 0.25);
       expect(message.audio.handleAudioFocus, isTrue);
+      expect(message.audio.manageAudioSession, isTrue);
+    });
+
+    test('manageAudioSession=false reaches the wire format', () {
+      const FeedPlayerConfig config = FeedPlayerConfig(
+        audio: AudioPolicy(manageAudioSession: false),
+      );
+
+      expect(config.toMessage().audio.manageAudioSession, isFalse);
     });
   });
 
   group('FeedSource', () {
     test('ranks are assigned by caller order, not identity', () {
-      const FeedSource source = FeedSource(id: 'a', uri: 'a.mp4');
+      const FeedSource source = FeedSource(
+        id: 'a',
+        uri: 'https://example.test/a.mp4',
+      );
 
       expect(source.toMessage(7).rank, 7);
       expect(source.toMessage(0).id, 'a');
@@ -99,7 +143,7 @@ void main() {
     test('media kind and headers reach the wire format', () {
       const FeedSource source = FeedSource(
         id: 'a',
-        uri: 'a.m3u8',
+        uri: 'https://example.test/a.m3u8',
         kind: FeedMediaKind.hls,
         headers: <String, String>{'Authorization': 'Bearer t'},
       );
@@ -108,6 +152,99 @@ void main() {
 
       expect(message.kind, FeedMediaKindMessage.hls);
       expect(message.headers['Authorization'], 'Bearer t');
+    });
+
+    test('headers participate in equality and hashing', () {
+      const FeedSource first = FeedSource(
+        id: 'a',
+        uri: 'https://example.test/a.mp4',
+        headers: <String, String>{'a': '1', 'b': '2'},
+      );
+      const FeedSource reordered = FeedSource(
+        id: 'a',
+        uri: 'https://example.test/a.mp4',
+        headers: <String, String>{'b': '2', 'a': '1'},
+      );
+      const FeedSource different = FeedSource(
+        id: 'a',
+        uri: 'https://example.test/a.mp4',
+        headers: <String, String>{'a': 'changed', 'b': '2'},
+      );
+
+      expect(first, reordered);
+      expect(first.hashCode, reordered.hashCode);
+      expect(first, isNot(different));
+    });
+
+    test('toString redacts URI query values', () {
+      const FeedSource source = FeedSource(
+        id: 'a',
+        uri: 'https://example.test/video.mp4?token=secret&signature=value#part',
+      );
+
+      final String description = source.toString();
+
+      expect(description, contains('https://example.test/video.mp4'));
+      expect(description, contains('#part'));
+      expect(description, isNot(contains('secret')));
+      expect(description, isNot(contains('signature')));
+    });
+
+    test('wire conversion rejects empty ids and uris', () {
+      expect(
+        () => const FeedSource(id: ' ', uri: 'a.mp4').toMessage(0),
+        throwsArgumentError,
+      );
+      expect(
+        () => const FeedSource(id: 'a', uri: ' ').toMessage(0),
+        throwsArgumentError,
+      );
+    });
+
+    test('wire conversion rejects URIs without a scheme', () {
+      expect(
+        () => const FeedSource(
+          id: 'a',
+          uri: 'example.test/video.mp4',
+        ).toMessage(0),
+        throwsArgumentError,
+      );
+      expect(
+        () => const FeedSource(id: 'a', uri: '/local/video.mp4').toMessage(0),
+        throwsArgumentError,
+      );
+    });
+
+    test('cacheKey reaches the wire format and participates in equality', () {
+      const FeedSource source = FeedSource(
+        id: 'a',
+        uri: 'https://cdn.example.test/video.mp4?sig=rotating',
+        cacheKey: 'episode-42',
+      );
+
+      final FeedSourceMessage message = source.toMessage(0);
+      expect(message.cacheKey, 'episode-42');
+      expect(message.uri, 'https://cdn.example.test/video.mp4?sig=rotating');
+
+      // cacheKey participates in equality on its own: identical everything
+      // else, different cacheKey.
+      const FeedSource withKey = FeedSource(
+        id: 'a',
+        uri: 'https://x.test/v.mp4',
+        cacheKey: 'episode-42',
+      );
+      const FeedSource withoutKey = FeedSource(
+        id: 'a',
+        uri: 'https://x.test/v.mp4',
+      );
+      expect(withKey, isNot(withoutKey));
+      expect(
+        const FeedSource(
+          id: 'a',
+          uri: 'https://x.test/v.mp4',
+        ).toMessage(0).cacheKey,
+        isNull,
+      );
     });
   });
 

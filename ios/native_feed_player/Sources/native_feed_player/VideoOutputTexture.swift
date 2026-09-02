@@ -2,52 +2,101 @@ import AVFoundation
 import Flutter
 import Foundation
 
+/// Weak display-link target avoids the CADisplayLink -> texture retain cycle so
+/// texture deinitialization can always perform its final detach.
+private final class VideoOutputDisplayLinkTarget: NSObject {
+  weak var owner: VideoOutputTexture?
+
+  init(owner: VideoOutputTexture) {
+    self.owner = owner
+  }
+
+  @objc func tick(_ link: CADisplayLink) {
+    owner?.onDisplayLink(link)
+  }
+}
+
 /// Publishes `AVPlayer` frames to a Flutter texture.
 final class VideoOutputTexture: NSObject, FlutterTexture {
   private let output: AVPlayerItemVideoOutput
   private weak var player: AVPlayer?
+  private weak var attachedItem: AVPlayerItem?
+  private var currentItemObservation: NSKeyValueObservation?
   private var displayLink: CADisplayLink?
+  private var displayLinkTarget: VideoOutputDisplayLinkTarget?
   private var latestBuffer: CVPixelBuffer?
   private let bufferLock = NSLock()
+  private var reportedFirstPixel = false
 
   /// Flutter texture identifier assigned after registration.
   var textureId: Int64 = 0
   var onFrameAvailable: ((Int64) -> Void)?
+  var onFirstPixel: (() -> Void)?
 
-  init(player: AVPlayer) {
+  init(player: AVPlayer, onFirstPixel: (() -> Void)? = nil) {
     // Flutter uploads BGRA without conversion.
     output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
       kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
       kCVPixelBufferIOSurfacePropertiesKey as String: [String: String](),
     ])
     super.init()
-    attach(to: player)
+    attach(to: player, onFirstPixel: onFirstPixel)
   }
 
-  func attach(to player: AVPlayer) {
+  deinit {
     detachOutput()
+  }
+
+  func attach(to player: AVPlayer, onFirstPixel: (() -> Void)? = nil) {
+    detachOutput()
+    reportedFirstPixel = false
+    self.onFirstPixel = onFirstPixel
     self.player = player
-    player.currentItem?.add(output)
+    currentItemObservation = player.observe(
+      \.currentItem,
+      options: [.initial, .new]
+    ) { [weak self] player, _ in
+      DispatchQueue.main.async {
+        self?.attachOutput(to: player.currentItem)
+      }
+    }
     startDisplayLink()
   }
 
   func detachOutput() {
+    currentItemObservation?.invalidate()
+    currentItemObservation = nil
     displayLink?.invalidate()
     displayLink = nil
-    player?.currentItem?.remove(output)
+    displayLinkTarget = nil
+    attachedItem?.remove(output)
+    attachedItem = nil
     player = nil
+    reportedFirstPixel = false
+    onFirstPixel = nil
     bufferLock.lock()
     latestBuffer = nil
     bufferLock.unlock()
   }
 
+  private func attachOutput(to item: AVPlayerItem?) {
+    if attachedItem === item {
+      return
+    }
+    attachedItem?.remove(output)
+    attachedItem = item
+    attachedItem?.add(output)
+  }
+
   private func startDisplayLink() {
-    let link = CADisplayLink(target: self, selector: #selector(onDisplayLink))
+    let target = VideoOutputDisplayLinkTarget(owner: self)
+    let link = CADisplayLink(target: target, selector: #selector(VideoOutputDisplayLinkTarget.tick(_:)))
     link.add(to: .main, forMode: .common)
+    displayLinkTarget = target
     displayLink = link
   }
 
-  @objc private func onDisplayLink(_ link: CADisplayLink) {
+  fileprivate func onDisplayLink(_ link: CADisplayLink) {
     // Select the frame for the display link's presentation time.
     let itemTime = output.itemTime(forHostTime: link.targetTimestamp)
     guard output.hasNewPixelBuffer(forItemTime: itemTime),
@@ -60,6 +109,21 @@ final class VideoOutputTexture: NSObject, FlutterTexture {
     latestBuffer = buffer
     bufferLock.unlock()
 
+    notifyFrameAvailable()
+  }
+
+  func installFirstPixelCallback(_ callback: @escaping () -> Void) {
+    onFirstPixel = reportedFirstPixel ? nil : callback
+  }
+
+  /// Kept internal so the one-shot callback can be verified without requiring
+  /// a hardware video decoder in unit tests.
+  func notifyFrameAvailable() {
+    if !reportedFirstPixel {
+      reportedFirstPixel = true
+      onFirstPixel?()
+      onFirstPixel = nil
+    }
     onFrameAvailable?(textureId)
   }
 
@@ -75,7 +139,11 @@ final class VideoOutputTexture: NSObject, FlutterTexture {
   }
 
   func onTextureUnregistered(_ texture: FlutterTexture) {
-    detachOutput()
+    if Thread.isMainThread {
+      detachOutput()
+    } else {
+      DispatchQueue.main.async { self.detachOutput() }
+    }
   }
 }
 
@@ -89,13 +157,20 @@ final class TextureOutputRegistry {
   }
 
   /// Returns the Flutter texture id bound to `controllerId`.
-  func attach(controllerId: Int, player: AVPlayer) -> Int64 {
+  func attach(
+    controllerId: Int,
+    player: AVPlayer,
+    onFirstPixel: @escaping () -> Void
+  ) -> Int64 {
     if let existing = texturesByController[controllerId] {
-      existing.attach(to: player)
+      existing.attach(to: player, onFirstPixel: onFirstPixel)
       return existing.textureId
     }
 
-    let texture = VideoOutputTexture(player: player)
+    let texture = VideoOutputTexture(
+      player: player,
+      onFirstPixel: onFirstPixel
+    )
     let textureId = registry.register(texture)
     texture.textureId = textureId
     texture.onFrameAvailable = { [weak registry] id in
@@ -110,11 +185,13 @@ final class TextureOutputRegistry {
       return
     }
     texture.detachOutput()
+    texture.onFirstPixel = nil
+    texture.onFrameAvailable = nil
     registry.unregisterTexture(texture.textureId)
   }
 
   func clear() {
-    for controllerId in texturesByController.keys {
+    for controllerId in Array(texturesByController.keys) {
       detach(controllerId: controllerId)
     }
   }
