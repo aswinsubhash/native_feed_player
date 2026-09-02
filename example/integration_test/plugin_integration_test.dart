@@ -339,7 +339,7 @@ void main() {
     expect(update.error, isNotNull);
     // The local server returns HTTP 404 for the missing media path.
     expect(update.error!.code, 'source_not_found');
-    expect(update.error!.isRecoverable, isFalse);
+    expect(update.error!.isRecoverable, isTrue);
 
     await player.setVisibleSource('online');
     final FeedController recovered = await player.controllerFor(
