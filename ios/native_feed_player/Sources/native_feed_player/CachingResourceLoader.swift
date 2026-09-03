@@ -124,7 +124,7 @@ final class CachingResourceLoader: NSObject {
     }
   }
 
-  private let queue = DispatchQueue(label: "native_feed_player.resourceloader")
+  private let queue: DispatchQueue
   private let sessionConfiguration: URLSessionConfiguration
   private lazy var session: URLSession = {
     URLSession(configuration: sessionConfiguration, delegate: self, delegateQueue: nil)
@@ -135,10 +135,14 @@ final class CachingResourceLoader: NSObject {
   private var contextsByIdentity: [String: RequestContext] = [:]
   var onFailure: ((String, Error) -> Void)?
 
-  init(sessionConfiguration: URLSessionConfiguration = .ephemeral) {
+  init(
+    sessionConfiguration: URLSessionConfiguration = .ephemeral,
+    queue: DispatchQueue = DispatchQueue(label: "native_feed_player.resourceloader")
+  ) {
     sessionConfiguration.urlCache = nil
     sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
     self.sessionConfiguration = sessionConfiguration
+    self.queue = queue
     super.init()
   }
 

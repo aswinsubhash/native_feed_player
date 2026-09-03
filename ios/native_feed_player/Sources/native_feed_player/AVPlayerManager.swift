@@ -204,8 +204,8 @@ final class AVPlayerManager {
   private let onVideoSize: VideoSizeCallback
 
   private let registry = FeedSourceRegistry()
-  private let resourceLoader = CachingResourceLoader()
   private let resourceLoaderQueue = DispatchQueue(label: "native_feed_player.loader.delegate")
+  private let resourceLoader: CachingResourceLoader
   private var controllers: [Int: ManagedController] = [:]
   private var creationOrder: [Int] = []
   private var preparedItems: [String: PreparedItem] = [:]
@@ -265,6 +265,7 @@ final class AVPlayerManager {
     onMetrics: @escaping MetricsCallback,
     onVideoSize: @escaping VideoSizeCallback
   ) {
+    self.resourceLoader = CachingResourceLoader(queue: resourceLoaderQueue)
     self.onState = onState
     self.onReleased = onReleased
     self.onPosition = onPosition
