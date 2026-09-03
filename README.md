@@ -16,8 +16,10 @@ What works today:
 
 - Sources addressed by caller-owned stable ids, so pagination never renumbers
   or invalidates the feed
-- Direction-aware prebuffering that follows travel, caps concurrency, collapses
-  repeated URIs, and shrinks itself under sustained stalling
+- Direction-aware preload scheduling that follows travel, caps concurrency,
+  collapses repeated URIs, and shrinks itself under sustained stalling
+- Android prebuffers nearby media bytes; iOS prepares items but starts loading
+  only when a live controller adopts them
 - Disk caching with a 256 MB LRU budget (Android: all formats; iOS: progressive
   media only, see [Caching](#caching))
 - Player pooling with a single global budget and window-based eviction
@@ -232,6 +234,7 @@ controller.metricsStream.listen((m) => print(m.firstFrameLatency));
 - The default render mode is unmeasured (see [Rendering](#rendering)).
 - No DRM, subtitles, or explicit track-selection APIs.
 - Android and iOS only; other platforms throw `UnsupportedPlatformError`.
+- iOS does not prebuffer media bytes before a live controller is created.
 - iOS long-form seeking is weak while a clip is still downloading.
 - Physical-device performance validation is still an open release gate.
 

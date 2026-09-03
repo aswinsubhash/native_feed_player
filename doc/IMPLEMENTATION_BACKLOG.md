@@ -29,7 +29,7 @@
 
 ## Milestone 3: Pre-buffering
 
-- [x] iOS: preroll nearby `AVPlayerItem`s through bounded preload players.
+- [ ] iOS: preload nearby media bytes without moving an `AVPlayerItem` between players.
 - [x] Android: preload media with `prepare()` and tuned `LoadControl`.
 - [x] Add configurable preload window around current index.
 - [x] Implement cancellation for stale preload requests during fast flings.
