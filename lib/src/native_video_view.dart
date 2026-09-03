@@ -40,6 +40,9 @@ class NativeVideoView extends StatefulWidget {
 class _NativeVideoViewState extends State<NativeVideoView> {
   static const String _viewType = 'native_feed_player/video_view';
 
+  // A GlobalKey keeps the platform view alive when the tree changes shape
+  // around it (bare view -> FittedBox/SizedBox once the size is known).
+  GlobalKey _platformViewKey = GlobalKey();
   int? _viewId;
   int? _textureId;
   int? _attachedViewId;
@@ -79,13 +82,21 @@ class _NativeVideoViewState extends State<NativeVideoView> {
       widget.controller,
     );
     final bool modeChanged = oldWidget.renderMode != widget.renderMode;
-    if (!controllerChanged && !modeChanged) {
+    // Only iOS receives fit through creation params, so only iOS must rebuild
+    // its platform view when the explicit fit changes.
+    final bool platformFitChanged =
+        defaultTargetPlatform == TargetPlatform.iOS &&
+        oldWidget.renderMode == RenderMode.platformView &&
+        widget.renderMode == RenderMode.platformView &&
+        oldWidget.fit != widget.fit;
+    if (!controllerChanged && !modeChanged && !platformFitChanged) {
       return;
     }
     _generation += 1;
     _textureId = null;
-    if (modeChanged) {
+    if (modeChanged || platformFitChanged) {
       _viewId = null;
+      _platformViewKey = GlobalKey();
     }
     if (controllerChanged) {
       _observe(widget.controller);
@@ -347,6 +358,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
         // above, so unlike iOS there is no native fit to forward and no
         // reason to recreate the platform view when the fit changes.
         return AndroidView(
+          key: _platformViewKey,
           viewType: _viewType,
           creationParamsCodec: const StandardMessageCodec(),
           onPlatformViewCreated: (int viewId) =>
@@ -354,7 +366,7 @@ class _NativeVideoViewState extends State<NativeVideoView> {
         );
       case TargetPlatform.iOS:
         return UiKitView(
-          key: ValueKey<BoxFit>(_effectiveFit),
+          key: _platformViewKey,
           viewType: _viewType,
           creationParams: <String, Object>{'fit': _effectiveFit.name},
           creationParamsCodec: const StandardMessageCodec(),

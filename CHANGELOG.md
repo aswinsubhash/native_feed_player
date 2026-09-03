@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Keep source ranks dense after removals so later pages retain correct preload ordering.
+- Wait for in-flight controller disposal before returning or rebuilding a controller.
+- Preroll bounded iOS preload players and release stale loader contexts with them.
+- Reject partial iOS cache responses, convert MIME types to UTIs, and complete open-ended requests through EOF.
 - Require Flutter 3.47, Dart 3.13, and iOS 15, with Android built-in Kotlin support.
 - Isolate cached media by URI and canonical request headers without persisting credentials.
 - Reject custom-header HLS on iOS in favor of App Store-safe signed URLs or cookies.

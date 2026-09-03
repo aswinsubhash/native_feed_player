@@ -256,21 +256,17 @@ final class CachingResourceLoaderTests: XCTestCase {
     XCTAssertFalse(CachingResourceLoader.isSuccessfulHTTPStatus(500))
   }
 
-  func testPartialContentWithoutRangeHeaderIsRejected() {
-    // A 206 to a plain GET is a partial body masquerading as a full file.
-    XCTAssertFalse(
-      CachingResourceLoader.isCacheableResponse(206, requestHadRangeHeader: false)
-    )
-    // A 206 answering an explicit range request is legitimate.
-    XCTAssertTrue(
-      CachingResourceLoader.isCacheableResponse(206, requestHadRangeHeader: true)
-    )
-    XCTAssertTrue(
-      CachingResourceLoader.isCacheableResponse(200, requestHadRangeHeader: false)
-    )
-    XCTAssertFalse(
-      CachingResourceLoader.isCacheableResponse(404, requestHadRangeHeader: true)
-    )
+  func testPartialContentIsRejectedUntilRangesCanBeStoredAtTheirDeclaredOffsets() {
+    XCTAssertFalse(CachingResourceLoader.isCacheableResponse(206))
+    XCTAssertTrue(CachingResourceLoader.isCacheableResponse(200))
+    XCTAssertFalse(CachingResourceLoader.isCacheableResponse(404))
+  }
+
+  func testMimeTypesAreConvertedToUniformTypeIdentifiers() {
+    XCTAssertEqual(CachingResourceLoader.contentType(forMimeType: "video/mp4"), "public.mpeg-4")
+    XCTAssertEqual(CachingResourceLoader.normalizedContentType("video/mp4"), "public.mpeg-4")
+    XCTAssertEqual(CachingResourceLoader.normalizedContentType("public.mpeg-4"), "public.mpeg-4")
+    XCTAssertNil(CachingResourceLoader.contentType(forMimeType: nil))
   }
 
   func testCacheKeyReplacesUriInIdentityButHeadersStillMatter() {
@@ -339,33 +335,36 @@ final class CachingResourceLoaderTests: XCTestCase {
 
   func testChunkPlanOpenEndedAndEdgeCases() {
     let chunk = Int64(CachingResourceLoader.chunkSize)
-    // Open-ended request (requestedLength == Int.max) against a 3 MB file.
+    // Open-ended request against a 3 MB file: requestedLength must be ignored.
     XCTAssertEqual(
       CachingResourceLoader.chunkPlan(
-        requestedLength: Int64(Int.max),
+        requestedLength: 1,
         alreadyServed: 0,
         currentOffset: 0,
-        byteCount: 3_000_000
+        byteCount: 3_000_000,
+        requestsAllDataToEndOfResource: true
       ),
       chunk
     )
     // Near the end of the file: clamp to what remains.
     XCTAssertEqual(
       CachingResourceLoader.chunkPlan(
-        requestedLength: Int64(Int.max),
+        requestedLength: 1,
         alreadyServed: 2_999_000,
         currentOffset: 2_999_000,
-        byteCount: 3_000_000
+        byteCount: 3_000_000,
+        requestsAllDataToEndOfResource: true
       ),
       1_000
     )
     // Past EOF or fully consumed: nothing to serve.
     XCTAssertEqual(
       CachingResourceLoader.chunkPlan(
-        requestedLength: Int64(Int.max),
+        requestedLength: 1,
         alreadyServed: 3_000_000,
         currentOffset: 3_000_000,
-        byteCount: 3_000_000
+        byteCount: 3_000_000,
+        requestsAllDataToEndOfResource: true
       ),
       0
     )

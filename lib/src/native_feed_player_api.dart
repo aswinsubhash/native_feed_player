@@ -141,9 +141,15 @@ class FeedPlayer {
       if (requestedIds.isEmpty) {
         return;
       }
-      await _platform.removeSources(requestedIds);
       final Set<String> removed = requestedIds.toSet();
-      _sources.removeWhere((FeedSource source) => removed.contains(source.id));
+      final List<FeedSource> remaining = <FeedSource>[
+        for (final FeedSource source in _sources)
+          if (!removed.contains(source.id)) source,
+      ];
+      await _platform.setSources(remaining);
+      _sources
+        ..clear()
+        ..addAll(remaining);
       for (final String sourceId in removed) {
         _controllersBySourceId[sourceId]?.markReleased(
           ControllerReleaseReason.disposed,
@@ -170,7 +176,17 @@ class FeedPlayer {
         );
       }
 
-      final FeedController? cached = _controllersBySourceId[sourceId];
+      FeedController? cached = _controllersBySourceId[sourceId];
+      final Future<void>? pendingDisposal = cached?.pendingDisposal;
+      if (pendingDisposal != null) {
+        try {
+          await pendingDisposal;
+        } catch (_) {
+          // The disposal caller owns its error. A failed disposal leaves the
+          // controller alive and reusable.
+        }
+        cached = _controllersBySourceId[sourceId];
+      }
       if (cached != null && !cached.isReleased) {
         return cached;
       }

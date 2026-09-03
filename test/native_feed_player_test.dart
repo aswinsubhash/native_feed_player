@@ -268,6 +268,23 @@ void main() {
       ]);
     });
 
+    test('removing sources republishes dense ranks before appending', () async {
+      await player.setSources(<FeedSource>[
+        _source('a'),
+        _source('b'),
+        _source('c'),
+      ]);
+
+      await player.removeSources(<String>['b']);
+      expect(
+        platform.setSourceCalls.last.map((FeedSource source) => source.id),
+        <String>['a', 'c'],
+      );
+
+      await player.appendSources(<FeedSource>[_source('d')]);
+      expect(platform.appendCalls.single.$2, 2);
+    });
+
     test('appending an empty page is a no-op', () async {
       await player.setSources(<FeedSource>[_source('a')]);
       await player.appendSources(<FeedSource>[]);
@@ -463,7 +480,7 @@ void main() {
     test('failed removal preserves sources and controllers', () async {
       await player.setSources(<FeedSource>[_source('a')]);
       final FeedController controller = await player.controllerFor('a');
-      platform.removeSourcesError = StateError('remove failed');
+      platform.setSourcesError = StateError('remove failed');
 
       await expectLater(player.removeSources(<String>['a']), throwsStateError);
 
@@ -707,6 +724,42 @@ void main() {
         expect(controller.isReleased, isTrue);
       },
     );
+
+    test('controllerFor waits for an in-flight disposal', () async {
+      final FeedController controller = await player.controllerFor('a');
+      final Completer<void> gate = Completer<void>();
+      platform.disposeControllerGate = gate;
+
+      final Future<void> disposal = controller.dispose();
+      final Future<FeedController> replacementFuture = player.controllerFor(
+        'a',
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(platform.createControllerCalls, 1);
+      gate.complete();
+      await disposal;
+      final FeedController replacement = await replacementFuture;
+
+      expect(identical(replacement, controller), isFalse);
+      expect(platform.createControllerCalls, 2);
+    });
+
+    test('controllerFor reuses a controller whose disposal failed', () async {
+      final FeedController controller = await player.controllerFor('a');
+      final Completer<void> gate = Completer<void>();
+      platform.disposeControllerGate = gate;
+      platform.disposeControllerError = StateError('dispose failed');
+
+      final Future<void> disposal = controller.dispose();
+      final Future<FeedController> controllerFuture = player.controllerFor('a');
+      await Future<void>.delayed(Duration.zero);
+      gate.complete();
+
+      await expectLater(disposal, throwsStateError);
+      expect(await controllerFuture, same(controller));
+      expect(platform.createControllerCalls, 1);
+    });
 
     test('removeSources releases the matching controller', () async {
       final FeedController controller = await player.controllerFor('a');

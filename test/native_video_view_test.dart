@@ -360,7 +360,7 @@ void main() {
     expect(platform.attachedTextureControllerIds, isEmpty);
   });
 
-  testWidgets('adaptive fit is forwarded to the iOS platform view', (
+  testWidgets('adaptive fit keeps the existing iOS platform view', (
     WidgetTester tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
@@ -375,6 +375,7 @@ void main() {
         ),
       );
       await tester.pump();
+      final Element original = tester.element(find.byType(UiKitView));
 
       platform.emitVideoSize(
         controllerId: controller.controllerId,
@@ -386,7 +387,70 @@ void main() {
 
       final UiKitView view = tester.widget<UiKitView>(find.byType(UiKitView));
       expect(view.creationParams, <String, Object>{'fit': 'contain'});
-      expect(view.key, const ValueKey<BoxFit>(BoxFit.contain));
+      expect(tester.element(find.byType(UiKitView)), same(original));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('explicit fit changes replace the iOS platform view', (
+    WidgetTester tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      final FeedController controller = await player.controllerFor('a');
+      Widget build(BoxFit fit) => MaterialApp(
+        home: NativeVideoView(
+          controller: controller,
+          renderMode: RenderMode.platformView,
+          fit: fit,
+        ),
+      );
+
+      await tester.pumpWidget(build(BoxFit.cover));
+      await tester.pump();
+      final Element original = tester.element(find.byType(UiKitView));
+
+      await tester.pumpWidget(build(BoxFit.contain));
+      await tester.pump();
+
+      expect(tester.element(find.byType(UiKitView)), isNot(same(original)));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('fit and size changes keep the Android platform view attached', (
+    WidgetTester tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final FeedController controller = await player.controllerFor('a');
+      Widget build(BoxFit fit) => MaterialApp(
+        home: NativeVideoView(
+          controller: controller,
+          renderMode: RenderMode.platformView,
+          fit: fit,
+        ),
+      );
+
+      await tester.pumpWidget(build(BoxFit.cover));
+      await tester.pump();
+      final Element original = tester.element(find.byType(AndroidView));
+
+      await tester.pumpWidget(build(BoxFit.contain));
+      await tester.pump();
+      platform.emitVideoSize(
+        controllerId: controller.controllerId,
+        width: 1080,
+        height: 1920,
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(FittedBox), findsOneWidget);
+      expect(tester.element(find.byType(AndroidView)), same(original));
+      expect(platform.detachedViewControllerIds, isEmpty);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }

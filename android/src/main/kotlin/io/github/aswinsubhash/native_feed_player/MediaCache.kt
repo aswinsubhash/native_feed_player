@@ -391,7 +391,7 @@ internal object MediaCache {
                     registerCacheKey(sourceIdentity, key)
                 }
             }
-            // Preserve cached reads after upstream failures.
+            // Bypass the cache after a cache read or write error.
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 

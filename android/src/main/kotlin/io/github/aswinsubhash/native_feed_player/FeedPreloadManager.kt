@@ -47,7 +47,7 @@ internal class FeedPreloadManager(
     private val delegate: DefaultPreloadManager
     private val addedItemsByIdentity = mutableMapOf<String, MediaItem>()
 
-    /** Sources that failed to build; retried only after [reset]. */
+    /** Sources that failed to build while they remain in the current preload window. */
     private val failedIdentities = mutableSetOf<String>()
 
     /** Notifies the owner when a source cannot be turned into a MediaSource. */
@@ -88,6 +88,7 @@ internal class FeedPreloadManager(
         currentRank = visibleRank
 
         val wanted = window.associateBy { it.cacheIdentity }
+        failedIdentities.retainAll(wanted.keys)
         for ((identity, item) in addedItemsByIdentity.toList()) {
             if (!wanted.containsKey(identity)) {
                 delegate.remove(item)
