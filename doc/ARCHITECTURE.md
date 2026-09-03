@@ -131,8 +131,9 @@ raw credential material is persisted.
 
 **iOS.** In-window sources get dedicated muted, paused preload players with a
 forward buffer scaled by distance; attaching the item is what makes AVFoundation
-fetch and decode ahead. Once a preload player is ready it prerolls, and the item
-is handed to the live controller on creation.
+fetch and decode ahead. Once a preload player is ready it prerolls, and the live
+controller creates a fresh item from the warmed asset because items cannot be
+reused across players.
 Progressive media plays through an `AVAssetResourceLoaderDelegate`
 over a private URL scheme, which serves playback from one sequential download
 while writing the same bytes to disk. Only complete 2xx responses are adopted

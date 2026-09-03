@@ -118,8 +118,12 @@ final class AVPlayerManager {
     }
 
     func takeItem() -> AVPlayerItem {
+      // AVPlayerItems cannot be reused across player instances. Recreate the
+      // item from the warmed asset, then release the preload player's item.
+      let liveItem = AVPlayerItem(asset: item.asset)
+      liveItem.preferredForwardBufferDuration = item.preferredForwardBufferDuration
       cancel()
-      return item
+      return liveItem
     }
 
     func cancel() {
