@@ -261,7 +261,14 @@ jobs:
         working-directory: example
         run: |
           flutter pub get
-          perl -e 'alarm 900; exec @ARGV' -- flutter test --no-pub --reporter expanded --timeout 30s integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
+          perl -e 'alarm 900; exec @ARGV' -- flutter test --no-pub --verbose --reporter expanded --timeout 30s integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
+
+      - name: Collect iOS simulator diagnostics
+        if: failure()
+        run: |
+          xcrun simctl listapps "$SIMULATOR_ID" | sed -n '/io.github.aswinsubhash.nativeFeedPlayerExample/,+8p' || true
+          xcrun simctl spawn "$SIMULATOR_ID" log show --last 10m --style compact \
+            --predicate 'process == "Runner" OR process == "SpringBoard" OR eventMessage CONTAINS[c] "native_feed_player"' || true
 
   publish-dry-run:
     name: Publish dry run

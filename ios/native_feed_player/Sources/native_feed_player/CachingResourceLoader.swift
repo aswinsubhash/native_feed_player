@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import UniformTypeIdentifiers
 
 /// Loads and caches progressive media through a custom URL scheme.
 ///
@@ -55,13 +56,26 @@ final class CachingResourceLoader: NSObject {
     (200...299).contains(statusCode)
   }
 
-  /// A 206 without a client Range header is a partial body masquerading as a
-  /// full response; caching it would record a truncated file as complete.
-  static func isCacheableResponse(_ statusCode: Int, requestHadRangeHeader: Bool) -> Bool {
-    guard isSuccessfulHTTPStatus(statusCode) else {
-      return false
+  /// Partial responses cannot be adopted until the loader stores ranges at
+  /// their declared Content-Range offsets.
+  static func isCacheableResponse(_ statusCode: Int) -> Bool {
+    isSuccessfulHTTPStatus(statusCode) && statusCode != 206
+  }
+
+  static func contentType(forMimeType mimeType: String?) -> String? {
+    guard let mimeType else {
+      return nil
     }
-    return statusCode != 206 || requestHadRangeHeader
+    return UTType(mimeType: mimeType)?.identifier
+  }
+
+  static func normalizedContentType(_ contentType: String?) -> String? {
+    guard let contentType else {
+      return nil
+    }
+    return contentType.contains("/")
+      ? Self.contentType(forMimeType: contentType)
+      : contentType
   }
 
   /// Bytes to serve in the next chunk of a cached-file request, or 0 when the
@@ -70,11 +84,14 @@ final class CachingResourceLoader: NSObject {
     requestedLength: Int64,
     alreadyServed: Int64,
     currentOffset: Int64,
-    byteCount: Int64
+    byteCount: Int64,
+    requestsAllDataToEndOfResource: Bool = false
   ) -> Int64 {
-    let remainingInRequest = requestedLength - alreadyServed
+    let remainingInRequest = requestsAllDataToEndOfResource
+      ? Int64.max
+      : requestedLength - alreadyServed
     let remainingInFile = byteCount - currentOffset
-    return min(remainingInRequest, remainingInFile, Int64(chunkSize))
+    return max(0, min(remainingInRequest, remainingInFile, Int64(chunkSize)))
   }
 
   fileprivate final class Download: NSObject {
@@ -92,9 +109,6 @@ final class CachingResourceLoader: NSObject {
     /// Queue-confined read handle reused across pending-request slices; the
     /// write handle stays positioned at the end of the file.
     var readHandle: FileHandle?
-    /// Whether the upstream request carried a Range header; a 206 is only a
-    /// complete response when it does.
-    var requestHadRangeHeader = false
 
     init(identity: String, temporaryURL: URL, handle: FileHandle) {
       self.identity = identity
@@ -110,7 +124,7 @@ final class CachingResourceLoader: NSObject {
     }
   }
 
-  private let queue = DispatchQueue(label: "native_feed_player.resourceloader")
+  private let queue: DispatchQueue
   private let sessionConfiguration: URLSessionConfiguration
   private lazy var session: URLSession = {
     URLSession(configuration: sessionConfiguration, delegate: self, delegateQueue: nil)
@@ -121,10 +135,14 @@ final class CachingResourceLoader: NSObject {
   private var contextsByIdentity: [String: RequestContext] = [:]
   var onFailure: ((String, Error) -> Void)?
 
-  init(sessionConfiguration: URLSessionConfiguration = .ephemeral) {
+  init(
+    sessionConfiguration: URLSessionConfiguration = .ephemeral,
+    queue: DispatchQueue = DispatchQueue(label: "native_feed_player.resourceloader")
+  ) {
     sessionConfiguration.urlCache = nil
     sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
     self.sessionConfiguration = sessionConfiguration
+    self.queue = queue
     super.init()
   }
 
@@ -280,7 +298,8 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
     cached: (url: URL, contentType: String?, byteCount: Int64)
   ) {
     if let info = request.contentInformationRequest {
-      info.contentType = cached.contentType ?? AVFileType.mp4.rawValue
+      info.contentType = CachingResourceLoader.normalizedContentType(cached.contentType)
+        ?? AVFileType.mp4.rawValue
       info.contentLength = cached.byteCount
       info.isByteRangeAccessSupported = true
     }
@@ -305,7 +324,8 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
           requestedLength: Int64(dataRequest.requestedLength),
           alreadyServed: alreadyServed,
           currentOffset: dataRequest.currentOffset,
-          byteCount: cached.byteCount
+          byteCount: cached.byteCount,
+          requestsAllDataToEndOfResource: openEnded
         )
         guard plan > 0 else {
           break
@@ -318,14 +338,24 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
         }
         dataRequest.respond(with: data)
         let served = Int64(dataRequest.currentOffset - dataRequest.requestedOffset)
-        if served >= Int64(dataRequest.requestedLength)
+        if (!openEnded && served >= Int64(dataRequest.requestedLength))
           || (openEnded && dataRequest.currentOffset >= cached.byteCount)
         {
           break
         }
       }
       if !request.isCancelled {
-        request.finishLoading()
+        let served = Int64(dataRequest.currentOffset - dataRequest.requestedOffset)
+        let complete = openEnded
+          ? dataRequest.currentOffset >= cached.byteCount
+          : served >= Int64(dataRequest.requestedLength)
+        if complete {
+          request.finishLoading()
+        } else {
+          request.finishLoading(
+            with: CachingResourceLoader.cacheError("Cached media ended before the requested range.")
+          )
+        }
       }
     } catch {
       if !request.isCancelled {
@@ -377,14 +407,10 @@ extension CachingResourceLoader {
 
     let download = Download(identity: identity, temporaryURL: temporaryURL, handle: handle)
     var request = URLRequest(url: originalURL)
-    var hadRangeHeader = false
-    for (field, value) in contextsByIdentity[identity]?.headers ?? [:] {
+    for (field, value) in contextsByIdentity[identity]?.headers ?? [:]
+    where field.lowercased() != "range" {
       request.setValue(value, forHTTPHeaderField: field)
-      if field.lowercased() == "range" {
-        hadRangeHeader = true
-      }
     }
-    download.requestHadRangeHeader = hadRangeHeader
     let task = session.dataTask(with: request)
     download.task = task
     downloadsByIdentity[identity] = download
@@ -413,28 +439,43 @@ extension CachingResourceLoader {
           continue
         }
         info.contentType = download.contentType ?? AVFileType.mp4.rawValue
-        info.contentLength = download.contentLength
+        if download.contentLength > 0 {
+          info.contentLength = download.contentLength
+        } else if download.finished {
+          info.contentLength = download.bytesWritten
+        }
         info.isByteRangeAccessSupported = true
       }
 
       guard let dataRequest = request.dataRequest else {
-        request.finishLoading()
-        continue
-      }
-
-      let offset = dataRequest.currentOffset
-      let available = download.bytesWritten - offset
-      if available <= 0 {
-        if download.finished {
-          request.finishLoading(with: download.failure)
+        if download.contentLength > 0 || download.finished {
+          request.finishLoading()
         } else {
           stillPending.append(request)
         }
         continue
       }
 
-      let outstanding = Int64(dataRequest.requestedLength)
-        - (offset - dataRequest.requestedOffset)
+      let offset = dataRequest.currentOffset
+      let openEnded = dataRequest.requestsAllDataToEndOfResource
+      let available = download.bytesWritten - offset
+      if available <= 0 {
+        if download.finished, openEnded, offset >= download.bytesWritten {
+          request.finishLoading()
+        } else if download.finished {
+          request.finishLoading(
+            with: download.failure
+              ?? CachingResourceLoader.cacheError("Media ended before the requested range.")
+          )
+        } else {
+          stillPending.append(request)
+        }
+        continue
+      }
+
+      let outstanding = openEnded
+        ? Int64.max
+        : Int64(dataRequest.requestedLength) - (offset - dataRequest.requestedOffset)
       // Cap each response so a completed download is never served as one
       // giant allocation; the request stays pending and is re-served from
       // the new offset until it is satisfied.
@@ -444,10 +485,18 @@ extension CachingResourceLoader {
       }
 
       let served = dataRequest.currentOffset - dataRequest.requestedOffset
-      if served >= Int64(dataRequest.requestedLength) {
+      let contentInformationReady = request.contentInformationRequest == nil
+        || download.contentLength > 0
+        || download.finished
+      if !openEnded, served >= Int64(dataRequest.requestedLength), contentInformationReady {
+        request.finishLoading()
+      } else if download.finished, openEnded, dataRequest.currentOffset >= download.bytesWritten {
         request.finishLoading()
       } else if download.finished {
-        request.finishLoading(with: download.failure)
+        request.finishLoading(
+          with: download.failure
+            ?? CachingResourceLoader.cacheError("Media ended before the requested range.")
+        )
       } else {
         stillPending.append(request)
       }
@@ -520,10 +569,7 @@ extension CachingResourceLoader: URLSessionDataDelegate {
         return
       }
       if let http = response as? HTTPURLResponse,
-        !CachingResourceLoader.isCacheableResponse(
-          http.statusCode,
-          requestHadRangeHeader: download.requestHadRangeHeader
-        )
+        !CachingResourceLoader.isCacheableResponse(http.statusCode)
       {
         self.failAndClean(
           download,
@@ -537,7 +583,7 @@ extension CachingResourceLoader: URLSessionDataDelegate {
       download.contentLength = response.expectedContentLength > 0
         ? response.expectedContentLength
         : 0
-      download.contentType = response.mimeType
+      download.contentType = CachingResourceLoader.contentType(forMimeType: response.mimeType)
       self.servePending(download)
       completionHandler(.allow)
     }
@@ -576,6 +622,9 @@ extension CachingResourceLoader: URLSessionDataDelegate {
         && download.receivedSuccessfulResponse
         && download.bytesWritten > 0
         && (download.contentLength == 0 || download.bytesWritten >= download.contentLength)
+      if complete, download.contentLength == 0 {
+        download.contentLength = download.bytesWritten
+      }
       if !complete, download.failure == nil {
         download.failure = CachingResourceLoader.cacheError("Media response ended before all bytes arrived.")
       }

@@ -83,11 +83,59 @@ final class AVPlayerManager {
     var errorDescription: String? { message }
   }
 
-  private struct PreparedItem {
+  private final class PreparedItem {
     let sourceId: String
     let requestIdentity: String
     let sourceKind: FeedMediaKindMessage
     let item: AVPlayerItem
+    /// Attaching the item to a paused player is what makes AVFoundation fill
+    /// `preferredForwardBufferDuration`; preroll additionally primes decoding
+    /// once the player is ready.
+    private let player: AVPlayer
+    private var statusObservation: NSKeyValueObservation?
+
+    init(
+      sourceId: String,
+      requestIdentity: String,
+      sourceKind: FeedMediaKindMessage,
+      item: AVPlayerItem
+    ) {
+      self.sourceId = sourceId
+      self.requestIdentity = requestIdentity
+      self.sourceKind = sourceKind
+      self.item = item
+      player = AVPlayer(playerItem: item)
+      player.isMuted = true
+      player.volume = 0
+      statusObservation = player.observe(\.status, options: [.new, .initial]) { player, _ in
+        guard player.status == .readyToPlay else {
+          return
+        }
+        DispatchQueue.main.async {
+          player.preroll(atRate: 1, completionHandler: nil)
+        }
+      }
+    }
+
+    func takeItem() -> AVPlayerItem {
+      // AVPlayerItems cannot be reused across player instances. Recreate the
+      // item from the warmed asset, then release the preload player's item.
+      let liveItem = AVPlayerItem(asset: item.asset)
+      liveItem.preferredForwardBufferDuration = item.preferredForwardBufferDuration
+      cancel()
+      return liveItem
+    }
+
+    func cancel() {
+      statusObservation?.invalidate()
+      statusObservation = nil
+      player.cancelPendingPrerolls()
+      player.replaceCurrentItem(with: nil)
+    }
+
+    deinit {
+      cancel()
+    }
   }
 
   private struct PlaybackMetrics {
@@ -156,8 +204,8 @@ final class AVPlayerManager {
   private let onVideoSize: VideoSizeCallback
 
   private let registry = FeedSourceRegistry()
-  private let resourceLoader = CachingResourceLoader()
   private let resourceLoaderQueue = DispatchQueue(label: "native_feed_player.loader.delegate")
+  private let resourceLoader: CachingResourceLoader
   private var controllers: [Int: ManagedController] = [:]
   private var creationOrder: [Int] = []
   private var preparedItems: [String: PreparedItem] = [:]
@@ -195,7 +243,7 @@ final class AVPlayerManager {
   private var maxTotalPlayers: Int = 6
 
   private func totalLivePlayers() -> Int {
-    controllers.count + pooledPlayers.count
+    controllers.count + pooledPlayers.count + preparedItems.count
   }
 
   private func assertMainQueue() {
@@ -217,6 +265,7 @@ final class AVPlayerManager {
     onMetrics: @escaping MetricsCallback,
     onVideoSize: @escaping VideoSizeCallback
   ) {
+    self.resourceLoader = CachingResourceLoader(queue: resourceLoaderQueue)
     self.onState = onState
     self.onReleased = onReleased
     self.onPosition = onPosition
@@ -307,7 +356,7 @@ final class AVPlayerManager {
     assertMainQueue()
     registry.remove(ids: sourceIds)
     for sourceId in sourceIds {
-      preparedItems.removeValue(forKey: sourceId)
+      discardPreparedItem(sourceId: sourceId)
       let ids = controllers.filter { $0.value.sourceId == sourceId }.map(\.key)
       for controllerId in ids {
         disposeControllerInternal(
@@ -701,7 +750,7 @@ final class AVPlayerManager {
     assertMainQueue()
     preloadGeneration += 1
     adaptivePreloadPolicy.noteMemoryPressure(at: AVPlayerManager.currentUptimeMs())
-    preparedItems.removeAll()
+    discardAllPreparedItems()
     drainPooledPlayers(keep: 0)
     enforceVisibleWindowEviction(forceAggressive: true)
   }
@@ -742,7 +791,7 @@ final class AVPlayerManager {
     }
     attachedRenderViews.removeAll()
     registry.clear()
-    preparedItems.removeAll()
+    discardAllPreparedItems()
     metricsByController.removeAll()
     creationOrder.removeAll()
     autoPausedControllerIds.removeAll()
@@ -758,6 +807,25 @@ final class AVPlayerManager {
 
   // MARK: - Prebuffering
 
+  private func discardPreparedItem(sourceId: String) {
+    guard let prepared = preparedItems.removeValue(forKey: sourceId) else {
+      return
+    }
+    prepared.cancel()
+    let identity = prepared.requestIdentity
+    let stillUsed = preparedItems.values.contains { $0.requestIdentity == identity }
+      || controllers.values.contains { $0.requestIdentity == identity }
+    if !stillUsed {
+      resourceLoader.cancel(identities: [identity], completion: {})
+    }
+  }
+
+  private func discardAllPreparedItems() {
+    for sourceId in Array(preparedItems.keys) {
+      discardPreparedItem(sourceId: sourceId)
+    }
+  }
+
   /// Prepares items in the current preload window.
   private func schedulePreloadWindow() {
     preloadGeneration += 1
@@ -770,12 +838,12 @@ final class AVPlayerManager {
     let windowIds = Set(window.map(\.id))
 
     for sourceId in Array(preparedItems.keys) where !windowIds.contains(sourceId) {
-      preparedItems.removeValue(forKey: sourceId)
+      discardPreparedItem(sourceId: sourceId)
     }
 
-    var scheduled = 0
+    var availableSlots = max(0, maxConcurrentPreloads - preparedItems.count)
     for source in window {
-      if scheduled >= maxConcurrentPreloads {
+      if availableSlots == 0 {
         break
       }
       if controllers.values.contains(where: { $0.sourceId == source.id }) {
@@ -785,10 +853,9 @@ final class AVPlayerManager {
         if existing.requestIdentity == source.cacheIdentity && existing.sourceKind == source.kind {
           continue
         }
-        preparedItems.removeValue(forKey: source.id)
+        discardPreparedItem(sourceId: source.id)
       }
-      scheduled += 1
-
+      availableSlots -= 1
       DispatchQueue.main.async { [weak self] in
         guard let self, generation == self.preloadGeneration else {
           return
@@ -811,6 +878,10 @@ final class AVPlayerManager {
           sourceKind: fresh.kind,
           item: item
         )
+        // Preloading may only reclaim idle pooled players, never controllers.
+        self.drainPooledPlayers(
+          keep: max(0, self.maxTotalPlayers - self.controllers.count - self.preparedItems.count)
+        )
       }
     }
   }
@@ -828,11 +899,11 @@ final class AVPlayerManager {
       prepared.requestIdentity == source.cacheIdentity,
       prepared.sourceKind == source.kind
     else {
-      preparedItems.removeValue(forKey: source.id)
+      discardPreparedItem(sourceId: source.id)
       return nil
     }
     preparedItems.removeValue(forKey: source.id)
-    return prepared.item
+    return prepared.takeItem()
   }
 
   private func validateSources(_ sources: [RegisteredSource]) throws {
@@ -975,11 +1046,11 @@ final class AVPlayerManager {
     for sourceId in Array(preparedItems.keys) {
       guard let source = registry.source(id: sourceId), let prepared = preparedItems[sourceId]
       else {
-        preparedItems.removeValue(forKey: sourceId)
+        discardPreparedItem(sourceId: sourceId)
         continue
       }
       if prepared.requestIdentity != source.cacheIdentity || prepared.sourceKind != source.kind {
-        preparedItems.removeValue(forKey: sourceId)
+        discardPreparedItem(sourceId: sourceId)
       }
     }
   }

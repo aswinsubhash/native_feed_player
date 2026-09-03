@@ -96,6 +96,27 @@ internal class ExoPlayerManagerPreloadResilienceTest {
     }
 
     @Test
+    fun failedPreloadIdentity_isSuppressedUntilItLeavesWindow() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val preloadManager = FeedPreloadManager(context)
+        val unsupported = source("dash", 0, "https://example.test/video.mpd")
+        var failureCount = 0
+        preloadManager.onSourceFailed = { _, _ -> failureCount += 1 }
+
+        try {
+            preloadManager.sync(listOf(unsupported), visibleRank = 0)
+            preloadManager.sync(listOf(unsupported), visibleRank = 0)
+            assertEquals(1, failureCount)
+
+            preloadManager.sync(emptyList(), visibleRank = 0)
+            preloadManager.sync(listOf(unsupported), visibleRank = 0)
+            assertEquals(2, failureCount)
+        } finally {
+            preloadManager.release()
+        }
+    }
+
+    @Test
     fun recycledPlayer_resetsPlaybackSpeed() {
         val manager = manager()
         manager.initialize(config())

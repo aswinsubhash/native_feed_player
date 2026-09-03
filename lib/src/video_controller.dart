@@ -118,6 +118,10 @@ class FeedController {
   /// Completes when the first frame is rendered.
   Future<Duration> get firstFrameRendered => _firstFrameRendered;
 
+  /// The in-flight native disposal, if one has not settled yet.
+  @internal
+  Future<void>? get pendingDisposal => _disposeOperation;
+
   /// Releases the native player. Safe to call more than once.
   Future<void> dispose() {
     if (isReleased) {
