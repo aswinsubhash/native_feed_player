@@ -15,8 +15,33 @@ env:
   FLUTTER_MIN_VERSION: 3.47.0
 
 jobs:
+  main-smoke:
+    name: Main smoke test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - name: Restore analysis options after Flutter migration
+        run: git checkout -- analysis_options.yaml example/analysis_options.yaml
+      - name: Verify formatting
+        run: |
+          dart format --output=none \
+            lib test example/lib example/test example/integration_test \
+            pigeons tool
+      - run: flutter analyze
+      - run: flutter test
+
   dart:
     name: Analyze and test (Dart)
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,6 +95,7 @@ jobs:
 
   minimum-flutter:
     name: Test minimum Flutter
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +114,7 @@ jobs:
 
   android:
     name: Build and test (Android)
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,6 +146,7 @@ jobs:
 
   ios:
     name: Build and test (iOS, ${{ matrix.package-manager }})
+    if: github.event_name != 'push'
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -182,6 +210,7 @@ jobs:
 
   android-integration:
     name: Integration tests (Android)
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -221,8 +250,9 @@ jobs:
 
   ios-integration:
     name: Integration tests (iOS)
-    runs-on: macos-latest
-    timeout-minutes: 20
+    if: github.event_name != 'push'
+    runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -261,7 +291,31 @@ jobs:
         working-directory: example
         run: |
           flutter pub get
-          perl -e 'alarm 900; exec @ARGV' -- flutter test --no-pub --verbose --reporter expanded --timeout 30s integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
+          FIRST_LOG="$RUNNER_TEMP/ios-integration-first.log"
+          set +e
+          perl -e 'alarm 600; exec @ARGV' -- \
+            flutter test --no-pub --verbose --reporter expanded --timeout 30s \
+            integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID" \
+            2>&1 | tee "$FIRST_LOG"
+          FIRST_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$FIRST_STATUS" -eq 0 ]; then
+            exit 0
+          fi
+          if ! grep -q "Waiting for VM Service port to be available" "$FIRST_LOG" \
+            || grep -q "connected to test device" "$FIRST_LOG"; then
+            exit "$FIRST_STATUS"
+          fi
+
+          echo "::warning::VM Service discovery stalled; resetting the simulator and retrying once"
+          xcrun simctl terminate "$SIMULATOR_ID" io.github.aswinsubhash.nativeFeedPlayerExample 2>/dev/null || true
+          xcrun simctl shutdown "$SIMULATOR_ID" 2>/dev/null || true
+          xcrun simctl erase "$SIMULATOR_ID"
+          xcrun simctl boot "$SIMULATOR_ID"
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+          perl -e 'alarm 600; exec @ARGV' -- \
+            flutter test --no-pub --verbose --reporter expanded --timeout 30s \
+            integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
 
       - name: Collect iOS simulator diagnostics
         if: failure()
@@ -272,6 +326,7 @@ jobs:
 
   publish-dry-run:
     name: Publish dry run
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

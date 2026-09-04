@@ -83,59 +83,11 @@ final class AVPlayerManager {
     var errorDescription: String? { message }
   }
 
-  private final class PreparedItem {
+  private struct PreparedItem {
     let sourceId: String
     let requestIdentity: String
     let sourceKind: FeedMediaKindMessage
     let item: AVPlayerItem
-    /// Attaching the item to a paused player is what makes AVFoundation fill
-    /// `preferredForwardBufferDuration`; preroll additionally primes decoding
-    /// once the player is ready.
-    private let player: AVPlayer
-    private var statusObservation: NSKeyValueObservation?
-
-    init(
-      sourceId: String,
-      requestIdentity: String,
-      sourceKind: FeedMediaKindMessage,
-      item: AVPlayerItem
-    ) {
-      self.sourceId = sourceId
-      self.requestIdentity = requestIdentity
-      self.sourceKind = sourceKind
-      self.item = item
-      player = AVPlayer(playerItem: item)
-      player.isMuted = true
-      player.volume = 0
-      statusObservation = player.observe(\.status, options: [.new, .initial]) { player, _ in
-        guard player.status == .readyToPlay else {
-          return
-        }
-        DispatchQueue.main.async {
-          player.preroll(atRate: 1, completionHandler: nil)
-        }
-      }
-    }
-
-    func takeItem() -> AVPlayerItem {
-      // AVPlayerItems cannot be reused across player instances. Recreate the
-      // item from the warmed asset, then release the preload player's item.
-      let liveItem = AVPlayerItem(asset: item.asset)
-      liveItem.preferredForwardBufferDuration = item.preferredForwardBufferDuration
-      cancel()
-      return liveItem
-    }
-
-    func cancel() {
-      statusObservation?.invalidate()
-      statusObservation = nil
-      player.cancelPendingPrerolls()
-      player.replaceCurrentItem(with: nil)
-    }
-
-    deinit {
-      cancel()
-    }
   }
 
   private struct PlaybackMetrics {
@@ -243,7 +195,7 @@ final class AVPlayerManager {
   private var maxTotalPlayers: Int = 6
 
   private func totalLivePlayers() -> Int {
-    controllers.count + pooledPlayers.count + preparedItems.count
+    controllers.count + pooledPlayers.count
   }
 
   private func assertMainQueue() {
@@ -811,7 +763,6 @@ final class AVPlayerManager {
     guard let prepared = preparedItems.removeValue(forKey: sourceId) else {
       return
     }
-    prepared.cancel()
     let identity = prepared.requestIdentity
     let stillUsed = preparedItems.values.contains { $0.requestIdentity == identity }
       || controllers.values.contains { $0.requestIdentity == identity }
@@ -878,10 +829,6 @@ final class AVPlayerManager {
           sourceKind: fresh.kind,
           item: item
         )
-        // Preloading may only reclaim idle pooled players, never controllers.
-        self.drainPooledPlayers(
-          keep: max(0, self.maxTotalPlayers - self.controllers.count - self.preparedItems.count)
-        )
       }
     }
   }
@@ -903,7 +850,7 @@ final class AVPlayerManager {
       return nil
     }
     preparedItems.removeValue(forKey: source.id)
-    return prepared.takeItem()
+    return prepared.item
   }
 
   private func validateSources(_ sources: [RegisteredSource]) throws {

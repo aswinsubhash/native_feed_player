@@ -129,11 +129,9 @@ requests and every HLS playlist, segment, and key request. Cache keys are
 partitioned by a versioned SHA-256 identity over URI and canonical headers; no
 raw credential material is persisted.
 
-**iOS.** In-window sources get dedicated muted, paused preload players with a
-forward buffer scaled by distance; attaching the item is what makes AVFoundation
-fetch and decode ahead. Once a preload player is ready it prerolls, and the live
-controller creates a fresh item from the warmed asset because items cannot be
-reused across players.
+**iOS.** In-window sources get bounded, unassociated `AVPlayerItem`s configured
+with a forward-buffer target scaled by distance. The live controller adopts the
+item directly; AVFoundation begins loading when that controller attaches it.
 Progressive media plays through an `AVAssetResourceLoaderDelegate`
 over a private URL scheme, which serves playback from one sequential download
 while writing the same bytes to disk. Only complete 2xx responses are adopted
