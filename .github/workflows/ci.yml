@@ -252,7 +252,7 @@ jobs:
     name: Integration tests (iOS)
     if: github.event_name != 'push'
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -291,7 +291,31 @@ jobs:
         working-directory: example
         run: |
           flutter pub get
-          perl -e 'alarm 900; exec @ARGV' -- flutter test --no-pub --verbose --reporter expanded --timeout 30s integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
+          FIRST_LOG="$RUNNER_TEMP/ios-integration-first.log"
+          set +e
+          perl -e 'alarm 600; exec @ARGV' -- \
+            flutter test --no-pub --verbose --reporter expanded --timeout 30s \
+            integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID" \
+            2>&1 | tee "$FIRST_LOG"
+          FIRST_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$FIRST_STATUS" -eq 0 ]; then
+            exit 0
+          fi
+          if ! grep -q "Waiting for VM Service port to be available" "$FIRST_LOG" \
+            || grep -q "connected to test device" "$FIRST_LOG"; then
+            exit "$FIRST_STATUS"
+          fi
+
+          echo "::warning::VM Service discovery stalled; resetting the simulator and retrying once"
+          xcrun simctl terminate "$SIMULATOR_ID" io.github.aswinsubhash.nativeFeedPlayerExample 2>/dev/null || true
+          xcrun simctl shutdown "$SIMULATOR_ID" 2>/dev/null || true
+          xcrun simctl erase "$SIMULATOR_ID"
+          xcrun simctl boot "$SIMULATOR_ID"
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+          perl -e 'alarm 600; exec @ARGV' -- \
+            flutter test --no-pub --verbose --reporter expanded --timeout 30s \
+            integration_test/plugin_integration_test.dart -d "$SIMULATOR_ID"
 
       - name: Collect iOS simulator diagnostics
         if: failure()
