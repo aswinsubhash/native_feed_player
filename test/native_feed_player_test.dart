@@ -198,8 +198,11 @@ class FakeFeedPlayerPlatform
   @override
   Future<void> detachTexture(int controllerId) async {}
 
+  int disposeCalls = 0;
+
   @override
   Future<void> dispose() async {
+    disposeCalls += 1;
     await disposeGate?.future;
     final Object? error = disposeError;
     if (error != null) {
@@ -406,6 +409,83 @@ void main() {
       expect(controller.releaseReason, ControllerReleaseReason.disposed);
       expect(player.sources, isEmpty);
       expect(player.activeControllers, isEmpty);
+    });
+
+    test('disposing an uninitialized instance preserves the owner', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController controller = await player.controllerFor('a');
+      final FeedPlayer unused = FeedPlayer(platform: platform);
+
+      await unused.dispose();
+
+      expect(platform.disposeCalls, 0);
+      expect(controller.isReleased, isFalse);
+      expect(await player.controllerFor('a'), same(controller));
+    });
+
+    test('superseded instances cannot dispose or mutate the owner', () async {
+      await player.setSources(<FeedSource>[_source('a')]);
+      final FeedController previous = await player.controllerFor('a');
+      final FeedPlayer replacement = FeedPlayer(platform: platform);
+      await replacement.initialize();
+      await replacement.setSources(<FeedSource>[_source('b')]);
+      final FeedController current = await replacement.controllerFor('b');
+
+      expect(previous.isReleased, isTrue);
+      expect(player.sources, isEmpty);
+      await expectLater(player.setSources(<FeedSource>[]), throwsStateError);
+      await expectLater(player.clearMediaCache(), throwsStateError);
+      await player.dispose();
+
+      expect(platform.disposeCalls, 0);
+      expect(current.isReleased, isFalse);
+      expect(await replacement.controllerFor('b'), same(current));
+      await replacement.dispose();
+      expect(platform.disposeCalls, 1);
+    });
+
+    test('session replacement waits for the previous mutation', () async {
+      platform.setSourcesGate = Completer<void>();
+      final Future<void> mutation = player.setSources(<FeedSource>[
+        _source('a'),
+      ]);
+      final FeedPlayer replacement = FeedPlayer(platform: platform);
+      final Future<void> initialization = replacement.initialize(
+        config: const FeedPlayerConfig(maxActivePlayers: 5),
+      );
+      final Future<void> staleMutation = expectLater(
+        player.appendSources(<FeedSource>[_source('b')]),
+        throwsStateError,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(platform.initializedWith!.maxActivePlayers, 3);
+      platform.setSourcesGate!.complete();
+      await mutation;
+      await initialization;
+      await staleMutation;
+
+      expect(platform.initializedWith!.maxActivePlayers, 5);
+      expect(platform.appendCalls, isEmpty);
+      expect(player.sources, isEmpty);
+      await player.dispose();
+      await replacement.dispose();
+      expect(platform.disposeCalls, 1);
+    });
+
+    test('an existing instance can explicitly reclaim a session', () async {
+      final FeedPlayer replacement = FeedPlayer(platform: platform);
+      await replacement.initialize();
+      await replacement.setSources(<FeedSource>[_source('b')]);
+      final FeedController controller = await replacement.controllerFor('b');
+
+      await player.initialize();
+      await player.setSources(<FeedSource>[_source('a')]);
+      await replacement.dispose();
+
+      expect(controller.isReleased, isTrue);
+      expect(platform.disposeCalls, 0);
+      expect((await player.controllerFor('a')).isReleased, isFalse);
     });
 
     test('visible source must be registered', () async {

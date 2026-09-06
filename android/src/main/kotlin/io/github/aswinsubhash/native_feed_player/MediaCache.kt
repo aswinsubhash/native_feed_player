@@ -5,9 +5,11 @@ import android.net.Uri
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.annotation.VisibleForTesting
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -47,6 +49,22 @@ internal object CacheIdentity {
         return CACHE_KEY_PREFIX + sha256("$SCHEMA_VERSION\n${identity.length}:$identity\n$canonicalHeaders")
     }
 
+    fun forRequest(source: RegisteredSource): String {
+        val cacheKey = source.cacheKey
+        val keyIdentity = if (cacheKey == null) "null" else "${cacheKey.length}:$cacheKey"
+        val headers = source.headers.toSortedMap().entries.joinToString(separator = "") { (name, value) ->
+            "${name.length}:$name${value.length}:$value"
+        }
+        return sha256("${forSource(source.uri, emptyMap())}\n${source.kind}\n$keyIdentity\n$headers")
+    }
+
+    fun cacheKey(source: RegisteredSource, requestUri: String): String =
+        if (!source.cacheKey.isNullOrBlank() && source.isProgressive && requestUri == source.uri) {
+            "${source.cacheIdentity}/progressive:v3"
+        } else {
+            cacheKey(source.cacheIdentity, requestUri)
+        }
+
     fun normalizedHeaders(headers: Map<String, String>): Map<String, String> {
         val result = sortedMapOf<String, String>()
         headers.entries
@@ -76,8 +94,16 @@ internal object CacheIdentity {
 internal val RegisteredSource.cacheIdentity: String
     get() = CacheIdentity.forSource(uri, headers, cacheKey)
 
+internal val RegisteredSource.requestIdentity: String
+    get() = CacheIdentity.forRequest(this)
+
+@get:OptIn(UnstableApi::class)
+internal val RegisteredSource.isProgressive: Boolean
+    get() = kind != FeedMediaKindMessage.HLS &&
+        Util.inferContentType(Uri.parse(uri)) == C.CONTENT_TYPE_OTHER
+
 internal fun RegisteredSource.mediaItem(): MediaItem {
-    val builder = MediaItem.Builder().setUri(uri)
+    val builder = MediaItem.Builder().setUri(uri).setMediaId(requestIdentity)
     if (kind == FeedMediaKindMessage.HLS) {
         builder.setMimeType(MimeTypes.APPLICATION_M3U8)
     }
@@ -272,6 +298,24 @@ internal object MediaCache {
         }
     }
 
+    internal data class RootCacheStatus(
+        val cachedBytes: Long,
+        val totalBytes: Long,
+        val isComplete: Boolean
+    )
+
+    @Synchronized
+    fun rootStatus(rootCacheKey: String): RootCacheStatus {
+        val activeCache = cache ?: return RootCacheStatus(0, 0, false)
+        val length = ContentMetadata.getContentLength(activeCache.getContentMetadata(rootCacheKey))
+        val cached = activeCache.getCachedBytes(rootCacheKey, 0, Long.MAX_VALUE)
+        return RootCacheStatus(
+            cachedBytes = cached,
+            totalBytes = length.coerceAtLeast(0),
+            isComplete = length > 0 && activeCache.isCached(rootCacheKey, 0, length)
+        )
+    }
+
     @Synchronized
     fun evict(sourceIdentity: String) {
         val activeCache = cache ?: return
@@ -387,7 +431,7 @@ internal object MediaCache {
             .setCache(activeCache)
             .setUpstreamDataSourceFactory(resolving)
             .setCacheKeyFactory { dataSpec ->
-                CacheIdentity.cacheKey(sourceIdentity, dataSpec.uri.toString()).also { key ->
+                CacheIdentity.cacheKey(source, dataSpec.uri.toString()).also { key ->
                     registerCacheKey(sourceIdentity, key)
                 }
             }

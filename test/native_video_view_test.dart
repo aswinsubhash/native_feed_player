@@ -268,6 +268,80 @@ void main() {
     ]);
   });
 
+  testWidgets('a stale widget cannot detach a replacement output', (
+    WidgetTester tester,
+  ) async {
+    final FeedController controller = await player.controllerFor('a');
+    Widget output(String key) => NativeVideoView(
+      key: ValueKey<String>(key),
+      controller: controller,
+      renderMode: RenderMode.texture,
+    );
+    Widget scene({required bool old, required bool replacement}) => MaterialApp(
+      home: Stack(
+        children: <Widget>[
+          if (old)
+            Positioned.fill(
+              key: const ValueKey<String>('old'),
+              child: output('old'),
+            ),
+          if (replacement)
+            Positioned.fill(
+              key: const ValueKey<String>('replacement'),
+              child: output('replacement'),
+            ),
+        ],
+      ),
+    );
+
+    await tester.pumpWidget(scene(old: true, replacement: false));
+    await tester.pump();
+    await tester.pumpWidget(scene(old: true, replacement: true));
+    await tester.pump();
+    final int detachments = platform.detachedTextureControllerIds.length;
+    await tester.pumpWidget(scene(old: false, replacement: true));
+    await tester.pump();
+
+    expect(platform.detachedTextureControllerIds, hasLength(detachments));
+    expect(find.byType(Texture), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect(platform.detachedTextureControllerIds, hasLength(detachments + 1));
+  });
+
+  testWidgets(
+    'replacement widgets serialize in-flight controller attachments',
+    (WidgetTester tester) async {
+      final FeedController controller = await player.controllerFor('a');
+      final Completer<int> attachment = Completer<int>();
+      platform.nextAttachTexture = attachment;
+      Widget scene(String key) => MaterialApp(
+        home: NativeVideoView(
+          key: ValueKey<String>(key),
+          controller: controller,
+          renderMode: RenderMode.texture,
+        ),
+      );
+
+      await tester.pumpWidget(scene('old'));
+      await tester.pump();
+      await tester.pumpWidget(scene('replacement'));
+      await tester.pump();
+      expect(platform.attachedTextureControllerIds, hasLength(1));
+
+      attachment.complete(1001);
+      await tester.pump();
+      await tester.pump();
+
+      expect(platform.attachmentOperations, <String>[
+        'attachTexture:${controller.controllerId}',
+        'detachTexture:${controller.controllerId}',
+        'attachTexture:${controller.controllerId}',
+      ]);
+      expect(find.byType(Texture), findsOneWidget);
+    },
+  );
+
   testWidgets('changing render mode rebinds the same controller', (
     WidgetTester tester,
   ) async {

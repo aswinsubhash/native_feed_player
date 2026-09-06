@@ -3,6 +3,7 @@ package io.github.aswinsubhash.native_feed_player
 import android.app.Application
 import android.content.ComponentCallbacks2
 import android.os.Looper
+import androidx.media3.common.Player
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Test
@@ -11,6 +12,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -84,6 +87,109 @@ internal class ExoPlayerManagerLifecycleTest {
         assertEquals(0, manager.activeControllerCount())
         assertEquals(0, manager.scheduledPreloadCount())
         assertNull(manager.cacheIdentity("a"))
+    }
+
+    @Test
+    fun setSources_rotatingSignedUriWithStableCacheKey_releasesNativeController() {
+        val released = mutableListOf<Pair<Int, ReleaseReasonMessage>>()
+        val manager = manager { id, reason -> released.add(id to reason) }
+        val original = source("a", 0).copy(cacheKey = "stable")
+        manager.initialize(config())
+        manager.setSources(listOf(original))
+        manager.createController(1, "a", autoPlay = false, looping = false)
+        val diskIdentity = manager.cacheIdentity("a")
+
+        manager.setSources(listOf(original.copy(uri = "${original.uri}?sig=new")))
+
+        assertEquals(diskIdentity, manager.cacheIdentity("a"))
+        assertEquals(listOf(1 to ReleaseReasonMessage.DISPOSED), released)
+        assertNull(manager.playerFor(1))
+    }
+
+    @Test
+    fun setSources_headerNormalizationPreservesController_butCacheKeyChangeReleasesIt() {
+        val manager = manager()
+        val original = source("a", 0).copy(headers = mapOf("Authorization" to "Bearer one"), cacheKey = "stable")
+        manager.initialize(config())
+        manager.setSources(listOf(original))
+        manager.createController(1, "a", autoPlay = false, looping = false)
+        val player = assertNotNull(manager.playerFor(1))
+
+        manager.setSources(listOf(original.copy(headers = mapOf("authorization" to "Bearer one"))))
+        assertTrue(player === manager.playerFor(1))
+        manager.setSources(listOf(original.copy(cacheKey = "replacement")))
+        assertNull(manager.playerFor(1))
+    }
+
+    @Test
+    fun background_pausesBufferingIntent_andRepeatedNotificationsPreserveResumeIntent() {
+        val manager = manager()
+        manager.initialize(config())
+        manager.setSources(listOf(source("a", 0)))
+        manager.createController(1, "a", autoPlay = true, looping = false)
+        val player = assertNotNull(manager.playerFor(1))
+        assertEquals(Player.STATE_BUFFERING, player.playbackState)
+        assertFalse(player.isPlaying)
+        assertTrue(player.playWhenReady)
+
+        manager.onAppBackgrounded()
+        assertFalse(player.playWhenReady)
+        manager.onAppBackgrounded()
+        manager.onAppForegrounded()
+        assertTrue(player.playWhenReady)
+    }
+
+    @Test
+    fun background_createAndPlayDeferIntent_andPauseCancelsResume() {
+        val manager = manager()
+        manager.initialize(config())
+        manager.setSources(listOf(source("a", 0)))
+        manager.onAppBackgrounded()
+        manager.createController(1, "a", autoPlay = true, looping = false)
+        manager.createController(2, "a", autoPlay = false, looping = false)
+        manager.createController(3, "a", autoPlay = false, looping = false)
+        val autoplay = assertNotNull(manager.playerFor(1))
+        val requested = assertNotNull(manager.playerFor(2))
+        val paused = assertNotNull(manager.playerFor(3))
+        manager.play(2)
+        manager.pause(1)
+        assertFalse(autoplay.playWhenReady)
+        assertFalse(requested.playWhenReady)
+        assertFalse(paused.playWhenReady)
+
+        manager.onAppForegrounded()
+        assertFalse(autoplay.playWhenReady)
+        assertTrue(requested.playWhenReady)
+        assertFalse(paused.playWhenReady)
+    }
+
+    @Test
+    fun background_autoplayResumesButDisposedIntentDoesNotSurviveControllerReuse() {
+        val manager = manager()
+        manager.initialize(config())
+        manager.setSources(listOf(source("a", 0)))
+        manager.onAppBackgrounded()
+        manager.createController(1, "a", autoPlay = true, looping = false)
+        manager.createController(2, "a", autoPlay = true, looping = false)
+        manager.disposeController(2)
+        manager.createController(2, "a", autoPlay = false, looping = false)
+        assertFalse(assertNotNull(manager.playerFor(1)).playWhenReady)
+
+        manager.onAppForegrounded()
+        assertTrue(assertNotNull(manager.playerFor(1)).playWhenReady)
+        assertFalse(assertNotNull(manager.playerFor(2)).playWhenReady)
+    }
+
+    @Test
+    fun initializeWhileBackgrounded_doesNotEnableAutoplay() {
+        val manager = manager()
+        manager.onAppBackgrounded()
+        manager.initialize(config())
+        manager.setSources(listOf(source("a", 0)))
+        manager.createController(1, "a", autoPlay = true, looping = false)
+        assertFalse(assertNotNull(manager.playerFor(1)).playWhenReady)
+        manager.onAppForegrounded()
+        assertTrue(assertNotNull(manager.playerFor(1)).playWhenReady)
     }
 
     @Test

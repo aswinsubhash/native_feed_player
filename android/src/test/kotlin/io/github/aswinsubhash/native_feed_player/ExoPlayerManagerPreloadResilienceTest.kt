@@ -6,15 +6,21 @@ import android.graphics.SurfaceTexture
 import android.os.Looper
 import android.view.TextureView
 import androidx.test.core.app.ApplicationProvider
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.source.preload.BasePreloadManager
+import androidx.media3.exoplayer.source.preload.DefaultPreloadManager
+import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -112,6 +118,183 @@ internal class ExoPlayerManagerPreloadResilienceTest {
             preloadManager.sync(listOf(unsupported), visibleRank = 0)
             assertEquals(2, failureCount)
         } finally {
+            preloadManager.release()
+        }
+    }
+
+    @Test
+    fun preload_rotatedSignedUriWithStableCacheKey_replacesExpiredRequest() {
+        val preloadManager = FeedPreloadManager(ApplicationProvider.getApplicationContext<Application>())
+        val original = source("a", 0, "https://cdn.test/video.mp4?sig=expired").copy(cacheKey = "stable")
+        val rotated = original.copy(uri = "https://cdn.test/video.mp4?sig=current")
+        try {
+            preloadManager.sync(listOf(original), visibleRank = 0)
+            assertNotNull(preloadManager.mediaSourceFor(original))
+            assertNull(preloadManager.mediaSourceFor(rotated))
+
+            preloadManager.sync(listOf(rotated), visibleRank = 0)
+            assertEquals(1, preloadManager.sourceCount())
+            assertNull(preloadManager.mediaSourceFor(original))
+            val refreshed = assertNotNull(preloadManager.mediaSourceFor(rotated))
+            assertEquals(rotated.uri, refreshed.mediaItem.localConfiguration?.uri.toString())
+        } finally {
+            preloadManager.release()
+        }
+    }
+
+    @Test
+    fun preload_sameUriWithDifferentCredentialsOrKind_hasDistinctMediaItems() {
+        val preloadManager = FeedPreloadManager(ApplicationProvider.getApplicationContext<Application>())
+        val original = source("a", 0, "https://cdn.test/video.mp4").copy(cacheKey = "stable")
+        val sources = listOf(
+            original,
+            original.copy(id = "private", headers = mapOf("Authorization" to "Bearer private")),
+            original.copy(id = "hls", kind = FeedMediaKindMessage.HLS),
+            original.copy(id = "other", cacheKey = "other")
+        )
+        try {
+            preloadManager.sync(sources, visibleRank = 0)
+            val mediaItems = sources.map { assertNotNull(preloadManager.mediaSourceFor(it)).mediaItem }
+            assertEquals(4, preloadManager.sourceCount())
+            assertEquals(4, mediaItems.toSet().size)
+            for ((source, item) in sources.zip(mediaItems)) {
+                assertEquals(source.requestIdentity, item.mediaId)
+            }
+        } finally {
+            preloadManager.release()
+        }
+    }
+
+    @Test
+    fun preload_failedRequestDoesNotSuppressReplacementWithSameDiskIdentity() {
+        val preloadManager = FeedPreloadManager(ApplicationProvider.getApplicationContext<Application>())
+        val original = source("a", 0, "https://cdn.test/video.mpd").copy(cacheKey = "stable")
+        val replacement = original.copy(uri = "https://cdn.test/video.mp4")
+        var failures = 0
+        preloadManager.onSourceFailed = { _, _ -> failures += 1 }
+        try {
+            preloadManager.sync(listOf(original), visibleRank = 0)
+            assertEquals(1, failures)
+            preloadManager.sync(listOf(replacement), visibleRank = 0)
+            assertNotNull(preloadManager.mediaSourceFor(replacement))
+            assertEquals(1, failures)
+        } finally {
+            preloadManager.release()
+        }
+    }
+
+    private fun delegate(manager: FeedPreloadManager): DefaultPreloadManager =
+        FeedPreloadManager::class.java.getDeclaredField("delegate").apply { isAccessible = true }
+            .get(manager) as DefaultPreloadManager
+
+    private fun holders(manager: FeedPreloadManager): Map<String, Any> {
+        val holders = BasePreloadManager::class.java.getDeclaredField("sourceHolderPriorityList")
+            .apply { isAccessible = true }.get(delegate(manager)) as List<*>
+        return holders.filterNotNull().associateBy { holder ->
+            val item = holder.javaClass.getField("mediaItem").apply { isAccessible = true }
+                .get(holder) as MediaItem
+            item.mediaId
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun assertRankingAndTargets(
+        manager: FeedPreloadManager,
+        window: List<RegisteredSource>,
+        visibleRank: Int
+    ) {
+        val delegate = delegate(manager)
+        val holders = holders(manager)
+        val control = BasePreloadManager::class.java.getDeclaredField("targetPreloadStatusControl")
+            .apply { isAccessible = true }.get(delegate) as
+            TargetPreloadStatusControl<Int, DefaultPreloadManager.PreloadStatus>
+        val comparator = BasePreloadManager::class.java.getDeclaredField("rankingDataComparator")
+            .apply { isAccessible = true }.get(delegate) as Comparator<Int>
+        val registeredRanks = FeedPreloadManager::class.java.getDeclaredField("registeredRanks")
+            .apply { isAccessible = true }.get(manager) as Map<Int, Int>
+        val tokens = window.associateWith { source ->
+            val holder = holders.getValue(source.requestIdentity)
+            holder.javaClass.getField("rankingData").apply { isAccessible = true }.get(holder) as Int
+        }
+        for ((source, token) in tokens) {
+            assertEquals(source.rank, registeredRanks[token])
+            val expected = when (abs(source.rank - visibleRank)) {
+                0 -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_NOT_PRELOADED
+                1 -> DefaultPreloadManager.PreloadStatus.specifiedRangeLoaded(3_000L)
+                else -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_TRACKS_SELECTED
+            }
+            assertEquals(expected, control.getTargetPreloadStatus(token))
+            for ((other, otherToken) in tokens) {
+                assertEquals(
+                    abs(source.rank - visibleRank).compareTo(abs(other.rank - visibleRank)),
+                    comparator.compare(token, otherToken)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun preload_alternatingRepeatedIdentities_followNearestRankBeyondWindow_withoutRegistrationChurn() {
+        MediaCache.resetForTesting()
+        val preloadManager = FeedPreloadManager(ApplicationProvider.getApplicationContext<Application>())
+        val registry = FeedSourceRegistry()
+        val sources = (0..13).map { rank ->
+            source("item-$rank", rank, "https://cdn.test/${rank % 2}.mp4")
+        }
+        registry.replaceAll(sources)
+        try {
+            registry.setVisible(sources.first().id)
+            preloadManager.sync(registry.preloadWindow(2, 1), 0)
+            val originalHolders = holders(preloadManager)
+            val originalMediaSources = registry.preloadWindow(2, 1).associate {
+                it.requestIdentity to assertNotNull(preloadManager.mediaSourceFor(it))
+            }
+            for (visible in sources + sources.reversed()) {
+                registry.setVisible(visible.id)
+                val window = registry.preloadWindow(2, 1)
+                preloadManager.sync(window, visible.rank)
+                assertEquals(2, preloadManager.sourceCount())
+                assertRankingAndTargets(preloadManager, window, visible.rank)
+                for (source in window) {
+                    assertSame(originalHolders[source.requestIdentity], holders(preloadManager)[source.requestIdentity])
+                    assertSame(originalMediaSources[source.requestIdentity], preloadManager.mediaSourceFor(source))
+                }
+                preloadManager.sync(window, visible.rank)
+                assertRankingAndTargets(preloadManager, window, visible.rank)
+                for (source in window) {
+                    assertSame(originalHolders[source.requestIdentity], holders(preloadManager)[source.requestIdentity])
+                }
+            }
+        } finally {
+            preloadManager.release()
+        }
+    }
+
+    @Test
+    fun preload_reorderedSameIdentities_updatePriorityAndTarget_withoutReplacingSharedSource() {
+        MediaCache.resetForTesting()
+        val preloadManager = FeedPreloadManager(ApplicationProvider.getApplicationContext<Application>())
+        val initial = (0..2).map { source("item-$it", it, "https://cdn.test/$it.mp4") }
+        val reordered = listOf(initial[0].copy(rank = 2), initial[1].copy(rank = 0), initial[2].copy(rank = 1))
+        val player = preloadManager.buildPlayer()
+        try {
+            preloadManager.sync(initial, 0)
+            val shared = assertNotNull(preloadManager.mediaSourceFor(initial[0]))
+            player.setMediaSource(shared)
+            val originalHolders = holders(preloadManager)
+            assertRankingAndTargets(preloadManager, initial, 0)
+            preloadManager.sync(reordered, 0)
+            assertRankingAndTargets(preloadManager, reordered, 0)
+            assertSame(shared, preloadManager.mediaSourceFor(reordered[0]))
+            for (source in reordered) {
+                assertSame(originalHolders[source.requestIdentity], holders(preloadManager)[source.requestIdentity])
+            }
+            preloadManager.sync(reordered, 0)
+            for (source in reordered) {
+                assertSame(originalHolders[source.requestIdentity], holders(preloadManager)[source.requestIdentity])
+            }
+        } finally {
+            player.release()
             preloadManager.release()
         }
     }

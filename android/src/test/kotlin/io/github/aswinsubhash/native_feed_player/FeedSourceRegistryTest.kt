@@ -260,12 +260,105 @@ internal class FeedSourceRegistryTest {
             mapOf("Authorization" to "old")
         )
         registry.replaceAll(listOf(original))
-        val identity = original.cacheIdentity
+        val identity = original.requestIdentity
         assertFalse(registry.isOrphaned(original.id, identity, original.kind))
 
         registry.replaceAll(listOf(original.copy(headers = mapOf("Authorization" to "new"))))
         assertTrue(registry.isOrphaned(original.id, identity, original.kind))
         assertTrue(registry.isOrphaned("removed-id", identity, original.kind))
+    }
+
+    @Test
+    fun requestIdentity_tracksSourceMetadataButNotRank() {
+        val original = source("a", 0).copy(
+            uri = "https://cdn.test/video.mp4?sig=old",
+            headers = mapOf("Authorization" to "Bearer one"),
+            cacheKey = "stable"
+        )
+        val registry = FeedSourceRegistry()
+        val rotated = original.copy(uri = "https://cdn.test/video.mp4?sig=new")
+        assertEquals(original.cacheIdentity, rotated.cacheIdentity)
+        for (replacement in listOf(
+            rotated,
+            original.copy(kind = FeedMediaKindMessage.HLS),
+            original.copy(headers = mapOf("Authorization" to "Bearer two")),
+            original.copy(cacheKey = "other"),
+            original.copy(cacheKey = null)
+        )) {
+            registry.replaceAll(listOf(replacement))
+            assertTrue(registry.isOrphaned(original.id, original.requestIdentity, original.kind))
+        }
+        val respelled = original.copy(headers = mapOf(" authorization " to " Bearer one "))
+        assertEquals(original.cacheIdentity, respelled.cacheIdentity)
+        assertNotEquals(original.requestIdentity, respelled.requestIdentity)
+        val equivalent = original.copy(rank = 100)
+        registry.replaceAll(listOf(equivalent))
+        assertEquals(original.requestIdentity, equivalent.requestIdentity)
+        assertFalse(registry.isOrphaned(original.id, original.requestIdentity, original.kind))
+        assertNotEquals(original.copy(cacheKey = null).requestIdentity, original.copy(cacheKey = "").requestIdentity)
+    }
+
+    @Test
+    fun preloadWindow_deduplicatesRequestsInsteadOfStableDiskIdentities() {
+        val original = source("a", 0).copy(cacheKey = "stable")
+        val registry = FeedSourceRegistry()
+        registry.replaceAll(listOf(
+            original,
+            original.copy(id = "duplicate", rank = 1),
+            original.copy(id = "rotated", rank = 2, uri = "${original.uri}?sig=new"),
+            original.copy(id = "kind", rank = 3, kind = FeedMediaKindMessage.HLS),
+            original.copy(id = "key", rank = 4, cacheKey = "different")
+        ))
+        assertEquals(listOf("a", "rotated", "kind", "key"), registry.preloadWindow(4, 0).map { it.id })
+    }
+
+    @Test
+    fun indexedWindow_preservesInsertionTiesAndRankUpdates() {
+        val registry = FeedSourceRegistry()
+        registry.replaceAll(listOf(
+            source("right", 101), source("left", 99), source("visible", 100),
+            source("same", 100), source("far", -1000)
+        ))
+        registry.setVisible("visible")
+        assertEquals(listOf("visible", "same", "right", "left"), registry.preloadWindow(1, 1).map { it.id })
+        registry.append(listOf(source("right", 100), source("far", 102)))
+        assertEquals(listOf("right", "visible", "same", "left", "far"), registry.preloadWindow(2, 1).map { it.id })
+        registry.remove(listOf("right", "same", "far"))
+        assertEquals(listOf("visible", "left"), registry.preloadWindow(2, 1).map { it.id })
+        registry.clear()
+        registry.append(listOf(source("new", -5)))
+        assertEquals(listOf("new"), registry.preloadWindow(2, 1).map { it.id })
+    }
+
+    @Test
+    fun indexedWindow_handlesSparseAndExtremeRanksWithoutOverflow() {
+        val registry = FeedSourceRegistry()
+        registry.replaceAll(listOf(
+            source("min", Int.MIN_VALUE), source("max", Int.MAX_VALUE),
+            source("neighbor", Int.MAX_VALUE - 1), source("middle", 0)
+        ))
+        registry.setVisible("max")
+        assertEquals(listOf("max", "neighbor"), registry.preloadWindow(2, 2).map { it.id })
+        registry.setVisible("min")
+        assertEquals(listOf("min"), registry.preloadWindow(2, 2).map { it.id })
+    }
+
+    @Test
+    fun indexedWindow_matchesStableScanAcrossLargeFeedAndTravelDirections() {
+        val registry = FeedSourceRegistry()
+        val random = kotlin.random.Random(42)
+        val sources = (0 until 10_000).map { index -> source("s$index", random.nextInt(-5000, 5000)) }
+        registry.replaceAll(sources)
+        repeat(30) { index ->
+            registry.setVisible("s${index * 300}")
+            val rank = registry.visibleRank()!!
+            val forward = if (registry.direction == ScrollDirection.BACKWARD) 2 else 5
+            val backward = if (registry.direction == ScrollDirection.BACKWARD) 5 else 2
+            val expected = sources.filter { it.rank - rank in -backward..forward }
+                .sortedBy { kotlin.math.abs(it.rank - rank) }
+                .distinctBy { it.requestIdentity }
+            assertEquals(expected, registry.preloadWindow(5, 2))
+        }
     }
 
     @Test

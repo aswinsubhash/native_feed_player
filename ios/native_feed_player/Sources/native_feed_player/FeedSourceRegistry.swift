@@ -13,6 +13,21 @@ struct RegisteredSource {
   var cacheIdentity: String {
     MediaCacheIdentity.make(uri: uri, headers: headers, cacheKey: cacheKey)
   }
+
+  var resourceIdentity: String {
+    cacheIdentity + MediaCacheIdentity.make(uri: uri, headers: headers)
+  }
+
+  var playbackIdentity: String {
+    let rawHeaders = headers.sorted { $0.key < $1.key }.map { name, value in
+      "\(name.utf8.count):\(name)\(value.utf8.count):\(value)"
+    }.joined()
+    let key = cacheKey.map { "\($0.utf8.count):\($0)" } ?? "null"
+    let material = [uri, String(describing: kind), key, rawHeaders].map {
+      "\($0.utf8.count):\($0)"
+    }.joined()
+    return MediaCacheIdentity.make(uri: material, headers: [:])
+  }
 }
 
 /// Ordered sources keyed by stable ID with preload-window operations.
@@ -25,6 +40,8 @@ enum ScrollDirection {
 
 final class FeedSourceRegistry {
   private var sourcesById: [String: RegisteredSource] = [:]
+  private var idsByRank: [Int: [String]] = [:]
+  private var sortedRanks: [Int] = []
 
   private(set) var visibleSourceId: String?
 
@@ -46,6 +63,7 @@ final class FeedSourceRegistry {
     for source in sources where !source.uri.isEmpty {
       sourcesById[source.id] = source
     }
+    rebuildRankIndex()
     if visibleSourceId == nil {
       visibleSourceId = lowestRankedId()
     }
@@ -55,6 +73,7 @@ final class FeedSourceRegistry {
     for id in ids {
       sourcesById.removeValue(forKey: id)
     }
+    rebuildRankIndex()
     if let visibleSourceId, sourcesById[visibleSourceId] == nil {
       self.visibleSourceId = lowestRankedId()
       direction = .unknown
@@ -63,6 +82,8 @@ final class FeedSourceRegistry {
 
   func clear() {
     sourcesById.removeAll()
+    idsByRank.removeAll()
+    sortedRanks.removeAll()
     visibleSourceId = nil
     direction = .unknown
   }
@@ -103,7 +124,7 @@ final class FeedSourceRegistry {
     guard let rank = sourcesById[id]?.rank, let visible = visibleRank() else {
       return nil
     }
-    return abs(rank - visible)
+    return distance(rank, visible)
   }
 
   /// Returns the nearest unique sources in the travel-relative preload window.
@@ -118,19 +139,29 @@ final class FeedSourceRegistry {
     let scaledForward = scaleBudget(forwardBudget, scale)
     let scaledBackward = scaleBudget(backwardBudget, scale)
 
+    let lower = visible.subtractingReportingOverflow(scaledBackward)
+    let upper = visible.addingReportingOverflow(scaledForward)
+    let minimum = lower.overflow ? Int.min : lower.partialValue
+    let maximum = upper.overflow ? Int.max : upper.partialValue
+    var index = lowerBound(minimum)
+    var candidates: [RegisteredSource] = []
+    while index < sortedRanks.count, sortedRanks[index] <= maximum {
+      candidates.append(contentsOf: (idsByRank[sortedRanks[index]] ?? []).compactMap {
+        sourcesById[$0]
+      })
+      index += 1
+    }
     var seenIdentities = Set<String>()
-    return sourcesById.values
-      .filter { source in
-        let delta = source.rank - visible
-        return delta >= -scaledBackward && delta <= scaledForward
-      }
+    return candidates
       .sorted { lhs, rhs in
-        let lhsDistance = abs(lhs.rank - visible)
-        let rhsDistance = abs(rhs.rank - visible)
+        let lhsDistance = distance(lhs.rank, visible)
+        let rhsDistance = distance(rhs.rank, visible)
         // Use rank as a deterministic tie-breaker.
-        return lhsDistance == rhsDistance
-          ? lhs.rank < rhs.rank
-          : lhsDistance < rhsDistance
+        if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+        if lhs.rank != rhs.rank { return lhs.rank < rhs.rank }
+        if lhs.id == visibleSourceId { return rhs.id != visibleSourceId }
+        if rhs.id == visibleSourceId { return false }
+        return lhs.id < rhs.id
       }
       .filter { source in seenIdentities.insert(source.cacheIdentity).inserted }
   }
@@ -144,6 +175,36 @@ final class FeedSourceRegistry {
   }
 
   private func lowestRankedId() -> String? {
-    sourcesById.values.min(by: { $0.rank < $1.rank })?.id
+    sortedRanks.first.flatMap { idsByRank[$0]?.first }
+  }
+
+  private func rebuildRankIndex() {
+    idsByRank.removeAll(keepingCapacity: true)
+    for source in sourcesById.values {
+      idsByRank[source.rank, default: []].append(source.id)
+    }
+    sortedRanks = idsByRank.keys.sorted()
+    for rank in sortedRanks {
+      idsByRank[rank]?.sort()
+    }
+  }
+
+  private func lowerBound(_ rank: Int) -> Int {
+    var low = 0
+    var high = sortedRanks.count
+    while low < high {
+      let middle = low + (high - low) / 2
+      if sortedRanks[middle] < rank {
+        low = middle + 1
+      } else {
+        high = middle
+      }
+    }
+    return low
+  }
+
+  private func distance(_ first: Int, _ second: Int) -> Int {
+    let delta = max(first, second).subtractingReportingOverflow(min(first, second))
+    return delta.overflow ? Int.max : delta.partialValue
   }
 }

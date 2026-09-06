@@ -100,7 +100,16 @@ final class MediaDiskCache {
   private var indexWritePending = false
   private var indexWriteScheduled = false
 
+  private let rootOverride: URL?
+
+  init(rootURL: URL? = nil) {
+    self.rootOverride = rootURL
+  }
+
   private lazy var rootURL: URL = {
+    if let rootOverride {
+      return rootOverride
+    }
     let base = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
     return base.appendingPathComponent("native_feed_player", isDirectory: true)
   }()
@@ -210,6 +219,17 @@ final class MediaDiskCache {
         return
       }
       let destination = self.fileURL(forKey: identity)
+      if let existing = self.entries[identity],
+        let size = try? self.fileManager.attributesOfItem(atPath: destination.path)[.size] as? Int64,
+        size == existing.byteCount
+      {
+        if temporaryFile != destination {
+          try? self.fileManager.removeItem(at: temporaryFile)
+        }
+        completion?()
+        return
+      }
+      self.entries.removeValue(forKey: identity)
       try? self.fileManager.removeItem(at: destination)
       do {
         try self.fileManager.moveItem(at: temporaryFile, to: destination)

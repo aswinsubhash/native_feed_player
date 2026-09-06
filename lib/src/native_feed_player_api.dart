@@ -33,6 +33,8 @@ class FeedPlayer {
   }
 
   final FeedPlayerPlatform _platform;
+  static final Expando<_FeedSession> _sessions = Expando<_FeedSession>();
+  late final _FeedSession _session = _sessions[_platform] ??= _FeedSession();
 
   /// Registered sources in feed order. Order defines preload ranking.
   final List<FeedSource> _sources = <FeedSource>[];
@@ -41,10 +43,7 @@ class FeedPlayer {
   final Map<int, String> _sourceIdsByControllerId = <int, String>{};
 
   StreamSubscription<ControllerReleaseEvent>? _releaseSubscription;
-  final Queue<Future<void> Function()> _mutationQueue =
-      Queue<Future<void> Function()>();
   Future<void>? _disposeOperation;
-  bool _mutationRunning = false;
   FeedPlayerConfig _config = const FeedPlayerConfig();
   bool _initialized = false;
   bool _disposeRequested = false;
@@ -67,19 +66,17 @@ class FeedPlayer {
     _ensureNotDisposed();
     config.toMessage();
     return _serialize(() async {
+      _session.owner?._invalidateSession();
+      _session.owner = this;
       try {
         await _platform.initialize(config);
-        _releaseAllControllers();
-        _sources.clear();
         _config = config;
         _initialized = true;
       } catch (_) {
-        _releaseAllControllers();
-        _sources.clear();
-        _initialized = false;
+        _invalidateSession();
         rethrow;
       }
-    });
+    }, requiresOwnership: false);
   }
 
   /// Replaces the whole feed.
@@ -290,14 +287,23 @@ class FeedPlayer {
           await _releaseSubscription?.cancel();
         } finally {
           _releaseSubscription = null;
-          await _platform.dispose();
+          if (identical(_session.owner, this)) {
+            await _platform.dispose();
+          }
         }
       } finally {
-        _releaseAllControllers();
-        _sources.clear();
-        _initialized = false;
+        if (identical(_session.owner, this)) {
+          _session.owner = null;
+        }
+        _invalidateSession();
       }
-    });
+    }, requiresOwnership: false);
+  }
+
+  void _invalidateSession() {
+    _releaseAllControllers();
+    _sources.clear();
+    _initialized = false;
   }
 
   void _onNativeRelease(ControllerReleaseEvent event) {
@@ -343,27 +349,19 @@ class FeedPlayer {
     return null;
   }
 
-  Future<T> _serialize<T>(FutureOr<T> Function() operation) {
-    final Completer<T> completer = Completer<T>();
-    _mutationQueue.add(() async {
-      try {
-        completer.complete(await operation());
-      } catch (error, stackTrace) {
-        completer.completeError(error, stackTrace);
+  Future<T> _serialize<T>(
+    FutureOr<T> Function() operation, {
+    bool requiresOwnership = true,
+  }) {
+    return _session.serialize(() {
+      final FeedPlayer? owner = _session.owner;
+      if (requiresOwnership && owner != null && !identical(owner, this)) {
+        throw StateError(
+          'Another FeedPlayer owns this playback session. Call initialize to replace it.',
+        );
       }
+      return operation();
     });
-    if (!_mutationRunning) {
-      _mutationRunning = true;
-      unawaited(_drainMutations());
-    }
-    return completer.future;
-  }
-
-  Future<void> _drainMutations() async {
-    while (_mutationQueue.isNotEmpty) {
-      await _mutationQueue.removeFirst()();
-    }
-    _mutationRunning = false;
   }
 
   void _validateSources(List<FeedSource> sources) {
@@ -403,5 +401,35 @@ class FeedPlayer {
     if (_disposeRequested) {
       throw StateError('FeedPlayer has been disposed.');
     }
+  }
+}
+
+class _FeedSession {
+  FeedPlayer? owner;
+  final Queue<Future<void> Function()> _mutations =
+      Queue<Future<void> Function()>();
+  bool _running = false;
+
+  Future<T> serialize<T>(FutureOr<T> Function() operation) {
+    final Completer<T> completer = Completer<T>();
+    _mutations.add(() async {
+      try {
+        completer.complete(await operation());
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    if (!_running) {
+      _running = true;
+      unawaited(_drain());
+    }
+    return completer.future;
+  }
+
+  Future<void> _drain() async {
+    while (_mutations.isNotEmpty) {
+      await _mutations.removeFirst()();
+    }
+    _running = false;
   }
 }

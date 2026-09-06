@@ -163,6 +163,7 @@ internal class ExoPlayerManager(
 
     /** Controllers paused by backgrounding, to be resumed on return. */
     private val autoPausedControllerIds = mutableSetOf<Int>()
+    private var isAppBackgrounded = false
     private var visibleGeneration = 0L
     private var preloadGeneration = 0
     private var tickerRunning = false
@@ -325,7 +326,7 @@ internal class ExoPlayerManager(
             listener = listener,
             analyticsListener = analyticsListener,
             sourceId = sourceId,
-            sourceIdentity = source.cacheIdentity,
+            sourceIdentity = source.requestIdentity,
             sourceKind = source.kind,
             targetVolume = volume,
             isMuted = muted,
@@ -343,7 +344,7 @@ internal class ExoPlayerManager(
         }
 
         if (autoPlay) {
-            player.playWhenReady = true
+            play(controllerId)
         }
 
         emitMetrics(controllerId)
@@ -355,8 +356,14 @@ internal class ExoPlayerManager(
     }
 
     fun play(controllerId: Int) {
-        autoPausedControllerIds.remove(controllerId)
-        managedPlayers[controllerId]?.player?.play()
+        val player = managedPlayers[controllerId]?.player ?: return
+        if (isAppBackgrounded) {
+            autoPausedControllerIds.add(controllerId)
+            player.pause()
+        } else {
+            autoPausedControllerIds.remove(controllerId)
+            player.play()
+        }
     }
 
     fun setVolume(controllerId: Int, value: Double) {
@@ -404,8 +411,9 @@ internal class ExoPlayerManager(
 
     /** Pauses active players until the app returns to the foreground. */
     fun onAppBackgrounded() {
+        isAppBackgrounded = true
         for ((controllerId, managed) in managedPlayers) {
-            if (managed.player.isPlaying) {
+            if (managed.player.playWhenReady) {
                 autoPausedControllerIds.add(controllerId)
                 managed.player.pause()
             }
@@ -413,6 +421,7 @@ internal class ExoPlayerManager(
     }
 
     fun onAppForegrounded() {
+        isAppBackgrounded = false
         for (controllerId in autoPausedControllerIds.toList()) {
             managedPlayers[controllerId]?.player?.play()
         }
@@ -520,8 +529,18 @@ internal class ExoPlayerManager(
 
     fun cacheIdentity(sourceId: String): String? = registry.source(sourceId)?.cacheIdentity
 
-    fun cacheStatus(sourceId: String, sourceIdentity: String?): CacheStatusMessage {
-        if (sourceIdentity == null) {
+    internal data class CacheStatusSnapshot(
+        val sourceIdentity: String,
+        val isProgressive: Boolean,
+        val rootCacheKey: String
+    )
+
+    fun cacheStatusSnapshot(sourceId: String): CacheStatusSnapshot? = registry.source(sourceId)?.let {
+        CacheStatusSnapshot(it.cacheIdentity, it.isProgressive, CacheIdentity.cacheKey(it, it.uri))
+    }
+
+    fun cacheStatus(sourceId: String, snapshot: CacheStatusSnapshot?): CacheStatusMessage {
+        if (snapshot == null) {
             return CacheStatusMessage(
                 sourceId = sourceId,
                 cachedBytes = 0,
@@ -529,13 +548,12 @@ internal class ExoPlayerManager(
                 isComplete = false
             )
         }
-        val cached = MediaCache.cachedBytes(sourceIdentity)
-        val total = MediaCache.contentLength(sourceIdentity)
+        val root = if (snapshot.isProgressive) MediaCache.rootStatus(snapshot.rootCacheKey) else null
         return CacheStatusMessage(
             sourceId = sourceId,
-            cachedBytes = cached,
-            totalBytes = total,
-            isComplete = total > 0 && cached >= total
+            cachedBytes = root?.cachedBytes ?: MediaCache.cachedBytes(snapshot.sourceIdentity),
+            totalBytes = root?.totalBytes ?: MediaCache.contentLength(snapshot.sourceIdentity),
+            isComplete = root?.isComplete ?: false
         )
     }
 

@@ -39,10 +39,15 @@ class NativeVideoView extends StatefulWidget {
 
 class _NativeVideoViewState extends State<NativeVideoView> {
   static const String _viewType = 'native_feed_player/video_view';
+  static final Expando<_OutputBinding> _bindings = Expando<_OutputBinding>();
+
+  _OutputBinding _bindingFor(FeedController controller) =>
+      _bindings[controller] ??= _OutputBinding();
 
   // A GlobalKey keeps the platform view alive when the tree changes shape
   // around it (bare view -> FittedBox/SizedBox once the size is known).
   GlobalKey _platformViewKey = GlobalKey();
+  final Object _outputOwner = Object();
   int? _viewId;
   int? _textureId;
   int? _attachedViewId;
@@ -241,38 +246,52 @@ class _NativeVideoViewState extends State<NativeVideoView> {
       return;
     }
 
-    if (mode == RenderMode.texture) {
-      final int textureId = await controller.platform.attachTexture(
-        controller.controllerId,
-      );
+    if (mode == RenderMode.platformView && viewId == null) {
+      // Attach after the platform view is created.
+      return;
+    }
+    final _OutputBinding binding = _bindingFor(controller);
+    await binding.run(() async {
       if (!_isCurrent(generation, controller, mode, viewId)) {
-        await controller.platform.detachTexture(controller.controllerId);
+        return;
+      }
+      final RenderMode? previousMode = binding.mode;
+      if (binding.owner != null &&
+          previousMode != null &&
+          previousMode != mode) {
+        await _detachOutput(controller, previousMode);
+        binding.owner = null;
+        binding.mode = null;
+      }
+      if (!_isCurrent(generation, controller, mode, viewId)) {
+        return;
+      }
+      int? textureId;
+      if (mode == RenderMode.texture) {
+        textureId = await controller.platform.attachTexture(
+          controller.controllerId,
+        );
+      } else {
+        await controller.platform.attachView(
+          controllerId: controller.controllerId,
+          viewId: viewId!,
+        );
+      }
+      binding.owner = _outputOwner;
+      binding.mode = mode;
+      if (!_isCurrent(generation, controller, mode, viewId)) {
+        await _detachOutput(controller, mode);
+        binding.owner = null;
+        binding.mode = null;
         return;
       }
       _attachedController = controller;
       _attachedMode = mode;
-      _attachedViewId = null;
-      setState(() => _textureId = textureId);
-      return;
-    }
-
-    if (viewId == null) {
-      // Attach after the platform view is created.
-      return;
-    }
-    await controller.platform.attachView(
-      controllerId: controller.controllerId,
-      viewId: viewId,
-    );
-    if (!_isCurrent(generation, controller, mode, viewId)) {
-      await controller.platform.detachView(
-        controllerId: controller.controllerId,
-      );
-      return;
-    }
-    _attachedController = controller;
-    _attachedMode = mode;
-    _attachedViewId = viewId;
+      _attachedViewId = viewId;
+      if (mode == RenderMode.texture) {
+        setState(() => _textureId = textureId);
+      }
+    });
   }
 
   bool _isCurrent(
@@ -295,18 +314,25 @@ class _NativeVideoViewState extends State<NativeVideoView> {
     if (controller == null || mode == null) {
       return;
     }
-    if (mode == RenderMode.texture) {
-      await controller.platform.detachTexture(controller.controllerId);
-    } else {
-      await controller.platform.detachView(
-        controllerId: controller.controllerId,
-      );
-    }
+    final _OutputBinding binding = _bindingFor(controller);
+    await binding.run(() async {
+      if (identical(binding.owner, _outputOwner)) {
+        await _detachOutput(controller, mode);
+        binding.owner = null;
+        binding.mode = null;
+      }
+    });
     if (identical(_attachedController, controller) && _attachedMode == mode) {
       _attachedController = null;
       _attachedMode = null;
       _attachedViewId = null;
     }
+  }
+
+  Future<void> _detachOutput(FeedController controller, RenderMode mode) {
+    return mode == RenderMode.texture
+        ? controller.platform.detachTexture(controller.controllerId)
+        : controller.platform.detachView(controllerId: controller.controllerId);
   }
 
   void _onPlatformViewCreated(
@@ -411,5 +437,17 @@ class _NativeVideoViewState extends State<NativeVideoView> {
         ],
       ),
     );
+  }
+}
+
+class _OutputBinding {
+  Object? owner;
+  RenderMode? mode;
+  Future<void> _queue = Future<void>.value();
+
+  Future<void> run(Future<void> Function() operation) {
+    final Future<void> result = _queue.then((_) => operation());
+    _queue = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
   }
 }

@@ -9,6 +9,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.preload.DefaultPreloadManager
 import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 /**
@@ -24,10 +25,12 @@ internal class FeedPreloadManager(
     private inner class DistanceBasedStatusControl :
         TargetPreloadStatusControl<Int, DefaultPreloadManager.PreloadStatus> {
         override fun getTargetPreloadStatus(rankingData: Int): DefaultPreloadManager.PreloadStatus {
-            return when (val distance = abs(rankingData - currentRank)) {
+            val rank = registeredRanks[rankingData]
+                ?: return DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_NOT_PRELOADED
+            return when (val distance = abs(rank.toLong() - currentRank)) {
                 // The playing item is driven by its own player.
-                0 -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_NOT_PRELOADED
-                1 -> DefaultPreloadManager.PreloadStatus
+                0L -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_NOT_PRELOADED
+                1L -> DefaultPreloadManager.PreloadStatus
                     .specifiedRangeLoaded(FIRST_NEIGHBOUR_PRELOAD_MS)
                 else ->
                     if (distance <= maxPreloadDistance && cacheAvailable) {
@@ -45,7 +48,18 @@ internal class FeedPreloadManager(
     private val cacheAvailable: Boolean = MediaCache.activeCache() != null
     private val builder: DefaultPreloadManager.Builder
     private val delegate: DefaultPreloadManager
-    private val addedItemsByIdentity = mutableMapOf<String, MediaItem>()
+    private data class Registration(val item: MediaItem, val rankingToken: Int)
+
+    private val addedItemsByIdentity = mutableMapOf<String, Registration>()
+    private val registeredRanks = ConcurrentHashMap<Int, Int>()
+    private var nextRankingToken = 0
+    private val rankingComparator = object : DefaultPreloadManager.SimpleRankingDataComparator() {
+        override fun compare(first: Int, second: Int): Int {
+            val firstDistance = registeredRanks[first]?.let { abs(it.toLong() - currentRank) } ?: Long.MAX_VALUE
+            val secondDistance = registeredRanks[second]?.let { abs(it.toLong() - currentRank) } ?: Long.MAX_VALUE
+            return firstDistance.compareTo(secondDistance)
+        }
+    }
 
     /** Sources that failed to build while they remain in the current preload window. */
     private val failedIdentities = mutableSetOf<String>()
@@ -59,6 +73,7 @@ internal class FeedPreloadManager(
     init {
         builder = DefaultPreloadManager.Builder(
             context.applicationContext,
+            rankingComparator,
             DistanceBasedStatusControl()
         )
             .setLoadControl(
@@ -87,18 +102,26 @@ internal class FeedPreloadManager(
     fun sync(window: List<RegisteredSource>, visibleRank: Int) {
         currentRank = visibleRank
 
-        val wanted = window.associateBy { it.cacheIdentity }
+        val wanted = window.associateBy { it.requestIdentity }
         failedIdentities.retainAll(wanted.keys)
-        for ((identity, item) in addedItemsByIdentity.toList()) {
+        for ((identity, registration) in addedItemsByIdentity.toList()) {
             if (!wanted.containsKey(identity)) {
-                delegate.remove(item)
+                delegate.remove(registration.item)
+                registeredRanks.remove(registration.rankingToken)
                 addedItemsByIdentity.remove(identity)
             }
         }
 
         for (source in window) {
-            val identity = source.cacheIdentity
-            if (addedItemsByIdentity.containsKey(identity) || identity in failedIdentities) {
+            val identity = source.requestIdentity
+            val retained = addedItemsByIdentity[identity]
+            if (retained != null) {
+                if (registeredRanks[retained.rankingToken] != source.rank) {
+                    registeredRanks[retained.rankingToken] = source.rank
+                }
+                continue
+            }
+            if (identity in failedIdentities) {
                 continue
             }
             // A malformed or unsupported source must not crash the looper
@@ -111,8 +134,10 @@ internal class FeedPreloadManager(
                 continue
             }
             val item = mediaSource.mediaItem
-            delegate.add(mediaSource, source.rank)
-            addedItemsByIdentity[identity] = item
+            val token = nextRankingToken++
+            registeredRanks[token] = source.rank
+            delegate.add(mediaSource, token)
+            addedItemsByIdentity[identity] = Registration(item, token)
         }
 
         delegate.setCurrentPlayingIndex(visibleRank)
@@ -121,13 +146,14 @@ internal class FeedPreloadManager(
 
     /** Returns the preloaded source for [source], if available. */
     fun mediaSourceFor(source: RegisteredSource): MediaSource? {
-        val item = addedItemsByIdentity[source.cacheIdentity] ?: return null
-        return delegate.getMediaSource(item)
+        val registration = addedItemsByIdentity[source.requestIdentity] ?: return null
+        return delegate.getMediaSource(registration.item)
     }
 
     fun reset() {
         delegate.reset()
         addedItemsByIdentity.clear()
+        registeredRanks.clear()
         failedIdentities.clear()
     }
 
@@ -137,6 +163,7 @@ internal class FeedPreloadManager(
     fun release() {
         delegate.release()
         addedItemsByIdentity.clear()
+        registeredRanks.clear()
     }
 
     private companion object {

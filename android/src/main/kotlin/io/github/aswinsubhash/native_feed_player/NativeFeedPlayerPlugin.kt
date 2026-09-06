@@ -279,8 +279,8 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         callback: (Result<CacheStatusMessage>) -> Unit
     ) {
         val manager = managerOrThrow()
-        val sourceIdentity = manager.cacheIdentity(request.sourceId)
-        runCacheOperation(callback) { manager.cacheStatus(request.sourceId, sourceIdentity) }
+        val snapshot = manager.cacheStatusSnapshot(request.sourceId)
+        runCacheOperation(callback) { manager.cacheStatus(request.sourceId, snapshot) }
     }
 
     override fun cacheUsageBytes(callback: (Result<Long>) -> Unit) {

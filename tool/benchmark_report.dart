@@ -160,27 +160,72 @@ String _buildReport({
   buffer.writeln('- Generated at (UTC): `$generatedAt`');
   buffer.writeln();
   buffer.writeln(
-    '| Scenario | Duration (s) | Metric Samples | First Frame P50 (ms) | '
-    'First Frame P95 (ms) | Max Rebuffer | Max Dropped Frames |',
+    '| Scenario | Render Mode | Duration (s) | Metric Samples | Tracked Controllers | '
+    'First Frame Samples | First Frame P50 (ms) | First Frame P95 (ms) | '
+    'Max Rebuffer | Max Dropped Frames |',
   );
-  buffer.writeln('| --- | ---: | ---: | ---: | ---: | ---: | ---: |');
+  buffer.writeln(
+    '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
 
+  const Map<String, int> minimumSamples = <String, int>{
+    'fast_fling': 2,
+    'pause_resume': 1,
+    'network_recovery': 1,
+  };
+  const List<String> renderModes = <String>['platformView', 'texture'];
+  final Set<String> seen = <String>{};
   for (final Map<String, dynamic> summary in summaries) {
-    final String scenario = _stringValue(
-      summary,
-      'scenario',
-      fallback: 'unknown',
-    );
+    final String scenario = _stringValue(summary, 'scenario');
+    final String renderMode = _stringValue(summary, 'renderMode');
+    if (!minimumSamples.containsKey(scenario) ||
+        !renderModes.contains(renderMode)) {
+      throw FormatException(
+        'Unknown scenario/renderMode: $scenario/$renderMode.',
+      );
+    }
+    final String key = '$scenario/$renderMode';
+    if (!seen.add(key)) {
+      throw FormatException('Duplicate benchmark summary: $key.');
+    }
     final int durationMs = _intValue(summary, 'durationMs');
     final int metricSamples = _intValue(summary, 'metricSamples');
+    final int trackedControllers = _intValue(summary, 'trackedControllers');
+    final int firstFrameSamples = _intValue(summary, 'firstFrameSamples');
+    if (durationMs == 0 ||
+        metricSamples == 0 ||
+        firstFrameSamples < minimumSamples[scenario]! ||
+        firstFrameSamples > trackedControllers ||
+        firstFrameSamples > metricSamples) {
+      throw FormatException(
+        '$key has insufficient or inconsistent rendered data: '
+        'durationMs=$durationMs, metricSamples=$metricSamples, '
+        'trackedControllers=$trackedControllers, firstFrameSamples=$firstFrameSamples '
+        '(requires at least ${minimumSamples[scenario]} distinct rendered controllers).',
+      );
+    }
     final int p50 = _intValue(summary, 'firstFrameP50Ms');
     final int p95 = _intValue(summary, 'firstFrameP95Ms');
+    if (p95 < p50 || (firstFrameSamples == 1 && p50 != p95)) {
+      throw FormatException('$key has inconsistent first-frame percentiles.');
+    }
     final int maxRebuffer = _intValue(summary, 'maxRebufferCount');
     final int maxDropped = _intValue(summary, 'maxDroppedFrames');
     final String durationSec = (durationMs / 1000).toStringAsFixed(2);
     buffer.writeln(
-      '| $scenario | $durationSec | $metricSamples | $p50 | $p95 | '
+      '| $scenario | $renderMode | $durationSec | $metricSamples | '
+      '$trackedControllers | $firstFrameSamples | $p50 | $p95 | '
       '$maxRebuffer | $maxDropped |',
+    );
+  }
+  final List<String> missing = <String>[
+    for (final String scenario in minimumSamples.keys)
+      for (final String mode in renderModes)
+        if (!seen.contains('$scenario/$mode')) '$scenario/$mode',
+  ];
+  if (missing.isNotEmpty) {
+    throw FormatException(
+      'Missing required benchmarks: ${missing.join(', ')}.',
     );
   }
 
@@ -190,28 +235,27 @@ String _buildReport({
 
 int _intValue(Map<String, dynamic> source, String key) {
   final Object? value = source[key];
-  if (value is int) {
-    return value;
-  }
-  if (value is num) {
+  if (value is num &&
+      value.isFinite &&
+      value >= 0 &&
+      value <= 9007199254740991 &&
+      value == value.truncateToDouble()) {
     return value.toInt();
   }
   throw FormatException(
-    'Benchmark summary is missing a numeric "$key" field '
+    'Benchmark summary requires a finite nonnegative integer "$key" field '
     '(got ${value == null ? 'nothing' : value.runtimeType}).',
   );
 }
 
-String _stringValue(
-  Map<String, dynamic> source,
-  String key, {
-  required String fallback,
-}) {
+String _stringValue(Map<String, dynamic> source, String key) {
   final Object? value = source[key];
-  if (value is String && value.isNotEmpty) {
+  if (value is String && value.trim().isNotEmpty) {
     return value;
   }
-  return fallback;
+  throw FormatException(
+    'Benchmark summary is missing a nonempty "$key" field.',
+  );
 }
 
 void _printUsage(StringSink sink) {
