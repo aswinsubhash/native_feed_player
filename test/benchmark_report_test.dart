@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+
 import '../tool/benchmark_report.dart' as benchmark_report;
 
 String _summaryLine(Map<String, Object?> payload) =>

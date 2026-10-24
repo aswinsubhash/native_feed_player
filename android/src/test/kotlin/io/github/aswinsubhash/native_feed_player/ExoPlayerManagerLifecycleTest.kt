@@ -13,6 +13,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -107,18 +108,50 @@ internal class ExoPlayerManagerLifecycleTest {
     }
 
     @Test
-    fun setSources_headerNormalizationPreservesController_butCacheKeyChangeReleasesIt() {
-        val manager = manager()
+    fun setSources_headerSpellingChange_releasesControllerButPreservesDiskIdentity() {
+        val released = mutableListOf<Pair<Int, ReleaseReasonMessage>>()
+        val manager = manager { id, reason -> released.add(id to reason) }
+        val original = source("a", 0).copy(headers = mapOf("Authorization" to "Bearer one"), cacheKey = "stable")
+        val updated = original.copy(headers = mapOf("authorization" to "Bearer one"))
+        manager.initialize(config())
+        manager.setSources(listOf(original))
+        manager.createController(1, "a", autoPlay = false, looping = false)
+        assertNotNull(manager.playerFor(1))
+        val diskIdentity = assertNotNull(manager.cacheIdentity("a"))
+
+        manager.setSources(listOf(updated))
+
+        assertEquals(diskIdentity, manager.cacheIdentity("a"))
+        assertEquals(listOf(1 to ReleaseReasonMessage.DISPOSED), released)
+        assertNull(manager.playerFor(1))
+        assertEquals(0, manager.activeControllerCount())
+
+        manager.createController(2, "a", autoPlay = false, looping = false)
+        val replacement = assertNotNull(manager.playerFor(2))
+        manager.setSources(listOf(updated))
+        assertTrue(replacement === manager.playerFor(2))
+        assertNull(manager.playerFor(1))
+        assertEquals(1, manager.activeControllerCount())
+        assertEquals(listOf(1 to ReleaseReasonMessage.DISPOSED), released)
+    }
+
+    @Test
+    fun setSources_cacheKeyChange_releasesControllerAndChangesDiskIdentity() {
+        val released = mutableListOf<Pair<Int, ReleaseReasonMessage>>()
+        val manager = manager { id, reason -> released.add(id to reason) }
         val original = source("a", 0).copy(headers = mapOf("Authorization" to "Bearer one"), cacheKey = "stable")
         manager.initialize(config())
         manager.setSources(listOf(original))
         manager.createController(1, "a", autoPlay = false, looping = false)
-        val player = assertNotNull(manager.playerFor(1))
+        assertNotNull(manager.playerFor(1))
+        val diskIdentity = assertNotNull(manager.cacheIdentity("a"))
 
-        manager.setSources(listOf(original.copy(headers = mapOf("authorization" to "Bearer one"))))
-        assertTrue(player === manager.playerFor(1))
         manager.setSources(listOf(original.copy(cacheKey = "replacement")))
+
+        assertNotEquals(diskIdentity, assertNotNull(manager.cacheIdentity("a")))
+        assertEquals(listOf(1 to ReleaseReasonMessage.DISPOSED), released)
         assertNull(manager.playerFor(1))
+        assertEquals(0, manager.activeControllerCount())
     }
 
     @Test

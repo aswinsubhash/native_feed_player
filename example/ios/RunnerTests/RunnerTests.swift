@@ -445,62 +445,67 @@ final class CachingResourceLoaderTests: XCTestCase {
 }
 
 final class MediaDiskCacheTests: XCTestCase {
+  private let cacheRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("nfp-cache-tests-\(UUID().uuidString)", isDirectory: true)
+  private lazy var cache = MediaDiskCache(rootURL: cacheRoot)
+
   override func tearDown() {
-    MediaDiskCache.shared.evictAll {
-      MediaDiskCache.shared.configure(enabled: false, maxBytes: 0)
+    cache.evictAll { [cache] in
+      cache.configure(enabled: false, maxBytes: 0)
     }
     // The next test's configure must not race this teardown on the cache queue.
-    MediaDiskCache.shared.waitForPendingWorkForTesting()
+    cache.waitForPendingWorkForTesting()
+    try? FileManager.default.removeItem(at: cacheRoot)
     super.tearDown()
   }
 
   func testConfigureAppliesTheNewBudgetToTheLoadBarrier() throws {
     // Seed a 4 KB entry under a generous budget.
-    MediaDiskCache.shared.configure(enabled: true, maxBytes: 64 * 1024 * 1024)
-    MediaDiskCache.shared.waitForPendingWorkForTesting()
+    cache.configure(enabled: true, maxBytes: 64 * 1024 * 1024)
+    cache.waitForPendingWorkForTesting()
     let identity = MediaCacheIdentity.make(
       uri: "https://example.test/budget-\(UUID().uuidString).mp4",
       headers: [:]
     )
-    let temporary = FileManager.default.temporaryDirectory
+    let temporary = cacheRoot
       .appendingPathComponent("nfp-test-\(UUID().uuidString)")
     try Data(repeating: 0xAB, count: 4096).write(to: temporary)
-    MediaDiskCache.shared.store(temporaryFile: temporary, identity: identity, contentType: "video/mp4")
-    MediaDiskCache.shared.waitForPendingWorkForTesting()
-    XCTAssertNotNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
+    cache.store(temporaryFile: temporary, identity: identity, contentType: "video/mp4")
+    cache.waitForPendingWorkForTesting()
+    XCTAssertNotNil(cache.cachedFile(forIdentity: identity))
 
     // Reconfigure with a 1 KB budget: the load barrier must enforce the NEW
     // budget, not the previous one, and evict the 4 KB entry.
-    MediaDiskCache.shared.configure(enabled: true, maxBytes: 1024)
-    XCTAssertTrue(MediaDiskCache.shared.isEnabled)
-    MediaDiskCache.shared.waitForPendingWorkForTesting()
-    XCTAssertNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
+    cache.configure(enabled: true, maxBytes: 1024)
+    XCTAssertTrue(cache.isEnabled)
+    cache.waitForPendingWorkForTesting()
+    XCTAssertNil(cache.cachedFile(forIdentity: identity))
   }
 
   func testTruncatedCacheFileIsEvictedInsteadOfServed() throws {
-    MediaDiskCache.shared.configure(enabled: true, maxBytes: 64 * 1024 * 1024)
-    MediaDiskCache.shared.waitForPendingWorkForTesting()
+    cache.configure(enabled: true, maxBytes: 64 * 1024 * 1024)
+    cache.waitForPendingWorkForTesting()
 
     let identity = MediaCacheIdentity.make(
       uri: "https://example.test/truncated-\(UUID().uuidString).mp4",
       headers: [:]
     )
     let payload = Data(repeating: 0xAB, count: 4096)
-    let temporary = FileManager.default.temporaryDirectory
+    let temporary = cacheRoot
       .appendingPathComponent("nfp-test-\(UUID().uuidString)")
     try payload.write(to: temporary)
-    MediaDiskCache.shared.store(temporaryFile: temporary, identity: identity, contentType: "video/mp4")
-    MediaDiskCache.shared.waitForPendingWorkForTesting()
+    cache.store(temporaryFile: temporary, identity: identity, contentType: "video/mp4")
+    cache.waitForPendingWorkForTesting()
 
-    XCTAssertNotNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
+    XCTAssertNotNil(cache.cachedFile(forIdentity: identity))
 
     // Simulate external truncation (crash mid-move, OS eviction).
-    let url = MediaDiskCache.shared.fileURL(forKey: identity)
+    let url = cache.fileURL(forKey: identity)
     try Data(repeating: 0xCD, count: 1024).write(to: url)
 
-    XCTAssertNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
-    MediaDiskCache.shared.waitForPendingWorkForTesting()
-    XCTAssertNil(MediaDiskCache.shared.cachedFile(forIdentity: identity))
+    XCTAssertNil(cache.cachedFile(forIdentity: identity))
+    cache.waitForPendingWorkForTesting()
+    XCTAssertNil(cache.cachedFile(forIdentity: identity))
   }
 }
 

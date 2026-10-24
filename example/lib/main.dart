@@ -37,8 +37,7 @@ class _MyAppState extends State<MyApp> {
     ),
     const FeedSource(
       id: 'butterfly',
-      uri:
-          'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+      uri: 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
     ),
     const FeedSource(
       id: 'sintel',
@@ -46,8 +45,7 @@ class _MyAppState extends State<MyApp> {
     ),
     const FeedSource(
       id: 'hotel-pool',
-      uri:
-          'https://res.cloudinary.com/demo/video/upload/c_fill,h_1920,w_1080,g_auto/hotel_pool.mp4',
+      uri: 'https://res.cloudinary.com/demo/video/upload/c_fill,h_1920,w_1080,g_auto/hotel_pool.mp4',
     ),
     // Duplicate URI used to exercise source collapsing.
     const FeedSource(
@@ -57,8 +55,7 @@ class _MyAppState extends State<MyApp> {
     ),
     const FeedSource(
       id: 'butterfly-again',
-      uri:
-          'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+      uri: 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
     ),
   ];
 

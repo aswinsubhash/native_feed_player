@@ -88,9 +88,8 @@ class RecordingFeedPlayerPlatform
     required VideoPlaybackState state,
     PlaybackError? error,
   }) {
-    _stateControllerFor(
-      controllerId,
-    ).add(PlaybackStatusUpdate(state: state, error: error));
+    _stateControllerFor(controllerId)
+        .add(PlaybackStatusUpdate(state: state, error: error));
   }
 
   StreamController<VideoMetrics> _metricsControllerFor(int id) => _metrics

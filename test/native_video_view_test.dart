@@ -71,6 +71,59 @@ void main() {
     },
   );
 
+  test('first frame future identity is stable within an error zone', () async {
+    final FeedController controller = await player.controllerFor('a');
+    final Future<Duration> first = controller.firstFrameRendered;
+    expect(controller.firstFrameRendered, same(first));
+    runZoned(() {
+      expect(controller.firstFrameRendered, same(first));
+    });
+    final Future<void> failure = expectLater(
+      first,
+      throwsA(isA<ControllerReleasedError>()),
+    );
+    controller.markReleased(ControllerReleaseReason.disposed);
+    await failure;
+    expect(controller.firstFrameRendered, same(first));
+  });
+
+  for (final bool releasedBeforeListen in <bool>[false, true]) {
+    test(
+      'first frame release reaches its listener error zone (late=$releasedBeforeListen)',
+      () async {
+        late FeedController controller;
+        final List<Object> creatorErrors = <Object>[];
+        final List<Object> listenerErrors = <Object>[];
+        final Completer<Object> observed = Completer<Object>();
+        runZonedGuarded(() {
+          controller = FeedController(
+            controllerId: 99,
+            sourceId: 'cross-zone',
+            platform: platform,
+          );
+        }, (Object error, StackTrace _) => creatorErrors.add(error));
+        if (releasedBeforeListen) {
+          controller.markReleased(ControllerReleaseReason.evicted);
+          await Future<void>.delayed(Duration.zero);
+        }
+        runZonedGuarded(() {
+          controller.firstFrameRendered.then<void>(
+            (_) => observed.complete(StateError('Unexpected frame')),
+            onError: (Object error, StackTrace _) => observed.complete(error),
+          );
+        }, (Object error, StackTrace _) => listenerErrors.add(error));
+        if (!releasedBeforeListen) {
+          controller.markReleased(ControllerReleaseReason.evicted);
+        }
+        await Future<void>.delayed(Duration.zero);
+        expect(creatorErrors, isEmpty);
+        expect(listenerErrors, isEmpty);
+        expect(observed.isCompleted, isTrue);
+        expect(await observed.future, isA<ControllerReleasedError>());
+      },
+    );
+  }
+
   testWidgets('attaches a texture and renders it', (WidgetTester tester) async {
     final FeedController controller = await player.controllerFor('a');
     await tester.pumpWidget(await wrap(controller));

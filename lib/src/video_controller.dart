@@ -39,11 +39,13 @@ class FeedController {
   final void Function(FeedController controller)? _onReleasedCallback;
   final Completer<ControllerReleaseReason> _released =
       Completer<ControllerReleaseReason>();
-  final Completer<Duration> _firstFrame = Completer<Duration>();
+  final Completer<_FirstFrameResult> _firstFrame =
+      Completer<_FirstFrameResult>();
+  final Expando<Future<Duration>> _firstFrameByErrorZone =
+      Expando<Future<Duration>>();
 
   StreamSubscription<VideoMetrics>? _firstFrameSubscription;
   Future<void>? _disposeOperation;
-  late final Future<Duration> _firstFrameRendered;
   ControllerReleaseReason? _releaseReason;
 
   /// Whether the native player has been released.
@@ -116,7 +118,16 @@ class FeedController {
       _platform.videoSizeStream(controllerId);
 
   /// Completes when the first frame is rendered.
-  Future<Duration> get firstFrameRendered => _firstFrameRendered;
+  Future<Duration> get firstFrameRendered =>
+      _firstFrameByErrorZone[Zone.current.errorZone] ??= _firstFrameFuture();
+
+  Future<Duration> _firstFrameFuture() {
+    final Future<Duration> result = _firstFrame.future.then(
+      (_FirstFrameResult result) => result.value,
+    );
+    result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
+  }
 
   /// The in-flight native disposal, if one has not settled yet.
   @internal
@@ -156,7 +167,7 @@ class FeedController {
       _released.complete(reason);
     }
     if (!_firstFrame.isCompleted) {
-      _firstFrame.completeError(
+      _completeFirstFrameFailure(
         ControllerReleasedError(controllerId: controllerId, reason: reason),
       );
     }
@@ -164,9 +175,15 @@ class FeedController {
     _onReleasedCallback?.call(this);
   }
 
+  void _completeFirstFrameFailure(Object error, [StackTrace? stackTrace]) {
+    if (!_firstFrame.isCompleted) {
+      _firstFrame.complete(
+        _FirstFrameResult.failed(error, stackTrace ?? StackTrace.current),
+      );
+    }
+  }
+
   void _observeFirstFrame() {
-    _firstFrameRendered = _firstFrame.future;
-    _firstFrameRendered.then<void>((_) {}, onError: (_) {});
     try {
       final StreamSubscription<VideoMetrics> subscription = metricsStream
           .listen(
@@ -175,18 +192,18 @@ class FeedController {
               if (latency == null || _firstFrame.isCompleted) {
                 return;
               }
-              _firstFrame.complete(latency);
+              _firstFrame.complete(_FirstFrameResult.rendered(latency));
               _cancelFirstFrameSubscription();
             },
             onError: (Object error, StackTrace stackTrace) {
               if (!_firstFrame.isCompleted) {
-                _firstFrame.completeError(error, stackTrace);
+                _completeFirstFrameFailure(error, stackTrace);
               }
               _cancelFirstFrameSubscription();
             },
             onDone: () {
               if (!_firstFrame.isCompleted) {
-                _firstFrame.completeError(
+                _completeFirstFrameFailure(
                   StateError('Metrics stream ended before the first frame.'),
                 );
               }
@@ -198,7 +215,7 @@ class FeedController {
         _cancelFirstFrameSubscription();
       }
     } catch (error, stackTrace) {
-      _firstFrame.completeError(error, stackTrace);
+      _completeFirstFrameFailure(error, stackTrace);
     }
   }
 
@@ -226,4 +243,28 @@ class FeedController {
   String toString() =>
       'FeedController(id: $controllerId, source: $sourceId, '
       'released: $isReleased)';
+}
+
+class _FirstFrameResult {
+  const _FirstFrameResult.rendered(Duration latency)
+    : latency = latency,
+      error = null,
+      stackTrace = null;
+
+  const _FirstFrameResult.failed(Object error, StackTrace stackTrace)
+    : latency = null,
+      error = error,
+      stackTrace = stackTrace;
+
+  final Duration? latency;
+  final Object? error;
+  final StackTrace? stackTrace;
+
+  Duration get value {
+    final Duration? rendered = latency;
+    if (rendered != null) {
+      return rendered;
+    }
+    Error.throwWithStackTrace(error!, stackTrace!);
+  }
 }

@@ -36,7 +36,7 @@ class FeedSource {
   /// key so signed or expiring URLs (`?sig=`, `?expires=`) still share one
   /// cache entry. Headers remain part of the identity either way.
   ///
-  /// Changing [cacheKey] changes the source's cache identity, so [setSources]
+  /// Changing [cacheKey] changes the source's cache identity, so `setSources`
   /// releases and re-creates any live controller for it — the same treatment
   /// as a [uri] change.
   final String? cacheKey;

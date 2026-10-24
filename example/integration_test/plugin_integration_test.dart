@@ -483,7 +483,12 @@ void main() {
       final FeedController controller = await player.controllerFor('clip-0');
       collector.trackController(controller);
       await _mountOutput(tester, controller, mode);
-      await controller.play();
+      await _commandAndWaitForState(
+        tester,
+        controller,
+        VideoPlaybackState.playing,
+        controller.play,
+      );
       await _waitFor(tester, controller.firstFrameRendered);
       await _commandAndWaitForState(
         tester,

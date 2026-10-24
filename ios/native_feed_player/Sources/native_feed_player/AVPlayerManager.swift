@@ -1687,6 +1687,7 @@ final class AVPlayerManager {
             self.resumeCustomPlaybackIfReady(managed)
             return
           }
+          guard player.currentItem?.status != .unknown else { return }
           let ready = player.currentItem?.status == .readyToPlay
           self.onState(managed.id, ready ? .paused : .idle, nil)
         case .waitingToPlayAtSpecifiedRate:
