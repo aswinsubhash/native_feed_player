@@ -36,5 +36,13 @@ Initial public release.
 - Retain completed downloads on ordinary iOS request cancellation while preserving explicit cache eviction semantics.
 - Deactivate plugin-owned iOS audio sessions and accumulate dropped-frame metrics across looping items.
 - Render both output modes in integration benchmarks, count first frames once per controller, and reject incomplete benchmark data.
+- Add `FeedSource.trustedHeaderOrigins`: source headers now reach only the source origin and explicitly trusted HTTPS origins, on every HLS child request and redirect hop (Android via Media3 OkHttp, iOS via the resource loader). Authenticated cache entries filled under the earlier unrestricted policy are not reused.
+- Stream iOS progressive media in bounded, validated byte ranges with process-wide memory and transfer limits; stage files on disk only under a whole-file cache reservation, so media larger than the cache budget plays without unbounded temporary storage.
+- Apply each iOS session's cache policy independently of other engines sharing the disk cache.
+- Update the iOS audio-session category when individual controllers are muted or unmuted, preserving the requested focus policy.
+- Stop reporting `preparing` for iOS loop iterations during uninterrupted playback.
+- Fix iOS controllers created muted staying silent after unmuting, and report positions for paused texture outputs.
+- Release Android players when source assignment fails, keep a shared Android cache alive when another engine disables caching, follow per-controller mute in Android audio focus, and observe process lifecycle so late engine attachment cannot pause foreground playback.
+- Validate iOS cache files before reporting completeness.
 
 Known limitations: iOS does not disk-cache HLS or preload media bytes before a live controller adopts an item. Physical-device performance validation and the final rendering-default decision remain outstanding.

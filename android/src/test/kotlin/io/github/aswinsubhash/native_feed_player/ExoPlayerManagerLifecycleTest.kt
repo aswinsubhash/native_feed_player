@@ -26,7 +26,8 @@ internal class ExoPlayerManagerLifecycleTest {
     private fun config(
         maxActivePlayers: Int = 3,
         preloadAhead: Int = 2,
-        preloadBehind: Int = 1
+        preloadBehind: Int = 1,
+        audio: AudioPolicyMessage = audioPolicy(muted = true, handleAudioFocus = false)
     ) = FeedPlayerConfigMessage(
         maxActivePlayers = maxActivePlayers.toLong(),
         preloadAhead = preloadAhead.toLong(),
@@ -35,13 +36,16 @@ internal class ExoPlayerManagerLifecycleTest {
         positionUpdateIntervalMs = 200,
         renderMode = RenderModeMessage.PLATFORM_VIEW,
         cache = CachePolicyMessage(enabled = false, maxBytes = 0),
-        audio = AudioPolicyMessage(
-            muted = true,
-            volume = 1.0,
-            handleAudioFocus = false,
+        audio = audio
+    )
+
+    private fun audioPolicy(muted: Boolean, handleAudioFocus: Boolean, volume: Double = 1.0) =
+        AudioPolicyMessage(
+            muted = muted,
+            volume = volume,
+            handleAudioFocus = handleAudioFocus,
             manageAudioSession = true
         )
-    )
 
     private fun manager(
         onReleased: (controllerId: Int, reason: ReleaseReasonMessage) -> Unit = { _, _ -> }
@@ -88,6 +92,42 @@ internal class ExoPlayerManagerLifecycleTest {
         assertEquals(0, manager.activeControllerCount())
         assertEquals(0, manager.scheduledPreloadCount())
         assertNull(manager.cacheIdentity("a"))
+    }
+
+    @Test
+    fun audioFocus_followsEachControllersMuteState_underTheRequestedPolicy() {
+        val manager = manager()
+        val focusByPlayer = mutableMapOf<androidx.media3.exoplayer.ExoPlayer, Boolean>()
+        manager.applyAudioAttributes = { player, _, handleFocus -> focusByPlayer[player] = handleFocus }
+        manager.initialize(config(audio = audioPolicy(muted = true, handleAudioFocus = true)))
+        manager.setSources(listOf(source("a", 0), source("b", 1)))
+        manager.createController(1, "a", autoPlay = false, looping = false)
+        val player = assertNotNull(manager.playerFor(1))
+        assertEquals(false, focusByPlayer[player], "a muted controller must not hold focus")
+
+        manager.setMuted(1, false)
+        assertEquals(true, focusByPlayer[player], "unmuting must request focus")
+        assertEquals(1f, player.volume)
+        manager.setMuted(1, true)
+        assertEquals(false, focusByPlayer[player])
+        assertEquals(0f, player.volume)
+
+        manager.applyAudioPolicy(audioPolicy(muted = false, handleAudioFocus = true, volume = 0.5))
+        assertEquals(true, focusByPlayer[player])
+        assertEquals(0.5f, player.volume)
+        manager.applyAudioPolicy(audioPolicy(muted = false, handleAudioFocus = false))
+        assertEquals(false, focusByPlayer[player], "a disabled policy never requests focus")
+        manager.setMuted(1, false)
+        assertEquals(false, focusByPlayer[player])
+
+        manager.applyAudioPolicy(audioPolicy(muted = true, handleAudioFocus = true))
+        manager.disposeController(1)
+        manager.applyAudioPolicy(audioPolicy(muted = false, handleAudioFocus = true))
+        manager.createController(2, "b", autoPlay = false, looping = false)
+        val pooled = assertNotNull(manager.playerFor(2))
+        assertTrue(pooled === player, "the recycled player is reused")
+        assertEquals(true, focusByPlayer[pooled])
+        assertEquals(1f, pooled.volume)
     }
 
     @Test

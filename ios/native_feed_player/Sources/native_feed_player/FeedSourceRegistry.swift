@@ -9,9 +9,17 @@ struct RegisteredSource {
   let headers: [String: String]
   /// Optional stable cache identity replacing `uri` in cache keys.
   var cacheKey: String? = nil
+  /// HTTPS origins besides the source's own that may receive `headers`.
+  var trustedHeaderOrigins: [String] = []
 
   var cacheIdentity: String {
-    MediaCacheIdentity.make(uri: uri, headers: headers, cacheKey: cacheKey)
+    MediaCacheIdentity.make(
+      uri: uri, headers: headers, cacheKey: cacheKey, trustedOrigins: trustedHeaderOrigins
+    )
+  }
+
+  var requestPolicy: SourceRequestPolicy {
+    SourceRequestPolicy(sourceURI: uri, headers: headers, trustedOrigins: trustedHeaderOrigins)
   }
 
   var resourceIdentity: String {
@@ -23,7 +31,9 @@ struct RegisteredSource {
       "\(name.utf8.count):\(name)\(value.utf8.count):\(value)"
     }.joined()
     let key = cacheKey.map { "\($0.utf8.count):\($0)" } ?? "null"
-    let material = [uri, String(describing: kind), key, rawHeaders].map {
+    let origins = MediaCacheIdentity.canonicalOrigins(trustedHeaderOrigins)
+      .map { "\($0.utf8.count):\($0)" }.joined()
+    let material = [uri, String(describing: kind), key, rawHeaders, origins].map {
       "\($0.utf8.count):\($0)"
     }.joined()
     return MediaCacheIdentity.make(uri: material, headers: [:])

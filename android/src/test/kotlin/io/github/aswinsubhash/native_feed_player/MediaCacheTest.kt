@@ -105,6 +105,97 @@ internal class MediaCacheTest {
     }
 
     @Test
+    fun disablingInOneEngine_keepsTheCacheLiveForAnotherEngine() {
+        MediaCache.retain()
+        MediaCache.retain()
+        MediaCache.configure(context, true, 1024L * 1024, Runnable::run)
+        val live = assertNotNull(MediaCache.activeCache())
+
+        MediaCache.configure(context, false, 0, Runnable::run)
+
+        assertEquals(live, MediaCache.activeCache())
+        assertTrue(MediaCache.isEnabled())
+        cacheBytes(CacheIdentity.cacheKey(source(), source().uri), byteArrayOf(1, 2))
+        assertTrue(MediaCache.usageBytes() > 0, "the surviving cache is still writable")
+
+        MediaCache.release()
+        assertEquals(live, MediaCache.activeCache())
+        MediaCache.release()
+        assertNull(MediaCache.activeCache())
+        // The directory lock was released: a fresh cache opens.
+        MediaCache.configure(context, true, 1024L * 1024, Runnable::run)
+        assertNotNull(MediaCache.activeCache())
+    }
+
+    @Test
+    fun disablingOrRepeatingTheBudgetWhileAnotherEngineOpens_keepsTheOpeningAttempt() {
+        val executor = Executors.newSingleThreadExecutor()
+        val releaseGate = CountDownLatch(1)
+        var builtCount = 0
+        MediaCache.cacheFactory = { dir, evictor, provider ->
+            builtCount += 1
+            SimpleCache(dir, evictor, provider).also { releaseGate.await() }
+        }
+        try {
+            MediaCache.retain()
+            MediaCache.retain()
+            MediaCache.configure(context, true, 1024L * 1024, executor)
+            MediaCache.configure(context, false, 0, executor)
+            MediaCache.configure(context, true, 1024L * 1024, executor)
+            MediaCache.configure(context, true, 2048L * 1024, executor)
+            releaseGate.countDown()
+
+            assertNotNull(MediaCache.awaitCache(timeoutMs = 10_000))
+            assertNotNull(MediaCache.activeCache())
+            assertEquals(1, builtCount)
+        } finally {
+            releaseGate.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun disabledDataSource_neverReadsTheSharedCache_inEitherInitializationOrder() {
+        MediaCache.retain()
+        MediaCache.retain()
+        val source = source()
+        val expected = byteArrayOf(5, 6, 7, 8)
+        val spec = DataSpec.Builder().setUri(source.uri).setLength(4).build()
+        // Engine A disables first; engine B then opens the shared cache.
+        MediaCache.configure(context, false, 0, Runnable::run)
+        MediaCache.configure(context, true, 1024L * 1024, Runnable::run)
+        cacheBytes(CacheIdentity.cacheKey(source, source.uri), expected)
+
+        val cached = MediaCache.createDataSourceFactory(source, cacheEnabled = true).createDataSource()
+        try {
+            assertEquals(4L, cached.open(spec))
+            val actual = ByteArray(4)
+            var offset = 0
+            while (offset < actual.size) {
+                offset += cached.read(actual, offset, actual.size - offset)
+            }
+            assertTrue(expected.contentEquals(actual))
+        } finally {
+            cached.close()
+        }
+
+        for (disabledAfterOpen in listOf(false, true)) {
+            if (disabledAfterOpen) {
+                MediaCache.configure(context, false, 0, Runnable::run)
+            }
+            val bypass = MediaCache.createDataSourceFactory(source, cacheEnabled = false).createDataSource()
+            try {
+                // The bytes exist only in the cache; an uncached read must go
+                // to the (unreachable) network instead of returning them.
+                assertFailsWith<IOException> { bypass.open(spec) }
+            } finally {
+                bypass.close()
+            }
+        }
+        assertNotNull(MediaCache.activeCache())
+    }
+
+    @Test
     fun configure_sameBudget_isIdempotent() {
         MediaCache.configure(context, true, 1024L * 1024, Runnable::run)
         val live = assertNotNull(MediaCache.activeCache())
@@ -219,7 +310,7 @@ internal class MediaCacheTest {
         val rotated = original.copy(uri = "https://cdn.test/video.mp4?sig=current")
         val expected = byteArrayOf(1, 2, 3, 4)
         cacheBytes(CacheIdentity.cacheKey(original, original.uri), expected)
-        val dataSource = MediaCache.createDataSourceFactory(rotated).createDataSource()
+        val dataSource = MediaCache.createDataSourceFactory(rotated, cacheEnabled = true).createDataSource()
         try {
             assertEquals(4L, dataSource.open(DataSpec.Builder().setUri(rotated.uri).setLength(4).build()))
             val actual = ByteArray(4)

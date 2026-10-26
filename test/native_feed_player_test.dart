@@ -657,6 +657,40 @@ void main() {
       },
     );
 
+    test('changing trusted header origins releases the controller', () async {
+      FeedSource source(List<String> origins) => FeedSource(
+        id: 'a',
+        uri: 'https://example.test/a.m3u8',
+        headers: const <String, String>{'Authorization': 'token'},
+        trustedHeaderOrigins: origins,
+      );
+      await player.setSources(<FeedSource>[
+        source(<String>['https://cdn.test']),
+      ]);
+      final FeedController controller = await player.controllerFor('a');
+
+      await player.setSources(<FeedSource>[
+        source(<String>['https://CDN.test:443']),
+      ]);
+      expect(controller.isReleased, isFalse);
+
+      await player.setSources(<FeedSource>[source(<String>[])]);
+      expect(controller.isReleased, isTrue);
+    });
+
+    test('invalid trusted header origins are rejected synchronously', () {
+      expect(
+        () => player.setSources(<FeedSource>[
+          const FeedSource(
+            id: 'a',
+            uri: 'https://example.test/a.mp4',
+            trustedHeaderOrigins: <String>['https://*.cdn.test'],
+          ),
+        ]),
+        throwsArgumentError,
+      );
+    });
+
     test('dispose remains terminal when platform disposal fails', () async {
       await player.setSources(<FeedSource>[_source('a')]);
       final FeedController controller = await player.controllerFor('a');

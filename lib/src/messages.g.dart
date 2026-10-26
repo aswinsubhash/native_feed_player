@@ -69,6 +69,7 @@ class FeedSourceMessage {
     required this.kind,
     required this.headers,
     this.cacheKey,
+    required this.trustedHeaderOrigins,
   });
 
   /// Caller-owned stable identifier. Survives pagination and reordering.
@@ -87,8 +88,20 @@ class FeedSourceMessage {
   /// cache key so signed or expiring URLs still share one cache entry.
   String? cacheKey;
 
+  /// Canonical HTTPS origins, besides the source's own, that may receive
+  /// [headers].
+  List<String> trustedHeaderOrigins;
+
   List<Object?> _toList() {
-    return <Object?>[id, uri, rank, kind, headers, cacheKey];
+    return <Object?>[
+      id,
+      uri,
+      rank,
+      kind,
+      headers,
+      cacheKey,
+      trustedHeaderOrigins,
+    ];
   }
 
   Object encode() {
@@ -104,6 +117,7 @@ class FeedSourceMessage {
       kind: result[3]! as FeedMediaKindMessage,
       headers: (result[4] as Map<Object?, Object?>?)!.cast<String, String>(),
       cacheKey: result[5] as String?,
+      trustedHeaderOrigins: (result[6] as List<Object?>?)!.cast<String>(),
     );
   }
 

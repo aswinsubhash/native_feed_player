@@ -13,32 +13,36 @@ import androidx.media3.common.util.Util
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.ContentMetadata
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Locale
-import java.util.TreeMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import okhttp3.OkHttpClient
 
 /** Credential-safe identity shared by preloading and persistent cache operations. */
 internal object CacheIdentity {
     private const val SCHEMA_VERSION = "v2"
     const val CACHE_KEY_PREFIX = "native-feed-player:$SCHEMA_VERSION:"
 
-    fun forSource(uri: String, headers: Map<String, String>, cacheKey: String? = null): String {
+    fun forSource(
+        uri: String,
+        headers: Map<String, String>,
+        cacheKey: String? = null,
+        trustedHeaderOrigins: Collection<String> = emptyList()
+    ): String {
         val canonicalHeaders = normalizedHeaders(headers).entries
             .joinToString(separator = "") { (name, value) ->
                 "${name.length}:$name${value.length}:$value"
@@ -46,7 +50,11 @@ internal object CacheIdentity {
         // A caller-supplied cacheKey replaces the URI so signed or expiring
         // URLs share one entry; headers stay in the digest either way.
         val identity = cacheKey?.takeIf { it.isNotBlank() } ?: uri
-        return CACHE_KEY_PREFIX + sha256("$SCHEMA_VERSION\n${identity.length}:$identity\n$canonicalHeaders")
+        // Authenticated bytes are partitioned by the origins allowed to see
+        // the credentials, so entries filled under a different (including
+        // the former unrestricted) header policy are never reused.
+        val policy = if (canonicalHeaders.isEmpty()) "" else "\norigins:v1:" + originMaterial(trustedHeaderOrigins)
+        return CACHE_KEY_PREFIX + sha256("$SCHEMA_VERSION\n${identity.length}:$identity\n$canonicalHeaders$policy")
     }
 
     fun forRequest(source: RegisteredSource): String {
@@ -55,8 +63,14 @@ internal object CacheIdentity {
         val headers = source.headers.toSortedMap().entries.joinToString(separator = "") { (name, value) ->
             "${name.length}:$name${value.length}:$value"
         }
-        return sha256("${forSource(source.uri, emptyMap())}\n${source.kind}\n$keyIdentity\n$headers")
+        val origins = originMaterial(source.trustedHeaderOrigins)
+        return sha256("${forSource(source.uri, emptyMap())}\n${source.kind}\n$keyIdentity\n$headers\n$origins")
     }
+
+    private fun originMaterial(origins: Collection<String>): String = origins
+        .map { SourceRequestPolicy.canonicalOrigin(it) ?: it }
+        .toSortedSet()
+        .joinToString(separator = "") { "${it.length}:$it" }
 
     fun cacheKey(source: RegisteredSource, requestUri: String): String =
         if (!source.cacheKey.isNullOrBlank() && source.isProgressive && requestUri == source.uri) {
@@ -92,7 +106,7 @@ internal object CacheIdentity {
 }
 
 internal val RegisteredSource.cacheIdentity: String
-    get() = CacheIdentity.forSource(uri, headers, cacheKey)
+    get() = CacheIdentity.forSource(uri, headers, cacheKey, trustedHeaderOrigins)
 
 internal val RegisteredSource.requestIdentity: String
     get() = CacheIdentity.forRequest(this)
@@ -171,17 +185,22 @@ internal object MediaCache {
      */
     @Synchronized
     fun configure(context: Context, enabled: Boolean, maxBytes: Long, executor: Executor) {
+        val liveOrOpening = cache != null || !readiness.isDone
         if (!enabled) {
-            teardown()
+            // A disabled engine bypasses the cache per source; tearing the
+            // shared instance down would break other engines' reads.
+            if (refCount <= 1) {
+                teardown()
+            }
             return
         }
-        if (cache != null && configuredMaxBytes == maxBytes) {
+        if (liveOrOpening && configuredMaxBytes == maxBytes) {
             return
         }
         // Another engine still plays through the live cache; re-creating it
         // under them would break their reads. The new budget applies on the
         // next configure after that engine detaches.
-        if (cache != null && refCount > 1) {
+        if (liveOrOpening && refCount > 1) {
             if (configuredMaxBytes != maxBytes) {
                 Log.w(
                     TAG,
@@ -196,6 +215,8 @@ internal object MediaCache {
         val generation = ++configureGeneration
         val future = CompletableFuture<SimpleCache?>()
         readiness = future
+        // Recorded up front so an identical request during opening is a no-op.
+        configuredMaxBytes = maxBytes
         executor.execute {
             val appContext = context.applicationContext
             val provider = StandaloneDatabaseProvider(appContext)
@@ -222,7 +243,6 @@ internal object MediaCache {
                 synchronized(this@MediaCache) {
                     if (generation == configureGeneration) {
                         databaseProvider = provider
-                        configuredMaxBytes = maxBytes
                         cache = created
                         invalidateLegacyCacheKeys()
                         rebuildSourceKeyGroups()
@@ -363,9 +383,15 @@ internal object MediaCache {
         (File, LeastRecentlyUsedCacheEvictor, StandaloneDatabaseProvider) -> SimpleCache
     )? = null
 
-    /** Builds a source-specific chain so HLS manifests, keys, and segments inherit headers. */
-    fun createDataSourceFactory(source: RegisteredSource): DataSource.Factory =
-        DataSource.Factory { DeferredCacheDataSource(source, ::awaitCache) }
+    /**
+     * Builds a source-specific chain so HLS manifests, keys, and segments
+     * inherit headers. A [cacheEnabled]=false chain never touches the shared
+     * cache, even when another engine keeps it open.
+     */
+    fun createDataSourceFactory(source: RegisteredSource, cacheEnabled: Boolean): DataSource.Factory {
+        val resolveCache: () -> SimpleCache? = if (cacheEnabled) ::awaitCache else { { null } }
+        return DataSource.Factory { DeferredCacheDataSource(source, resolveCache) }
+    }
 
     /**
      * Resolves the cache the first time [open] runs, which Media3 guarantees
@@ -374,7 +400,7 @@ internal object MediaCache {
      */
     private class DeferredCacheDataSource(
         private val source: RegisteredSource,
-        private val awaitCache: () -> SimpleCache?
+        private val resolveCache: () -> SimpleCache?
     ) : DataSource {
         private val listeners = mutableListOf<TransferListener>()
         private var delegate: DataSource? = null
@@ -386,7 +412,7 @@ internal object MediaCache {
 
         override fun open(dataSpec: DataSpec): Long {
             val resolved = delegate ?: run {
-                val created = buildDataSourceFactory(source).createDataSource()
+                val created = buildDataSourceFactory(source, resolveCache()).createDataSource()
                 listeners.forEach(created::addTransferListener)
                 delegate = created
                 created
@@ -411,25 +437,19 @@ internal object MediaCache {
             delegate ?: error("DataSource.open() must be called before read().")
     }
 
-    private fun buildDataSourceFactory(source: RegisteredSource): DataSource.Factory {
-        val http = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(false)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(15_000)
+    private fun buildDataSourceFactory(
+        source: RegisteredSource,
+        activeCache: SimpleCache?
+    ): DataSource.Factory {
+        val http = OkHttpDataSource.Factory(httpClientFor(source))
 
-        val normalizedHeaders = CacheIdentity.normalizedHeaders(source.headers)
-        val resolving = ResolvingDataSource.Factory(http) { dataSpec: DataSpec ->
-            resolveDataSpec(dataSpec, normalizedHeaders)
-        }
-
-        val activeCache = awaitCache()
         if (activeCache == null) {
-            return resolving
+            return http
         }
         val sourceIdentity = source.cacheIdentity
         return CacheDataSource.Factory()
             .setCache(activeCache)
-            .setUpstreamDataSourceFactory(resolving)
+            .setUpstreamDataSourceFactory(http)
             .setCacheKeyFactory { dataSpec ->
                 CacheIdentity.cacheKey(source, dataSpec.uri.toString()).also { key ->
                     registerCacheKey(sourceIdentity, key)
@@ -439,26 +459,37 @@ internal object MediaCache {
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 
-    fun createMediaSource(source: RegisteredSource): MediaSource =
-        DefaultMediaSourceFactory(createDataSourceFactory(source))
+    fun createMediaSource(source: RegisteredSource, cacheEnabled: Boolean): MediaSource =
+        DefaultMediaSourceFactory(createDataSourceFactory(source, cacheEnabled))
             .createMediaSource(source.mediaItem())
 
-    internal fun resolveDataSpec(
-        dataSpec: DataSpec,
-        sourceHeaders: Map<String, String>
-    ): DataSpec = if (sourceHeaders.isEmpty()) {
-        dataSpec
-    } else {
-        dataSpec.withRequestHeaders(mergeRequestHeaders(dataSpec.httpRequestHeaders, sourceHeaders))
+    /**
+     * Shared transport: one connection pool and dispatcher for every source.
+     * HTTPS-to-HTTP (and HTTP-to-HTTPS) redirects stay blocked, and there is
+     * no cookie jar, so credentials only travel through source headers.
+     */
+    private val defaultHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .followSslRedirects(false)
+            .build()
     }
 
-    internal fun mergeRequestHeaders(
-        requestHeaders: Map<String, String>,
-        sourceHeaders: Map<String, String>
-    ): TreeMap<String, String> = TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER).apply {
-        putAll(requestHeaders)
-        putAll(sourceHeaders)
-    }
+    /** Test hook: replaces the shared transport, e.g. to trust a test certificate. */
+    @VisibleForTesting
+    @Volatile
+    internal var baseHttpClient: OkHttpClient? = null
+
+    /** Source-scoped client sharing the base pool; headers are applied per hop. */
+    internal fun httpClientFor(source: RegisteredSource): OkHttpClient =
+        (baseHttpClient ?: defaultHttpClient).newBuilder()
+            .addNetworkInterceptor(
+                SourceHeaderInterceptor(
+                    SourceRequestPolicy(source.uri, source.headers, source.trustedHeaderOrigins)
+                )
+            )
+            .build()
 
     @Synchronized
     private fun registerCacheKey(sourceIdentity: String, key: String) {

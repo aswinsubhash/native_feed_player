@@ -123,20 +123,36 @@ manager's builder so they share the load control, bandwidth meter, track
 selector, and playback looper — a preloaded source is only valid on a player
 from that builder, and the manager must be released before them.
 
-Bytes flow through `CacheDataSource` over a `SimpleCache` with an LRU evictor.
-Each source receives its own data-source context, so headers reach progressive
-requests and every HLS playlist, segment, and key request. Cache keys are
-partitioned by a versioned SHA-256 identity over URI and canonical headers; no
-raw credential material is persisted.
+Bytes flow through `CacheDataSource` over a `SimpleCache` with an LRU evictor,
+with Media3's OkHttp data source upstream. Each source gets a client sharing one
+connection pool plus a source-scoped network interceptor (`SourceRequestPolicy`)
+that runs on every network hop, redirects included: source headers are applied
+only on the source origin and explicitly trusted HTTPS origins, and removed
+everywhere else. There is no cookie jar and protocol-changing redirects are not
+followed. Cache keys are partitioned by a versioned SHA-256 identity over URI,
+canonical headers, and (for authenticated sources) the trusted-origin set; no
+raw credential material is persisted. A session with caching disabled builds
+data sources that never resolve the shared cache.
 
 **iOS.** In-window sources get bounded, unassociated `AVPlayerItem`s configured
 with a forward-buffer target scaled by distance. The live controller adopts the
 item directly; AVFoundation begins loading when that controller attaches it.
-Progressive media plays through an `AVAssetResourceLoaderDelegate`
-over a private URL scheme, which serves playback from one sequential download
-while writing the same bytes to disk. Only complete 2xx responses are adopted
-into the header-partitioned cache; cancellation and failed responses finish all
-pending AVFoundation requests.
+Network progressive media plays through an `AVAssetResourceLoaderDelegate` over a
+private URL scheme (local files stay file-backed). One transfer per request
+identity fetches validated, bounded HTTP ranges on demand (newest request first,
+so seeks win), checks `Content-Range`, length, and `ETag`/`Last-Modified`
+consistency, and hands bytes straight to waiting requests. Memory retention is
+bounded per resource and process-wide by `MediaTransferBudget`, which also caps
+concurrent transfers. Servers ignoring `Range` get bounded sequential streaming;
+unknown-length responses are spooled only within the per-resource buffer.
+
+`MediaDiskCache` is shared by every engine, but each session holds a `Client`
+lease with its own policy: disabled leases never read or write it. A download is
+staged on disk only under a reservation for the whole file; completed entries
+plus reservations and pinned-but-evicted files always fit the budget. Adoption
+moves the staged file into the cache unless the lease ended or an eviction
+happened meanwhile. Readers pin entries so eviction cannot leave unaccounted
+storage behind.
 
 HLS is excluded from iOS caching: AVFoundation resolves playlists and segments
 internally, out of reach of a resource-loader shim. HLS sources with custom

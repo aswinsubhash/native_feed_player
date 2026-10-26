@@ -215,6 +215,9 @@ final class AVPlayerManager {
   private let registry = FeedSourceRegistry()
   private let resourceLoaderQueue = DispatchQueue(label: "native_feed_player.loader.delegate")
   private let resourceLoader: CachingResourceLoader
+  /// This session's lease on the shared disk cache; its policy alone decides
+  /// whether this engine's playback reads or writes persistent media.
+  private var cacheClient: MediaDiskCache.Client?
   private var controllers: [Int: ManagedController] = [:]
   private var creationOrder: [Int] = []
   private var preparedItems: [String: PreparedItem] = [:]
@@ -222,6 +225,7 @@ final class AVPlayerManager {
   /// Reusable queue players required by `AVPlayerLooper`.
   private var pooledPlayers: [AVQueuePlayer] = []
   private var attachedRenderViews: [Int: NativeVideoRenderView] = [:]
+  private var textureAttachedControllerIds = Set<Int>()
 
   private var maxActivePlayers: Int = 3
   private var preloadAhead: Int = 2
@@ -313,6 +317,9 @@ final class AVPlayerManager {
     }
     stopObservingAppLifecycle()
     resourceLoader.shutdown()
+    if let cacheClient {
+      MediaDiskCache.shared.release(cacheClient)
+    }
     for managed in controllers.values {
       managed.player.pause()
     }
@@ -331,7 +338,8 @@ final class AVPlayerManager {
     applyAudioPolicy(config.audio)
     maxTotalPlayers = maxActivePlayers + preloadAhead + preloadBehind + 1
 
-    MediaDiskCache.shared.configure(
+    releaseCacheClient()
+    cacheClient = MediaDiskCache.shared.register(
       enabled: config.cache.enabled,
       maxBytes: config.cache.maxBytes
     )
@@ -451,6 +459,7 @@ final class AVPlayerManager {
 
     managed.wantsToPlay = autoPlay
     controllers[controllerId] = managed
+    configureAudioSession()
     creationOrder.append(controllerId)
     metricsByController[controllerId] = PlaybackMetrics()
     observeCurrentItem(to: managed)
@@ -505,6 +514,7 @@ final class AVPlayerManager {
     }
     managed.targetVolume = min(max(Float(value), 0), 1)
     managed.player.volume = managed.isMuted ? 0 : managed.targetVolume
+    configureAudioSession()
   }
 
   func setMuted(controllerId: Int, value: Bool) {
@@ -513,7 +523,9 @@ final class AVPlayerManager {
       return
     }
     managed.isMuted = value
+    managed.player.isMuted = value
     managed.player.volume = value ? 0 : managed.targetVolume
+    configureAudioSession()
   }
 
   func setPlaybackSpeed(controllerId: Int, speed: Double) {
@@ -782,18 +794,31 @@ final class AVPlayerManager {
     assertMainQueue()
     muted = policy.muted
     volume = min(max(Float(policy.volume), 0), 1)
-    handleAudioFocus = policy.handleAudioFocus && !policy.muted
+    // Kept as requested: it applies whenever any controller is audible,
+    // including one unmuted individually under a muted feed policy.
+    handleAudioFocus = policy.handleAudioFocus
     if manageAudioSession && !policy.manageAudioSession {
       deactivateAudioSession()
     }
     manageAudioSession = policy.manageAudioSession
 
-    configureAudioSession()
     for managed in controllers.values {
       managed.targetVolume = volume
       managed.isMuted = muted
+      managed.player.isMuted = muted
       managed.player.volume = muted ? 0 : volume
     }
+    // After the loop: the category follows the controllers' new states.
+    configureAudioSession()
+  }
+
+  /// Whether any live controller can be heard; with none, the configured
+  /// default for future controllers decides.
+  private var hasAudibleOutput: Bool {
+    guard !controllers.isEmpty else {
+      return !muted && volume > 0
+    }
+    return controllers.values.contains { !$0.isMuted && $0.targetVolume > 0 }
   }
 
   private func configureAudioSession() {
@@ -807,7 +832,7 @@ final class AVPlayerManager {
       // options, so compare against exactly what it would set. AVFoundation
       // reports back the options it was given, so the comparison is stable
       // and skips redundant setCategory calls.
-      if muted {
+      if !hasAudibleOutput {
         // Preserve external audio while muted. .moviePlayback is only valid
         // with .playback, so the ambient path uses the default mode.
         if session.category != .ambient || session.mode != .default
@@ -982,6 +1007,15 @@ final class AVPlayerManager {
     markFirstFrame(controllerId)
   }
 
+  func setTextureAttached(_ attached: Bool, controllerId: Int) {
+    assertMainQueue()
+    if attached, controllers[controllerId] != nil {
+      textureAttachedControllerIds.insert(controllerId)
+    } else {
+      textureAttachedControllerIds.remove(controllerId)
+    }
+  }
+
   func handleResourceFailure(identity: String, error: Error) {
     assertMainQueue()
     for managed in controllers.values where managed.resourceIdentity == identity {
@@ -1035,6 +1069,14 @@ final class AVPlayerManager {
     assertMainQueue()
     resetSession(reason: .engineDetached)
     stopObservingAppLifecycle()
+    releaseCacheClient()
+  }
+
+  private func releaseCacheClient() {
+    if let cacheClient {
+      MediaDiskCache.shared.release(cacheClient)
+    }
+    cacheClient = nil
   }
 
   private func resetSession(reason: ReleaseReasonMessage) {
@@ -1052,6 +1094,7 @@ final class AVPlayerManager {
       renderView.setPlayer(nil)
     }
     attachedRenderViews.removeAll()
+    textureAttachedControllerIds.removeAll()
     registry.clear()
     discardAllPreparedItems()
     metricsByController.removeAll()
@@ -1211,11 +1254,16 @@ final class AVPlayerManager {
     }
 
     let asset: AVURLAsset
-    if (shouldCache(source) || !source.headers.isEmpty) && !isHLS(source),
+    // Only network media streams through the loader; local files stay
+    // file-backed instead of being copied into a download.
+    let isNetwork = ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+    if isNetwork, (shouldCache(source) || !source.headers.isEmpty) && !isHLS(source),
       let cachedAsset = resourceLoader.prepareAsset(
         for: source.uri,
         headers: source.headers,
-        cacheKey: source.cacheKey
+        cacheKey: source.cacheKey,
+        trustedOrigins: source.trustedHeaderOrigins,
+        client: cacheClient
       )
     {
       asset = cachedAsset
@@ -1229,7 +1277,7 @@ final class AVPlayerManager {
   }
 
   private func shouldCache(_ source: RegisteredSource) -> Bool {
-    guard MediaDiskCache.shared.isEnabled else {
+    guard cacheClient?.enabled == true else {
       return false
     }
     switch source.kind {
@@ -1412,6 +1460,10 @@ final class AVPlayerManager {
     guard let managed = controllers.removeValue(forKey: controllerId) else {
       return
     }
+    // A released audible controller may leave only muted ones behind.
+    if !managed.isMuted, managed.targetVolume > 0, audioSessionActivated {
+      configureAudioSession()
+    }
 
     creationOrder.removeAll(where: { $0 == controllerId })
     if let endObserver = managed.endObserver {
@@ -1437,6 +1489,7 @@ final class AVPlayerManager {
     managed.looper?.disableLooping()
     managed.looper = nil
     attachedRenderViews.removeValue(forKey: controllerId)?.setPlayer(nil)
+    textureAttachedControllerIds.remove(controllerId)
     metricsByController.removeValue(forKey: controllerId)
     recycleOrReleasePlayer(managed.player)
     onReleased(controllerId, reason)
@@ -1638,6 +1691,10 @@ final class AVPlayerManager {
           }
           self.resumeCustomPlaybackIfReady(managed)
         case .unknown:
+          // Loop replicas and other replacement items start unknown while
+          // playback continues uninterrupted; only initial preparation is
+          // reported. Real stalls surface as buffering via timeControlStatus.
+          guard !managed.didEmitReady else { return }
           self.onState(managed.id, .preparing, nil)
         case .failed:
           break
@@ -1816,6 +1873,7 @@ final class AVPlayerManager {
       // Skip position updates for idle offscreen players.
       resumeCustomPlaybackIfReady(managed)
       let isRendering = attachedRenderViews[controllerId] != nil
+        || textureAttachedControllerIds.contains(controllerId)
       let isPlaying = managed.player.timeControlStatus == .playing
       hasPlayingController = hasPlayingController || isPlaying
       guard isRendering || isPlaying else {

@@ -22,6 +22,7 @@ class FeedSource {
     this.headers = const <String, String>{},
     this.kind = FeedMediaKind.auto,
     this.cacheKey,
+    this.trustedHeaderOrigins = const <String>[],
   });
 
   final String id;
@@ -41,6 +42,21 @@ class FeedSource {
   /// as a [uri] change.
   final String? cacheKey;
 
+  /// Additional HTTPS origins (`https://cdn.example.com[:port]`) that may
+  /// receive [headers]. Headers always reach the origin of [uri]; every other
+  /// origin — HLS child playlists, segments, keys, and redirect targets —
+  /// receives none of them unless listed here.
+  ///
+  /// Each entry is a bare origin: no path, query, fragment, credentials, or
+  /// wildcards, and it never implies its subdomains, other ports, or plain
+  /// HTTP. Configure this from trusted application code, never from feed data.
+  final List<String> trustedHeaderOrigins;
+
+  Set<String> get _originSet => <String>{
+    for (final String origin in trustedHeaderOrigins)
+      canonicalHeaderOrigin(origin) ?? origin,
+  };
+
   @override
   bool operator ==(Object other) =>
       other is FeedSource &&
@@ -48,7 +64,8 @@ class FeedSource {
       other.uri == uri &&
       other.kind == kind &&
       other.cacheKey == cacheKey &&
-      mapEquals(other.headers, headers);
+      mapEquals(other.headers, headers) &&
+      setEquals(other._originSet, _originSet);
 
   @override
   int get hashCode => Object.hash(
@@ -61,6 +78,7 @@ class FeedSource {
         (MapEntry<String, String> entry) => Object.hash(entry.key, entry.value),
       ),
     ),
+    Object.hashAllUnordered(_originSet),
   );
 
   @override
@@ -92,6 +110,19 @@ extension FeedSourceMessaging on FeedSource {
         'Must be an absolute URI with a scheme.',
       );
     }
+    final Set<String> origins = <String>{};
+    for (final String origin in trustedHeaderOrigins) {
+      final String? canonical = canonicalHeaderOrigin(origin);
+      if (canonical == null) {
+        throw ArgumentError.value(
+          origin,
+          'trustedHeaderOrigins',
+          'Must be an HTTPS origin such as https://cdn.example.com, without '
+              'a path, query, fragment, credentials, or wildcard.',
+        );
+      }
+      origins.add(canonical);
+    }
     return FeedSourceMessage(
       id: id,
       uri: uri,
@@ -99,8 +130,33 @@ extension FeedSourceMessaging on FeedSource {
       kind: kind.toMessage(),
       headers: headers,
       cacheKey: cacheKey,
+      trustedHeaderOrigins: origins.toList()..sort(),
     );
   }
+}
+
+/// Returns `https://host[:port]` in canonical form, or null when [origin] is
+/// not a bare HTTPS origin.
+@visibleForTesting
+String? canonicalHeaderOrigin(String origin) {
+  final String trimmed = origin.trim();
+  if (trimmed.contains('*')) {
+    return null;
+  }
+  final Uri? parsed = Uri.tryParse(trimmed);
+  if (parsed == null ||
+      parsed.scheme.toLowerCase() != 'https' ||
+      parsed.host.isEmpty ||
+      parsed.userInfo.isNotEmpty ||
+      parsed.hasQuery ||
+      parsed.hasFragment ||
+      (parsed.path.isNotEmpty && parsed.path != '/')) {
+    return null;
+  }
+  final String host = parsed.host.toLowerCase();
+  final String authority = host.contains(':') ? '[$host]' : host;
+  final bool explicitPort = parsed.hasPort && parsed.port != 443;
+  return 'https://$authority${explicitPort ? ':${parsed.port}' : ''}';
 }
 
 extension FeedMediaKindMessaging on FeedMediaKind {

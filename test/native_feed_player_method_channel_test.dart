@@ -197,6 +197,77 @@ void main() {
     final FeedSourceMessage message = hostApi.setSourcesRequest!.single;
     expect(message.kind, FeedMediaKindMessage.hls);
     expect(message.headers['Authorization'], 'Bearer token');
+    expect(message.trustedHeaderOrigins, isEmpty);
+  });
+
+  test(
+    'trusted header origins are sent canonical, sorted, and unique',
+    () async {
+      await platform.setSources(<FeedSource>[
+        const FeedSource(
+          id: 'a',
+          uri: 'https://media.test/a.m3u8',
+          headers: <String, String>{'Authorization': 'Bearer token'},
+          trustedHeaderOrigins: <String>[
+            'https://CDN-B.test:443/',
+            'https://cdn-a.test:8443',
+            'https://cdn-b.test',
+            'https://[::1]:9443',
+          ],
+        ),
+      ]);
+
+      expect(hostApi.setSourcesRequest!.single.trustedHeaderOrigins, <String>[
+        'https://[::1]:9443',
+        'https://cdn-a.test:8443',
+        'https://cdn-b.test',
+      ]);
+    },
+  );
+
+  test('non-origin trusted header entries are rejected before native', () {
+    for (final String origin in <String>[
+      'http://cdn.test',
+      'https://*.cdn.test',
+      'https://cdn.test/path',
+      'https://cdn.test?x=1',
+      'https://cdn.test#f',
+      'https://user:pw@cdn.test',
+      'cdn.test',
+      '',
+    ]) {
+      expect(
+        () => FeedSource(
+          id: 'a',
+          uri: 'https://media.test/a.mp4',
+          trustedHeaderOrigins: <String>[origin],
+        ).toMessage(0),
+        throwsArgumentError,
+        reason: origin,
+      );
+    }
+  });
+
+  test('trusted origins participate in source equality canonically', () {
+    const FeedSource base = FeedSource(
+      id: 'a',
+      uri: 'https://media.test/a.mp4',
+      trustedHeaderOrigins: <String>['https://cdn.test', 'https://b.test'],
+    );
+    const FeedSource reordered = FeedSource(
+      id: 'a',
+      uri: 'https://media.test/a.mp4',
+      trustedHeaderOrigins: <String>['https://B.test:443', 'https://cdn.test/'],
+    );
+    const FeedSource narrowed = FeedSource(
+      id: 'a',
+      uri: 'https://media.test/a.mp4',
+      trustedHeaderOrigins: <String>['https://cdn.test'],
+    );
+
+    expect(reordered, base);
+    expect(reordered.hashCode, base.hashCode);
+    expect(narrowed, isNot(base));
   });
 
   test('createController returns the native id', () async {

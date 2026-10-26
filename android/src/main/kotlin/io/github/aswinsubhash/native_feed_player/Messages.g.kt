@@ -151,7 +151,12 @@ data class FeedSourceMessage (
    * Optional stable cache identity. When set, it replaces the URI in the
    * cache key so signed or expiring URLs still share one cache entry.
    */
-  val cacheKey: String? = null
+  val cacheKey: String? = null,
+  /**
+   * Canonical HTTPS origins, besides the source's own, that may receive
+   * [headers].
+   */
+  val trustedHeaderOrigins: List<String>
 )
  {
   companion object {
@@ -162,7 +167,8 @@ data class FeedSourceMessage (
       val kind = pigeonVar_list[3] as FeedMediaKindMessage
       val headers = pigeonVar_list[4] as Map<String, String>
       val cacheKey = pigeonVar_list[5] as String?
-      return FeedSourceMessage(id, uri, rank, kind, headers, cacheKey)
+      val trustedHeaderOrigins = pigeonVar_list[6] as List<String>
+      return FeedSourceMessage(id, uri, rank, kind, headers, cacheKey, trustedHeaderOrigins)
     }
   }
   fun toList(): List<Any?> {
@@ -173,6 +179,7 @@ data class FeedSourceMessage (
       kind,
       headers,
       cacheKey,
+      trustedHeaderOrigins,
     )
   }
   override fun equals(other: Any?): Boolean {

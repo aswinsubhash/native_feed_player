@@ -7,6 +7,7 @@ import android.os.Looper
 import android.view.TextureView
 import androidx.test.core.app.ApplicationProvider
 import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.preload.BasePreloadManager
 import androidx.media3.exoplayer.source.preload.DefaultPreloadManager
 import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
@@ -18,6 +19,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import kotlin.math.abs
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -99,6 +101,77 @@ internal class ExoPlayerManagerPreloadResilienceTest {
 
         // The unsupported source is skipped; the playable neighbour is kept.
         assertEquals(1, manager.scheduledPreloadCount())
+    }
+
+    @Test
+    fun createController_withUnsupportedSource_releasesEveryObtainedPlayer() {
+        val manager = manager()
+        val obtained = mutableListOf<ExoPlayer>()
+        manager.onPlayerObtained = { obtained += it }
+        manager.initialize(config())
+        manager.setSources(
+            listOf(
+                source("dash", 0, "https://example.test/video.mpd"),
+                source("ok", 1, "https://example.test/video.mp4")
+            )
+        )
+
+        // Fallback players: the shared preload builder does not exist yet.
+        repeat(3) { attempt ->
+            assertFailsWith<Throwable> { manager.createController(10 + attempt, "dash", false, false) }
+        }
+        assertEquals(3, obtained.size)
+        assertTrue(obtained.all { it.isReleased })
+
+        // Shared-builder players.
+        shadowOf(Looper.getMainLooper()).idle()
+        assertNotNull(manager.preloadManagerUsesCache())
+        repeat(3) { attempt ->
+            assertFailsWith<Throwable> { manager.createController(20 + attempt, "dash", false, false) }
+        }
+        assertEquals(6, obtained.size)
+        assertTrue(obtained.all { it.isReleased })
+        assertEquals(0, manager.trackedPreloadPlayerCount())
+
+        // A recycled player must not return to the pool after a failed attempt.
+        manager.createController(30, "ok", autoPlay = false, looping = false)
+        val recycled = assertNotNull(manager.playerFor(30))
+        manager.disposeController(30)
+        assertEquals(1, manager.pooledPlayerCount())
+        assertFailsWith<Throwable> { manager.createController(31, "dash", false, false) }
+        assertTrue(recycled === obtained.last())
+        assertTrue(recycled.isReleased)
+        assertEquals(0, manager.pooledPlayerCount())
+        assertEquals(0, manager.trackedPreloadPlayerCount())
+        assertEquals(0, manager.activeControllerCount())
+
+        manager.createController(32, "ok", autoPlay = true, looping = false)
+        val healthy = assertNotNull(manager.playerFor(32))
+        assertTrue(!healthy.isReleased)
+        assertTrue(healthy.playWhenReady)
+        assertEquals(1, manager.activeControllerCount())
+    }
+
+    @Test
+    fun disabledCachePolicy_preloadsWithoutTheSharedDiskCache() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        MediaCache.configure(context, true, 1024L * 1024, Runnable::run)
+        try {
+            val cached = FeedPreloadManager(context, cacheEnabled = true)
+            val uncached = FeedPreloadManager(context, cacheEnabled = false)
+            try {
+                assertTrue(cached.usesCache)
+                assertTrue(!uncached.usesCache)
+                val playable = source("ok", 1, "https://example.test/video.mp4")
+                uncached.sync(listOf(playable), visibleRank = 0)
+                assertNotNull(uncached.mediaSourceFor(playable))
+            } finally {
+                cached.release()
+                uncached.release()
+            }
+        } finally {
+            MediaCache.resetForTesting()
+        }
     }
 
     @Test

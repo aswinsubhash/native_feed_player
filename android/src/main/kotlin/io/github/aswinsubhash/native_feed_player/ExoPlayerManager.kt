@@ -160,6 +160,20 @@ internal class ExoPlayerManager(
     private var muted = false
     private var volume = 1.0f
     private var handleAudioFocus = true
+    private var cacheEnabled = true
+    private val mediaAudioAttributes = AudioAttributes.Builder()
+        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+        .setUsage(C.USAGE_MEDIA)
+        .build()
+
+    /** Test seam: observes audio-focus decisions without a platform audio manager. */
+    @VisibleForTesting
+    internal var applyAudioAttributes: (ExoPlayer, AudioAttributes, Boolean) -> Unit =
+        { player, attributes, handleFocus -> player.setAudioAttributes(attributes, handleFocus) }
+
+    /** Test seam: observes every player handed to a controller attempt. */
+    @VisibleForTesting
+    internal var onPlayerObtained: ((ExoPlayer) -> Unit)? = null
 
     /** Controllers paused by backgrounding, to be resumed on return. */
     private val autoPausedControllerIds = mutableSetOf<Int>()
@@ -190,6 +204,15 @@ internal class ExoPlayerManager(
     @VisibleForTesting
     internal fun scheduledPreloadCount(): Int = preloadManager?.sourceCount() ?: 0
 
+    @VisibleForTesting
+    internal fun pooledPlayerCount(): Int = recycledPlayers.size
+
+    @VisibleForTesting
+    internal fun trackedPreloadPlayerCount(): Int = playersFromPreloadManager.size
+
+    @VisibleForTesting
+    internal fun preloadManagerUsesCache(): Boolean? = preloadManager?.usesCache
+
     private val positionTicker = object : Runnable {
         override fun run() {
             emitPositions()
@@ -211,6 +234,7 @@ internal class ExoPlayerManager(
         applyAudioPolicy(config.audio)
         // Preloading does not retain players.
         maxTotalPlayers = maxActivePlayers * 2
+        cacheEnabled = config.cache.enabled
 
         MediaCache.configure(
             context = appContext,
@@ -233,7 +257,7 @@ internal class ExoPlayerManager(
                 if (managerGeneration != preloadManagerGeneration || preloadManager != null) {
                     return@post
                 }
-                preloadManager = FeedPreloadManager(appContext)
+                preloadManager = FeedPreloadManager(appContext, cacheEnabled)
                     .apply {
                         setMaxPreloadDistance(maxOf(preloadAhead, preloadBehind))
                         onSourceFailed = { source, error ->
@@ -310,18 +334,8 @@ internal class ExoPlayerManager(
         player.addListener(listener)
         player.addAnalyticsListener(analyticsListener)
         player.repeatMode = if (looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-        player.volume = if (muted) 0f else volume
-        player.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                .setUsage(C.USAGE_MEDIA)
-                .build(),
-            handleAudioFocus
-        )
-        // Keep the CPU awake only for audible playback.
-        player.setWakeMode(if (muted) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
 
-        managedPlayers[controllerId] = ManagedPlayer(
+        val managed = ManagedPlayer(
             player = player,
             listener = listener,
             analyticsListener = analyticsListener,
@@ -332,6 +346,8 @@ internal class ExoPlayerManager(
             isMuted = muted,
             createdAtVisibleGeneration = visibleGeneration
         )
+        applyAudio(managed)
+        managedPlayers[controllerId] = managed
         creationOrder.addLast(controllerId)
         attachedTextureByController[controllerId]?.let { player.setVideoTextureView(it) }
         surfaceByController[controllerId]?.let { player.setVideoSurface(it) }
@@ -375,8 +391,7 @@ internal class ExoPlayerManager(
     fun setMuted(controllerId: Int, value: Boolean) {
         val managed = managedPlayers[controllerId] ?: return
         managed.isMuted = value
-        managed.player.volume = if (value) 0f else managed.targetVolume
-        managed.player.setWakeMode(if (value) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
+        applyAudio(managed)
     }
 
     fun setPlaybackSpeed(controllerId: Int, speed: Double) {
@@ -393,20 +408,22 @@ internal class ExoPlayerManager(
     fun applyAudioPolicy(policy: AudioPolicyMessage) {
         muted = policy.muted
         volume = policy.volume.toFloat().coerceIn(0f, 1f)
-        handleAudioFocus = policy.handleAudioFocus && !policy.muted
-
-        val attributes = AudioAttributes.Builder()
-            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-            .setUsage(C.USAGE_MEDIA)
-            .build()
+        handleAudioFocus = policy.handleAudioFocus
 
         for (managed in managedPlayers.values) {
             managed.targetVolume = volume
             managed.isMuted = muted
-            managed.player.setAudioAttributes(attributes, handleAudioFocus)
-            managed.player.volume = if (muted) 0f else volume
-            managed.player.setWakeMode(if (muted) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
+            applyAudio(managed)
         }
+    }
+
+    /** Muted controllers never hold audio focus; audible ones follow the requested policy. */
+    private fun applyAudio(managed: ManagedPlayer) {
+        val player = managed.player
+        applyAudioAttributes(player, mediaAudioAttributes, handleAudioFocus && !managed.isMuted)
+        player.volume = if (managed.isMuted) 0f else managed.targetVolume
+        // Keep the CPU awake only for audible playback.
+        player.setWakeMode(if (managed.isMuted) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
     }
 
     /** Pauses active players until the app returns to the foreground. */
@@ -700,18 +717,25 @@ internal class ExoPlayerManager(
     /** Uses preloaded media with a player from the same preload manager. */
     private fun obtainPlayerFor(source: RegisteredSource): ExoPlayer {
         val player = obtainReusablePlayer()
-        // Media3 requires preloaded sources and their players to share one
-        // builder, so preloaded sources are only used with players the
-        // preload manager built.
-        val preloadedSource = if (playersFromPreloadManager.contains(player)) {
-            preloadManager?.mediaSourceFor(source)
-        } else {
-            null
-        }
-        if (preloadedSource != null) {
-            player.setMediaSource(preloadedSource)
-        } else {
-            player.setMediaSource(MediaCache.createMediaSource(source))
+        onPlayerObtained?.invoke(player)
+        try {
+            // Media3 requires preloaded sources and their players to share one
+            // builder, so preloaded sources are only used with players the
+            // preload manager built.
+            val preloadedSource = if (playersFromPreloadManager.contains(player)) {
+                preloadManager?.mediaSourceFor(source)
+            } else {
+                null
+            }
+            player.setMediaSource(
+                preloadedSource ?: MediaCache.createMediaSource(source, cacheEnabled)
+            )
+        } catch (error: Throwable) {
+            // The player belongs to no controller or pool yet; release it so a
+            // failed attempt cannot leak decoder and network resources.
+            playersFromPreloadManager.remove(player)
+            runCatching { player.release() }
+            throw error
         }
         return player
     }

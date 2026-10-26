@@ -322,10 +322,18 @@ final class CachingResourceLoaderTests: XCTestCase {
     XCTAssertFalse(CachingResourceLoader.isSuccessfulHTTPStatus(500))
   }
 
-  func testPartialContentIsRejectedUntilRangesCanBeStoredAtTheirDeclaredOffsets() {
-    XCTAssertFalse(CachingResourceLoader.isCacheableResponse(206))
-    XCTAssertTrue(CachingResourceLoader.isCacheableResponse(200))
-    XCTAssertFalse(CachingResourceLoader.isCacheableResponse(404))
+  func testContentRangeParsingIsStrict() {
+    typealias R = CachingResourceLoader.ContentRange
+    XCTAssertEqual(CachingResourceLoader.parseContentRange("bytes 0-99/1000"), R(start: 0, end: 99, total: 1000))
+    XCTAssertEqual(CachingResourceLoader.parseContentRange("bytes 900-999/1000"), R(start: 900, end: 999, total: 1000))
+    XCTAssertEqual(CachingResourceLoader.parseContentRange("bytes 5-9/*"), R(start: 5, end: 9, total: nil))
+    XCTAssertEqual(CachingResourceLoader.parseContentRange("bytes */1000"), R(start: nil, end: nil, total: 1000))
+    for invalid in [
+      nil, "", "bytes 10-5/100", "bytes 0-100/100", "bytes -1-5/100", "items 0-1/2",
+      "bytes 0-1", "bytes */*", "bytes 0-1/abc", "bytes 0-99999999999999999999/1",
+    ] {
+      XCTAssertNil(CachingResourceLoader.parseContentRange(invalid), invalid ?? "nil")
+    }
   }
 
   func testMimeTypesAreConvertedToUniformTypeIdentifiers() {
@@ -506,6 +514,55 @@ final class MediaDiskCacheTests: XCTestCase {
     XCTAssertNil(cache.cachedFile(forIdentity: identity))
     cache.waitForPendingWorkForTesting()
     XCTAssertNil(cache.cachedFile(forIdentity: identity))
+  }
+
+  func testCachedBytesRejectsMissingAndTruncatedFilesBeforePlaybackLookup() throws {
+    cache.configure(enabled: true, maxBytes: 64 * 1024 * 1024)
+    cache.waitForPendingWorkForTesting()
+    let valid = try storeEntry(named: "valid", bytes: 4096)
+    let missing = try storeEntry(named: "missing", bytes: 4096)
+    let truncated = try storeEntry(named: "truncated", bytes: 4096)
+    try FileManager.default.removeItem(at: cache.fileURL(forKey: missing))
+    try Data(repeating: 0xCD, count: 1024).write(to: cache.fileURL(forKey: truncated))
+
+    XCTAssertEqual(cachedBytes(valid), 4096)
+    XCTAssertEqual(cachedBytes(missing), 0)
+    XCTAssertEqual(cachedBytes(truncated), 0)
+    XCTAssertEqual(cachedBytes(missing), 0)
+    XCTAssertEqual(cachedBytes(truncated), 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: cache.fileURL(forKey: truncated).path))
+    XCTAssertNil(cache.cachedFile(forIdentity: missing))
+    XCTAssertNil(cache.cachedFile(forIdentity: truncated))
+    XCTAssertNotNil(cache.cachedFile(forIdentity: valid))
+    let usage = expectation(description: "usage")
+    cache.usageBytes { bytes in
+      XCTAssertEqual(bytes, 4096)
+      usage.fulfill()
+    }
+    wait(for: [usage], timeout: 2)
+  }
+
+  private func storeEntry(named name: String, bytes: Int) throws -> String {
+    let identity = MediaCacheIdentity.make(
+      uri: "https://example.test/\(name)-\(UUID().uuidString).mp4",
+      headers: [:]
+    )
+    let temporary = cacheRoot.appendingPathComponent("nfp-test-\(UUID().uuidString)")
+    try Data(repeating: 0xAB, count: bytes).write(to: temporary)
+    cache.store(temporaryFile: temporary, identity: identity, contentType: "video/mp4")
+    cache.waitForPendingWorkForTesting()
+    return identity
+  }
+
+  private func cachedBytes(_ identity: String) -> Int64 {
+    let done = expectation(description: "cached bytes")
+    var result: Int64 = -1
+    cache.cachedBytes(forIdentity: identity) { bytes in
+      result = bytes
+      done.fulfill()
+    }
+    wait(for: [done], timeout: 2)
+    return result
   }
 }
 
@@ -1327,6 +1384,92 @@ final class AVPlayerManagerSessionTests: XCTestCase {
     }
   }
 
+  func testUnmuteClearsNativeMuteFlagForControllerAndPolicyChanges() throws {
+    let manager = makeManager()
+    manager.initialize(config: config(manageAudioSession: false, muted: true))
+    defer { manager.disposeAll() }
+    try manager.setSources([
+      RegisteredSource(id: "clip", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:])
+    ])
+    try manager.createController(controllerId: 90, sourceId: "clip", autoPlay: false, looping: false)
+    let player = try XCTUnwrap(manager.player(for: 90))
+    XCTAssertTrue(player.isMuted)
+
+    manager.setVolume(controllerId: 90, value: 0.4)
+    manager.setMuted(controllerId: 90, value: false)
+    XCTAssertFalse(player.isMuted)
+    XCTAssertEqual(Double(player.volume), 0.4, accuracy: 0.001)
+    manager.setMuted(controllerId: 90, value: true)
+    XCTAssertTrue(player.isMuted)
+    XCTAssertEqual(player.volume, 0)
+    manager.setMuted(controllerId: 90, value: false)
+    XCTAssertFalse(player.isMuted)
+    XCTAssertEqual(Double(player.volume), 0.4, accuracy: 0.001)
+
+    let policy = { (muted: Bool) in
+      AudioPolicyMessage(muted: muted, volume: 0.6, handleAudioFocus: false, manageAudioSession: false)
+    }
+    manager.applyAudioPolicy(policy(true))
+    XCTAssertTrue(player.isMuted)
+    manager.applyAudioPolicy(policy(false))
+    XCTAssertFalse(player.isMuted)
+    XCTAssertEqual(Double(player.volume), 0.6, accuracy: 0.001)
+
+    manager.applyAudioPolicy(policy(true))
+    manager.disposeController(controllerId: 90)
+    manager.applyAudioPolicy(policy(false))
+    try manager.createController(controllerId: 91, sourceId: "clip", autoPlay: false, looping: false)
+    let pooled = try XCTUnwrap(manager.player(for: 91))
+    XCTAssertTrue(pooled === player)
+    XCTAssertFalse(pooled.isMuted)
+    XCTAssertEqual(Double(pooled.volume), 0.6, accuracy: 0.001)
+  }
+
+  func testTextureAttachmentEmitsPausedPositionsUntilDetachedOrReleased() throws {
+    var positions: [Int64: Int] = [:]
+    let manager = AVPlayerManager(
+      onState: { _, _, _ in },
+      onReleased: { _, _ in },
+      onPosition: { positions[$0.controllerId, default: 0] += 1 },
+      onMetrics: { _ in },
+      onVideoSize: { _ in },
+      setAudioSessionActive: { _, _ in }
+    )
+    var settings = config(manageAudioSession: false)
+    settings.positionUpdateIntervalMs = 50
+    manager.initialize(config: settings)
+    defer { manager.disposeAll() }
+    try manager.setSources([
+      RegisteredSource(id: "clip", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:])
+    ])
+    try manager.createController(controllerId: 92, sourceId: "clip", autoPlay: false, looping: false)
+
+    pumpRunLoop(0.2)
+    XCTAssertNil(positions[92], "offscreen paused players stay silent")
+
+    manager.setTextureAttached(true, controllerId: 92)
+    manager.seekTo(controllerId: 92, positionMs: 0)
+    pumpRunLoop(0.2)
+    XCTAssertGreaterThan(positions[92] ?? 0, 0)
+
+    manager.setTextureAttached(false, controllerId: 92)
+    pumpRunLoop(0.1)
+    positions[92] = 0
+    pumpRunLoop(0.2)
+    XCTAssertEqual(positions[92], 0)
+
+    manager.setTextureAttached(true, controllerId: 92)
+    manager.disposeController(controllerId: 92)
+    manager.setTextureAttached(true, controllerId: 92)
+    try manager.createController(controllerId: 93, sourceId: "clip", autoPlay: false, looping: false)
+    pumpRunLoop(0.2)
+    XCTAssertNil(positions[93])
+  }
+
+  private func pumpRunLoop(_ seconds: TimeInterval) {
+    RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+  }
+
   private func makeManager(
     onReleased: @escaping (Int) -> Void = { _ in },
     onState: @escaping AVPlayerManager.StateCallback = { _, _, _ in },
@@ -1960,92 +2103,6 @@ final class CacheRegressionTests: XCTestCase {
     assertCompletedDrain(openEnded: true, startOffset: 137)
   }
 
-  private func makeCancellationDownload(finished: Bool) throws -> CachingResourceLoader.Download {
-    let temporaryURL = fixtureRoot.appendingPathComponent("cancel-\(UUID().uuidString)")
-    let payload = Data(repeating: 0xB3, count: CachingResourceLoader.chunkSize * 4 + 73)
-    try payload.write(to: temporaryURL)
-    let handle = try FileHandle(forWritingTo: temporaryURL)
-    let identity = MediaCacheIdentity.make(uri: "https://example.invalid/cancel.mp4", headers: [:])
-    let download = CachingResourceLoader.Download(
-      identity: identity, requestIdentity: identity,
-      temporaryURL: temporaryURL, handle: handle
-    )
-    download.receivedSuccessfulResponse = true
-    download.bytesWritten = Int64(payload.count)
-    download.contentLength = Int64(payload.count + (finished ? 0 : 100))
-    download.contentType = "public.mpeg-4"
-    download.finished = finished
-    download.deliveryScheduled = true
-    download.readHandle = try FileHandle(forReadingFrom: temporaryURL)
-    if finished { try handle.close() }
-    return download
-  }
-
-  func testNormalCancellationAdoptsCompletedDownload() throws {
-    let download = try makeCancellationDownload(finished: true)
-    var failures = 0
-    loader.onFailure = { _, _ in failures += 1 }
-    loaderQueue.sync {
-      loader.cancelDownload(download, discardingCompleted: false)
-      loader.cancelDownload(download, discardingCompleted: false)
-    }
-    cache.waitForPendingWorkForTesting()
-    XCTAssertTrue(download.cleaned)
-    XCTAssertNil(download.failure)
-    XCTAssertNil(download.readHandle)
-    XCTAssertEqual(failures, 0)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: download.temporaryURL.path))
-    let adopted = try XCTUnwrap(cache.cachedFile(forIdentity: download.identity))
-    XCTAssertEqual(adopted.byteCount, download.bytesWritten)
-    XCTAssertEqual(adopted.contentType, "public.mpeg-4")
-    XCTAssertEqual(try Data(contentsOf: adopted.url),
-      Data(repeating: 0xB3, count: CachingResourceLoader.chunkSize * 4 + 73))
-  }
-
-  func testExplicitCancellationDiscardsCompletedDownload() throws {
-    let download = try makeCancellationDownload(finished: true)
-    loaderQueue.sync {
-      loader.cancelDownload(download, discardingCompleted: true)
-      loader.cancelDownload(download, discardingCompleted: false)
-    }
-    cache.waitForPendingWorkForTesting()
-    XCTAssertTrue(download.cleaned)
-    XCTAssertNil(download.readHandle)
-    XCTAssertEqual((download.failure as NSError?)?.domain, NSURLErrorDomain)
-    XCTAssertEqual((download.failure as NSError?)?.code, NSURLErrorCancelled)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: download.temporaryURL.path))
-    XCTAssertNil(cache.cachedFile(forIdentity: download.identity))
-  }
-
-  func testNormalCancellationDiscardsIncompleteDownload() throws {
-    let download = try makeCancellationDownload(finished: false)
-    loaderQueue.sync { loader.cancelDownload(download, discardingCompleted: false) }
-    cache.waitForPendingWorkForTesting()
-    XCTAssertTrue(download.cleaned)
-    XCTAssertTrue(download.finished)
-    XCTAssertNil(download.readHandle)
-    XCTAssertEqual((download.failure as NSError?)?.domain, NSURLErrorDomain)
-    XCTAssertEqual((download.failure as NSError?)?.code, NSURLErrorCancelled)
-    XCTAssertThrowsError(try download.handle.write(contentsOf: Data([0x01])))
-    XCTAssertFalse(FileManager.default.fileExists(atPath: download.temporaryURL.path))
-    XCTAssertNil(cache.cachedFile(forIdentity: download.identity))
-  }
-
-  func testNormalCancellationDoesNotAdoptFailedCompletedDownload() throws {
-    let download = try makeCancellationDownload(finished: true)
-    download.failure = URLError(.networkConnectionLost)
-    var failures = 0
-    loader.onFailure = { _, _ in failures += 1 }
-    loaderQueue.sync { loader.cancelDownload(download, discardingCompleted: false) }
-    cache.waitForPendingWorkForTesting()
-    XCTAssertTrue(download.cleaned)
-    XCTAssertNil(download.readHandle)
-    XCTAssertEqual((download.failure as NSError?)?.code, NSURLErrorNetworkConnectionLost)
-    XCTAssertEqual(failures, 1)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: download.temporaryURL.path))
-    XCTAssertNil(cache.cachedFile(forIdentity: download.identity))
-  }
-
   private func assertCompletedDrain(
     openEnded: Bool, startOffset: Int64, file: StaticString = #filePath, line: UInt = #line
   ) {
@@ -2067,47 +2124,718 @@ final class CacheRegressionTests: XCTestCase {
       XCTAssertLessThanOrEqual(chunk, Int64(CachingResourceLoader.chunkSize), file: file, line: line)
       offset += chunk
       responses += 1
-      let decision = CachingResourceLoader.pendingDeliveryDecision(
-        requestedLength: requestedLength,
-        alreadyServed: offset - startOffset,
-        currentOffset: offset,
-        byteCount: byteCount,
-        requestsAllDataToEndOfResource: openEnded,
-        downloadFinished: true,
-        contentInformationReady: true
-      )
-      XCTAssertEqual(decision, offset < byteCount ? .deliverMore : .complete, file: file, line: line)
     }
     XCTAssertEqual(responses, 5, file: file, line: line)
     XCTAssertEqual(offset - startOffset, length, file: file, line: line)
   }
+}
 
-  func testDeliveryDecisionDistinguishesWaitingFromTruePrematureEOF() {
-    let chunk = Int64(CachingResourceLoader.chunkSize)
-    XCTAssertEqual(CachingResourceLoader.pendingDeliveryDecision(
-      requestedLength: chunk * 3, alreadyServed: chunk, currentOffset: chunk,
-      byteCount: chunk * 2, requestsAllDataToEndOfResource: false,
-      downloadFinished: true, contentInformationReady: true
-    ), .deliverMore)
-    XCTAssertEqual(CachingResourceLoader.pendingDeliveryDecision(
-      requestedLength: chunk * 3, alreadyServed: chunk * 2, currentOffset: chunk * 2,
-      byteCount: chunk * 2, requestsAllDataToEndOfResource: false,
-      downloadFinished: true, contentInformationReady: true
-    ), .unexpectedEOF)
-    XCTAssertEqual(CachingResourceLoader.pendingDeliveryDecision(
-      requestedLength: chunk * 3, alreadyServed: chunk * 2, currentOffset: chunk * 2,
-      byteCount: chunk * 2, requestsAllDataToEndOfResource: false,
-      downloadFinished: false, contentInformationReady: true
-    ), .waitForData)
-    XCTAssertEqual(CachingResourceLoader.pendingDeliveryDecision(
-      requestedLength: chunk, alreadyServed: chunk, currentOffset: chunk,
-      byteCount: chunk, requestsAllDataToEndOfResource: false,
-      downloadFinished: false, contentInformationReady: false
-    ), .waitForData)
-    XCTAssertEqual(CachingResourceLoader.pendingDeliveryDecision(
-      requestedLength: chunk, alreadyServed: chunk, currentOffset: chunk,
-      byteCount: chunk, requestsAllDataToEndOfResource: false,
-      downloadFinished: true, contentInformationReady: true
-    ), .complete)
+final class SourceRequestPolicyTests: XCTestCase {
+  private let credentials = ["Authorization": "Bearer secret", "X-Api-Key": "key-123", "Range": "bytes=0-"]
+
+  func testHeadersStayOnSourceOriginAndExplicitHttpsOrigins() {
+    let policy = SourceRequestPolicy(
+      sourceURI: "https://media.test/master.m3u8", headers: credentials,
+      trustedOrigins: ["HTTPS://CDN.test:443/", "http://plain.test", "https://[::1]:8443"]
+    )
+    for allowed in ["https://media.test/seg.ts", "https://MEDIA.test:443/key", "https://cdn.test/a", "https://[::1]:8443/x"] {
+      XCTAssertTrue(policy.allowsHeaders(for: URL(string: allowed)!), allowed)
+    }
+    for denied in [
+      "http://media.test/seg.ts", "https://media.test:8443/seg.ts", "https://evil.media.test/a",
+      "https://media.test.evil/a", "https://cdn.test:8443/a", "http://cdn.test/a", "http://plain.test/a",
+      "https://[::1]/x", "file:///tmp/a.mp4",
+    ] {
+      XCTAssertFalse(policy.allowsHeaders(for: URL(string: denied)!), denied)
+    }
+    XCTAssertNil(policy.headers["range"], "Range stays under loader control")
+  }
+
+  func testApplyStripsEveryCredentialOnUntrustedRedirectTargets() {
+    let policy = SourceRequestPolicy(sourceURI: "https://media.test/v.mp4", headers: credentials, trustedOrigins: [])
+    var redirected = URLRequest(url: URL(string: "https://other.test/v.mp4")!)
+    redirected.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+    redirected.setValue("key-123", forHTTPHeaderField: "x-api-key")
+    redirected.setValue("bytes=10-20", forHTTPHeaderField: "Range")
+    policy.apply(to: &redirected)
+    XCTAssertNil(redirected.value(forHTTPHeaderField: "Authorization"))
+    XCTAssertNil(redirected.value(forHTTPHeaderField: "X-Api-Key"))
+    XCTAssertEqual(redirected.value(forHTTPHeaderField: "Range"), "bytes=10-20")
+
+    var back = URLRequest(url: URL(string: "https://media.test/v.mp4")!)
+    policy.apply(to: &back)
+    XCTAssertEqual(back.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+    XCTAssertEqual(back.value(forHTTPHeaderField: "X-Api-Key"), "key-123")
+  }
+
+  func testTrustedOriginsPartitionAuthenticatedIdentitiesOnly() {
+    let uri = "https://media.test/v.mp4"
+    let auth = ["Authorization": "Bearer t"]
+    XCTAssertNotEqual(
+      MediaCacheIdentity.make(uri: uri, headers: auth),
+      MediaCacheIdentity.make(uri: uri, headers: auth, trustedOrigins: ["https://cdn.test"])
+    )
+    XCTAssertEqual(
+      MediaCacheIdentity.make(uri: uri, headers: auth, trustedOrigins: ["https://cdn.test", "https://b.test"]),
+      MediaCacheIdentity.make(uri: uri, headers: auth, trustedOrigins: ["https://B.test:443/", "https://CDN.test"])
+    )
+    XCTAssertEqual(
+      MediaCacheIdentity.make(uri: uri, headers: [:]),
+      MediaCacheIdentity.make(uri: uri, headers: [:], trustedOrigins: ["https://cdn.test"])
+    )
+    let source = RegisteredSource(id: "a", uri: uri, rank: 0, kind: .progressive, headers: auth)
+    var trusted = source
+    trusted.trustedHeaderOrigins = ["https://cdn.test"]
+    XCTAssertNotEqual(source.playbackIdentity, trusted.playbackIdentity)
+    XCTAssertNotEqual(source.resourceIdentity, trusted.resourceIdentity)
+  }
+}
+
+final class StreamingPrimitivesTests: XCTestCase {
+  func testByteRangeSetMergesAndFindsGaps() {
+    var set = ByteRangeSet()
+    set.insert(10..<20)
+    set.insert(0..<5)
+    XCTAssertEqual(set.firstGap(below: 30), 5)
+    set.insert(5..<10)
+    XCTAssertEqual(set.ranges, [0..<20])
+    XCTAssertEqual(set.end(containing: 7), 20)
+    XCTAssertNil(set.end(containing: 20))
+    XCTAssertFalse(set.covers(30))
+    set.insert(15..<30)
+    XCTAssertTrue(set.covers(30))
+    XCTAssertNil(set.firstGap(below: 30))
+  }
+
+  func testRangeBufferDeduplicatesOverlapsAndReadsExactOffsets() {
+    var buffer = MediaRangeBuffer()
+    let bytes = Data((0..<100).map { UInt8($0) })
+    XCTAssertEqual(buffer.insert(bytes.subdata(in: 10..<40), at: 10), 30)
+    XCTAssertEqual(buffer.insert(bytes.subdata(in: 0..<60), at: 0), 30, "only uncovered bytes are added")
+    XCTAssertEqual(buffer.byteCount, 60)
+    XCTAssertEqual(buffer.read(at: 25, maxLength: 4), bytes.subdata(in: 25..<29))
+    XCTAssertEqual(buffer.contiguousEnd(from: 0), 60)
+    XCTAssertNil(buffer.read(at: 60, maxLength: 1))
+    let sliced = bytes[50..<100]
+    buffer.insert(Data(sliced), at: 50)
+    XCTAssertEqual(buffer.read(at: 99, maxLength: 10), Data([99]))
+  }
+
+  func testRangeBufferTrimKeepsChunksNearWaitingOffsets() {
+    var buffer = MediaRangeBuffer()
+    for offset in stride(from: Int64(0), to: 100, by: 10) {
+      buffer.insert(Data(repeating: 1, count: 10), at: offset)
+    }
+    let released = buffer.trim(toFit: 30, keeping: [55])
+    XCTAssertEqual(released, 70)
+    XCTAssertEqual(buffer.byteCount, 30)
+    XCTAssertNotNil(buffer.read(at: 55, maxLength: 1))
+    XCTAssertEqual(buffer.removeAll(), 30)
+  }
+
+  func testTransferBudgetBoundsMemoryAndWakesWaitersInOrder() {
+    let budget = MediaTransferBudget(limits: .init(totalBufferBytes: 100, maxActiveTransfers: 1))
+    XCTAssertTrue(budget.reserveMemory(60))
+    XCTAssertFalse(budget.reserveMemory(41))
+    budget.releaseMemory(60)
+    XCTAssertEqual(budget.peakRetainedBytes, 60)
+    XCTAssertTrue(budget.acquireTransfer())
+    XCTAssertFalse(budget.acquireTransfer())
+    var woken: [Int] = []
+    let first = UUID()
+    budget.enqueueWaiter(id: first, queue: .main) { woken.append(1) }
+    budget.enqueueWaiter(id: UUID(), queue: .main) { woken.append(2) }
+    budget.enqueueWaiter(id: first, queue: .main) { woken.append(9) }
+    budget.releaseTransfer()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    XCTAssertEqual(woken, [1])
+    XCTAssertEqual(budget.activeTransfers, 0)
+  }
+}
+
+final class MediaDiskCacheClientTests: XCTestCase {
+  private var root: URL!
+  private var cache: MediaDiskCache!
+
+  override func setUpWithError() throws {
+    root = FileManager.default.temporaryDirectory.appendingPathComponent("nfp-clients-\(UUID().uuidString)")
+    cache = MediaDiskCache(rootURL: root)
+  }
+
+  override func tearDownWithError() throws {
+    cache.waitForPendingWorkForTesting()
+    try? FileManager.default.removeItem(at: root)
+  }
+
+  private func storage() -> (Int64, Int64, Int64) {
+    let done = expectation(description: "storage")
+    var result: (Int64, Int64, Int64) = (-1, -1, -1)
+    cache.storageForTesting { result = ($0, $1, $2); done.fulfill() }
+    wait(for: [done], timeout: 2)
+    return result
+  }
+
+  private func stage(_ client: MediaDiskCache.Client, identity: String, bytes: Int) throws -> MediaDiskCache.PinnedFile? {
+    let reservation = try XCTUnwrap(cache.reserve(bytes: Int64(bytes), identity: identity, client: client))
+    try Data(repeating: 0x5A, count: bytes).write(to: reservation.url)
+    let adopted = expectation(description: "adopted")
+    var pin: MediaDiskCache.PinnedFile?
+    cache.adopt(reservation, contentType: "public.mpeg-4") { pin = $0; adopted.fulfill() }
+    wait(for: [adopted], timeout: 2)
+    return pin
+  }
+
+  func testDisabledClientNeverReadsOrWritesWhileAnotherEngineCaches() throws {
+    for disabledFirst in [true, false] {
+      let disabled: MediaDiskCache.Client
+      let enabled: MediaDiskCache.Client
+      if disabledFirst {
+        disabled = cache.register(enabled: false, maxBytes: 1 << 20)
+        enabled = cache.register(enabled: true, maxBytes: 1 << 20)
+      } else {
+        enabled = cache.register(enabled: true, maxBytes: 1 << 20)
+        disabled = cache.register(enabled: false, maxBytes: 1 << 20)
+      }
+      let identity = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+      XCTAssertNil(cache.reserve(bytes: 10, identity: identity, client: disabled))
+      let pin = try XCTUnwrap(try stage(enabled, identity: identity, bytes: 10))
+      cache.unpin(pin)
+      XCTAssertNil(cache.pinnedFile(forIdentity: identity, client: disabled))
+      XCTAssertNil(cache.cachedFile(forIdentity: identity, client: disabled))
+      XCTAssertNotNil(cache.cachedFile(forIdentity: identity, client: enabled))
+      cache.release(disabled)
+      XCTAssertNotNil(cache.cachedFile(forIdentity: identity, client: enabled), "disabling one engine keeps the other's cache")
+      cache.release(enabled)
+      XCTAssertNil(cache.cachedFile(forIdentity: identity, client: enabled))
+    }
+  }
+
+  func testFirstEnabledLeaseSetsBudgetUntilAllEnabledLeasesEnd() throws {
+    let large = cache.register(enabled: true, maxBytes: 1000)
+    let small = cache.register(enabled: true, maxBytes: 100)
+    XCTAssertNotNil(try stage(large, identity: "a", bytes: 400).map { cache.unpin($0) })
+    XCTAssertNil(cache.reserve(bytes: 400, identity: "b", client: small), "a client's own maximum still applies")
+    cache.release(large)
+    XCTAssertNotNil(cache.cachedFile(forIdentity: "a", client: small), "budget unchanged while a lease remains")
+    cache.release(small)
+    let fresh = cache.register(enabled: true, maxBytes: 100)
+    cache.waitForPendingWorkForTesting()
+    XCTAssertNil(cache.cachedFile(forIdentity: "a", client: fresh), "the new budget applies once every lease ended")
+    cache.release(fresh)
+  }
+
+  func testReservationsCountAgainstTheBudgetAndAreReleasedExactlyOnce() throws {
+    let client = cache.register(enabled: true, maxBytes: 100)
+    let first = try XCTUnwrap(cache.reserve(bytes: 60, identity: "a", client: client))
+    XCTAssertNil(cache.reserve(bytes: 60, identity: "b", client: client))
+    XCTAssertEqual(storage().1, 60)
+    cache.cancel(first)
+    cache.cancel(first)
+    XCTAssertEqual(storage().1, 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: first.url.path))
+    let second = try XCTUnwrap(cache.reserve(bytes: 60, identity: "b", client: client))
+    cache.release(client)
+    XCTAssertEqual(storage().1, 0, "releasing a lease discards its staging")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: second.url.path))
+  }
+
+  func testEvictionDuringTransferPreventsLateAdoption() throws {
+    let client = cache.register(enabled: true, maxBytes: 1000)
+    for evictAll in [true, false] {
+      let reservation = try XCTUnwrap(cache.reserve(bytes: 10, identity: "late", client: client))
+      try Data(repeating: 1, count: 10).write(to: reservation.url)
+      let evicted = expectation(description: "evicted")
+      if evictAll {
+        cache.evictAll { evicted.fulfill() }
+      } else {
+        cache.evict(identities: ["late"]) { evicted.fulfill() }
+      }
+      wait(for: [evicted], timeout: 2)
+      let adopted = expectation(description: "adoption attempted")
+      cache.adopt(reservation, contentType: nil) { XCTAssertNil($0); adopted.fulfill() }
+      wait(for: [adopted], timeout: 2)
+      XCTAssertNil(cache.cachedFile(forIdentity: "late", client: client))
+    }
+    XCTAssertEqual(storage().1, 0)
+    cache.release(client)
+  }
+
+  func testEvictedPinnedFileStaysReadableAndBudgetedUntilUnpinned() throws {
+    let client = cache.register(enabled: true, maxBytes: 1000)
+    let adoptedPin = try XCTUnwrap(try stage(client, identity: "pinned", bytes: 300))
+    let (readerPin, handle) = try XCTUnwrap(cache.pinnedFile(forIdentity: "pinned", client: client))
+    let evicted = expectation(description: "evicted")
+    cache.evictAll { evicted.fulfill() }
+    wait(for: [evicted], timeout: 2)
+    XCTAssertEqual(storage().0, 0)
+    XCTAssertEqual(storage().2, 300, "a retired pinned file still counts")
+    XCTAssertEqual(try handle.readCompat(upToCount: 300)?.count, 300)
+    XCTAssertNil(cache.reserve(bytes: 800, identity: "x", client: client))
+    cache.unpin(adoptedPin)
+    XCTAssertEqual(storage().2, 300)
+    cache.unpin(readerPin)
+    XCTAssertEqual(storage().2, 0)
+    try handle.close()
+    XCTAssertNotNil(cache.reserve(bytes: 800, identity: "x", client: client))
+    cache.release(client)
+  }
+
+  func testOrphanedStagingFromAPreviousProcessIsRemovedOnFirstLease() throws {
+    let staging = root.appendingPathComponent("staging", isDirectory: true)
+    try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 10).write(to: staging.appendingPathComponent("orphan"))
+    let client = cache.register(enabled: true, maxBytes: 1000)
+    cache.waitForPendingWorkForTesting()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: staging.appendingPathComponent("orphan").path))
+    cache.release(client)
+  }
+}
+
+/// Serves the bundled clip with configurable HTTP behaviour and records every
+/// request the loader makes.
+private final class MediaStubProtocol: URLProtocol {
+  struct Behavior {
+    var payload = Data()
+    var honorsRange = true
+    var declaresLength = true
+    var etags: [String]?
+    var contentRangeShift: Int64 = 0
+  }
+
+  private static let lock = NSLock()
+  private static var behavior = Behavior()
+  private static var recorded: [URLRequest] = []
+
+  static func reset(_ behavior: Behavior) {
+    lock.withLock {
+      self.behavior = behavior
+      recorded = []
+    }
+  }
+
+  static var requests: [URLRequest] { lock.withLock { recorded } }
+
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    let (behavior, index): (Behavior, Int) = Self.lock.withLock {
+      Self.recorded.append(request)
+      return (Self.behavior, Self.recorded.count - 1)
+    }
+    let total = Int64(behavior.payload.count)
+    var start: Int64 = 0
+    var end = total - 1
+    var status = 200
+    var headers = ["Content-Type": "video/mp4", "Accept-Ranges": behavior.honorsRange ? "bytes" : "none"]
+    if behavior.honorsRange, let range = request.value(forHTTPHeaderField: "Range"),
+      range.hasPrefix("bytes=")
+    {
+      let bounds = range.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false)
+      start = Int64(bounds[0]) ?? 0
+      end = bounds.count > 1 && !bounds[1].isEmpty ? min(Int64(bounds[1]) ?? end, total - 1) : total - 1
+      status = 206
+      if start >= total {
+        headers["Content-Range"] = "bytes */\(total)"
+        let response = HTTPURLResponse(url: request.url!, statusCode: 416, httpVersion: "HTTP/1.1", headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+        return
+      }
+      headers["Content-Range"] =
+        "bytes \(start + behavior.contentRangeShift)-\(end + behavior.contentRangeShift)/\(total)"
+    }
+    if let etags = behavior.etags {
+      headers["ETag"] = etags[min(index, etags.count - 1)]
+    }
+    if behavior.declaresLength {
+      headers["Content-Length"] = "\(end - start + 1)"
+    }
+    let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    var cursor = Int(start)
+    while cursor <= Int(end) {
+      let next = min(Int(end) + 1, cursor + 1024)
+      client?.urlProtocol(self, didLoad: behavior.payload.subdata(in: cursor..<next))
+      cursor = next
+    }
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
+}
+
+/// Drives real AVFoundation playback through the streaming loader with tight
+/// injected limits, so the bundled clip exceeds every memory window.
+final class StreamingLoaderTests: XCTestCase {
+  private var root: URL!
+  private var cache: MediaDiskCache!
+  private var budget: MediaTransferBudget!
+  private var loader: CachingResourceLoader!
+  private var failures: [NSError] = []
+  private var fixture = Data()
+  private let uri = "https://media.test/clip.mp4"
+  private let headers = ["Authorization": "Bearer secret"]
+
+  override func setUpWithError() throws {
+    let url = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("assets/test_clip.mp4")
+    try XCTSkipUnless(FileManager.default.fileExists(atPath: url.path), "local video fixture unavailable")
+    fixture = try Data(contentsOf: url)
+    root = FileManager.default.temporaryDirectory.appendingPathComponent("nfp-stream-\(UUID().uuidString)")
+    cache = MediaDiskCache(rootURL: root)
+    makeLoader(limits: .init(chunkSize: 1024, fetchSize: 2048, perResourceBytes: 4096, totalBufferBytes: 8192, maxActiveTransfers: 2))
+  }
+
+  override func tearDownWithError() throws {
+    loader?.shutdown()
+    cache?.waitForPendingWorkForTesting()
+    if let root {
+      try? FileManager.default.removeItem(at: root)
+    }
+  }
+
+  private func makeLoader(limits: MediaTransferBudget.Limits) {
+    loader?.shutdown()
+    budget = MediaTransferBudget(limits: limits)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [MediaStubProtocol.self]
+    loader = CachingResourceLoader(
+      sessionConfiguration: configuration,
+      queue: DispatchQueue(label: "streaming-tests.\(UUID().uuidString)"),
+      cache: cache, budget: budget
+    )
+    failures = []
+    loader.onFailure = { [weak self] _, error in
+      DispatchQueue.main.async { self?.failures.append(error as NSError) }
+    }
+  }
+
+  private struct Outcome {
+    var ready = false
+    var advanced = false
+  }
+
+  /// Loads and plays the asset; returns once it advanced, failed, or timed out.
+  private func play(client: MediaDiskCache.Client?, seekBack: Bool = false, timeout: TimeInterval = 10) -> Outcome {
+    var outcome = Outcome()
+    autoreleasepool {
+      guard let asset = loader.prepareAsset(for: uri, headers: headers, client: client) else { return }
+      let item = AVPlayerItem(asset: asset)
+      let player = AVPlayer(playerItem: item)
+      player.automaticallyWaitsToMinimizeStalling = false
+      player.isMuted = true
+      let deadline = Date().addingTimeInterval(timeout)
+      while Date() < deadline, item.status == .unknown {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+      }
+      guard item.status == .readyToPlay else { return }
+      outcome.ready = true
+      player.play()
+      while Date() < deadline, player.currentTime().seconds < 0.3, item.status != .failed {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+      }
+      outcome.advanced = player.currentTime().seconds >= 0.3
+      if seekBack, outcome.advanced {
+        let sought = expectation(description: "backward seek")
+        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in sought.fulfill() }
+        wait(for: [sought], timeout: timeout)
+        let resumeDeadline = Date().addingTimeInterval(timeout)
+        while Date() < resumeDeadline, player.currentTime().seconds < 0.2, item.status != .failed {
+          RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        outcome.advanced = player.currentTime().seconds >= 0.2
+      }
+      // Give low-priority cache fills a moment while the asset is alive.
+      RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+      player.pause()
+    }
+    RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    return outcome
+  }
+
+  private func waitForFailure(timeout: TimeInterval = 10) {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline, failures.isEmpty {
+      RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+    }
+  }
+
+  private var identity: String { MediaCacheIdentity.make(uri: uri, headers: headers) }
+
+  private func storage() -> (entries: Int64, reserved: Int64, retired: Int64) {
+    let done = expectation(description: "storage")
+    var result: (Int64, Int64, Int64) = (-1, -1, -1)
+    cache.storageForTesting { result = ($0, $1, $2); done.fulfill() }
+    wait(for: [done], timeout: 2)
+    return result
+  }
+
+  private func stagingFiles() -> [URL] {
+    (try? FileManager.default.contentsOfDirectory(
+      at: root.appendingPathComponent("staging"), includingPropertiesForKeys: nil
+    )) ?? []
+  }
+
+  private func assertBoundedRangeRequests(file: StaticString = #filePath, line: UInt = #line) {
+    let requests = MediaStubProtocol.requests
+    XCTAssertFalse(requests.isEmpty, file: file, line: line)
+    XCTAssertGreaterThan(requests.count, 1, "the clip spans several bounded ranges", file: file, line: line)
+    for request in requests {
+      XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret", file: file, line: line)
+      guard let range = request.value(forHTTPHeaderField: "Range"),
+        let bounds = Optional(range.dropFirst(6).split(separator: "-")), bounds.count == 2,
+        let start = Int64(bounds[0]), let end = Int64(bounds[1])
+      else {
+        return XCTFail("unbounded request \(request)", file: file, line: line)
+      }
+      XCTAssertLessThanOrEqual(end - start + 1, Int64(budget.limits.fetchSize), file: file, line: line)
+    }
+    XCTAssertLessThanOrEqual(budget.peakRetainedBytes, budget.limits.totalBufferBytes, file: file, line: line)
+  }
+
+  func testMediaLargerThanCacheBudgetStreamsAndSeeksWithoutStaging() {
+    MediaStubProtocol.reset(.init(payload: fixture))
+    let client = cache.register(enabled: true, maxBytes: 1024)
+    let outcome = play(client: client, seekBack: true)
+    XCTAssertTrue(outcome.ready)
+    XCTAssertTrue(outcome.advanced, "playback and a backward seek continue past the cache budget")
+    XCTAssertTrue(failures.isEmpty, "\(failures)")
+    assertBoundedRangeRequests()
+    XCTAssertEqual(storage().entries, 0)
+    XCTAssertEqual(storage().reserved, 0)
+    XCTAssertTrue(stagingFiles().isEmpty)
+    cache.release(client)
+  }
+
+  func testSmallMediaIsStagedAtValidatedOffsetsAndAdopted() throws {
+    MediaStubProtocol.reset(.init(payload: fixture))
+    let client = cache.register(enabled: true, maxBytes: 1 << 20)
+    let outcome = play(client: client)
+    XCTAssertTrue(outcome.ready && outcome.advanced)
+    assertBoundedRangeRequests()
+    let cached = try XCTUnwrap(cache.cachedFile(forIdentity: identity, client: client))
+    XCTAssertEqual(try Data(contentsOf: cached.url), fixture)
+    XCTAssertEqual(storage().reserved, 0)
+
+    MediaStubProtocol.reset(.init(payload: fixture))
+    XCTAssertTrue(play(client: client).advanced)
+    XCTAssertTrue(MediaStubProtocol.requests.isEmpty, "a cached clip replays without the network")
+    cache.release(client)
+  }
+
+  func testDisabledEngineWritesNothingWhileAnotherEngineCaches() {
+    MediaStubProtocol.reset(.init(payload: fixture))
+    let enabled = cache.register(enabled: true, maxBytes: 1 << 20)
+    let disabled = cache.register(enabled: false, maxBytes: 1 << 20)
+    XCTAssertTrue(play(client: disabled).advanced)
+    XCTAssertEqual(storage().entries, 0)
+    XCTAssertTrue(stagingFiles().isEmpty)
+    XCTAssertTrue(play(client: enabled).advanced)
+    XCTAssertGreaterThan(storage().entries, 0)
+    MediaStubProtocol.reset(.init(payload: fixture))
+    XCTAssertTrue(play(client: disabled).advanced)
+    XCTAssertFalse(MediaStubProtocol.requests.isEmpty, "a disabled engine never reads the shared cache")
+    cache.release(disabled)
+    cache.release(enabled)
+  }
+
+  func testServerIgnoringRangesFallsBackToBoundedSequentialStreaming() {
+    MediaStubProtocol.reset(.init(payload: fixture, honorsRange: false))
+    let outcome = play(client: nil, seekBack: true)
+    XCTAssertTrue(outcome.ready && outcome.advanced)
+    XCTAssertTrue(failures.isEmpty, "\(failures)")
+    XCTAssertLessThanOrEqual(budget.peakRetainedBytes, budget.limits.totalBufferBytes)
+  }
+
+  func testUnknownLengthIsSpooledOnlyWithinTheBuffer() {
+    MediaStubProtocol.reset(.init(payload: fixture, honorsRange: false, declaresLength: false))
+    XCTAssertFalse(play(client: nil, timeout: 5).ready)
+    waitForFailure()
+    XCTAssertEqual(failures.first?.domain, CachingResourceLoader.errorDomain)
+    XCTAssertEqual(failures.first?.code, CachingResourceLoader.ErrorCode.unsupportedResponse.rawValue)
+    XCTAssertLessThanOrEqual(budget.peakRetainedBytes, budget.limits.perResourceBytes)
+
+    makeLoader(limits: .init(chunkSize: 1024, fetchSize: 2048, perResourceBytes: 64 * 1024, totalBufferBytes: 128 * 1024))
+    MediaStubProtocol.reset(.init(payload: fixture, honorsRange: false, declaresLength: false))
+    XCTAssertTrue(play(client: nil).advanced, "short unknown-length media still plays")
+  }
+
+  func testMalformedContentRangeIsATypedProtocolError() {
+    MediaStubProtocol.reset(.init(payload: fixture, contentRangeShift: 1))
+    XCTAssertFalse(play(client: nil, timeout: 5).ready)
+    waitForFailure()
+    XCTAssertEqual(failures.first?.code, CachingResourceLoader.ErrorCode.protocolViolation.rawValue)
+  }
+
+  func testRepresentationChangeMidStreamIsDetected() {
+    MediaStubProtocol.reset(.init(payload: fixture, etags: ["\"a\"", "\"b\""]))
+    _ = play(client: nil, timeout: 5)
+    waitForFailure()
+    XCTAssertEqual(failures.first?.code, CachingResourceLoader.ErrorCode.representationChanged.rawValue)
+    XCTAssertTrue(MediaStubProtocol.requests.contains {
+      $0.value(forHTTPHeaderField: "If-Range") == "\"a\""
+    }, "later ranges are conditional on the first representation")
+  }
+
+  func testReleasingTheAssetEndsItsTransferAndUnfinishedStaging() {
+    MediaStubProtocol.reset(.init(payload: fixture))
+    let client = cache.register(enabled: true, maxBytes: 1 << 20)
+    autoreleasepool {
+      let asset = loader.prepareAsset(for: uri, headers: headers, client: client)
+      asset?.loadValuesAsynchronously(forKeys: ["duration"]) {}
+      RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+    RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+    let counted = expectation(description: "transfers")
+    loader.transferCountForTesting { XCTAssertEqual($0, 0); counted.fulfill() }
+    wait(for: [counted], timeout: 2)
+    XCTAssertEqual(storage().reserved, 0)
+    XCTAssertEqual(budget.activeTransfers, 0)
+    XCTAssertEqual(budget.retainedBytes, 0)
+    cache.release(client)
+  }
+}
+
+private final class ReplacementTestPlayer: AVQueuePlayer {
+  let readyItem = RecoveryReadyItem(url: URL(fileURLWithPath: "/dev/null"))
+  private var selectedItem: AVPlayerItem?
+  private var playbackStatus: AVPlayer.TimeControlStatus = .paused
+  override var currentItem: AVPlayerItem? { selectedItem }
+  override var timeControlStatus: AVPlayer.TimeControlStatus { playbackStatus }
+  override func insert(_ item: AVPlayerItem, after afterItem: AVPlayerItem?) { select(readyItem) }
+  override func removeAllItems() { select(nil) }
+  override func play() { transition(to: .playing) }
+  override func playImmediately(atRate rate: Float) { transition(to: .playing) }
+  override func pause() { transition(to: .paused) }
+
+  func select(_ item: AVPlayerItem?) {
+    willChangeValue(forKey: "currentItem")
+    selectedItem = item
+    didChangeValue(forKey: "currentItem")
+  }
+
+  func transition(to status: AVPlayer.TimeControlStatus) {
+    guard playbackStatus != status else { return }
+    willChangeValue(forKey: "timeControlStatus")
+    playbackStatus = status
+    didChangeValue(forKey: "timeControlStatus")
+  }
+}
+
+private final class RecoveryReadyItem: AVPlayerItem {
+  override var status: AVPlayerItem.Status { .readyToPlay }
+}
+
+final class LoopStateAndAudioSessionTests: XCTestCase {
+  private func config(muted: Bool, handleAudioFocus: Bool = false, manageAudioSession: Bool = true) -> FeedPlayerConfigMessage {
+    FeedPlayerConfigMessage(
+      maxActivePlayers: 3, preloadAhead: 0, preloadBehind: 0, maxConcurrentPreloads: 1,
+      positionUpdateIntervalMs: 200, renderMode: .platformView,
+      cache: CachePolicyMessage(enabled: false, maxBytes: 1024),
+      audio: AudioPolicyMessage(
+        muted: muted, volume: 1, handleAudioFocus: handleAudioFocus, manageAudioSession: manageAudioSession
+      )
+    )
+  }
+
+  func testReplacementItemDuringPlaybackKeepsPlayingStateButStallsStillBuffer() throws {
+    let player = ReplacementTestPlayer()
+    var states: [PlaybackStatusMessage] = []
+    let manager = AVPlayerManager(
+      onState: { _, state, _ in states.append(state) }, onReleased: { _, _ in }, onPosition: { _ in },
+      onMetrics: { _ in }, onVideoSize: { _ in }, makePlayer: { player }, applicationState: { .active },
+      setAudioSessionActive: { _, _ in }
+    )
+    manager.initialize(config: config(muted: true, manageAudioSession: false))
+    defer { manager.disposeAll() }
+    try manager.setSources([RegisteredSource(id: "clip", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:])])
+    try manager.createController(controllerId: 90, sourceId: "clip", autoPlay: false, looping: false)
+    XCTAssertTrue(states.contains(.ready))
+    manager.play(controllerId: 90)
+    XCTAssertEqual(states.last, .playing)
+
+    let mark = states.count
+    for _ in 0..<3 {
+      player.select(AVPlayerItem(url: URL(fileURLWithPath: "/dev/null")))
+      player.select(player.readyItem)
+    }
+    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    XCTAssertFalse(states[mark...].contains(.preparing), "loop replicas must not report preparing: \(states)")
+
+    player.transition(to: .waitingToPlayAtSpecifiedRate)
+    XCTAssertEqual(states.last, .buffering)
+    player.transition(to: .playing)
+    XCTAssertEqual(states.last, .playing)
+  }
+
+  private func manager() -> AVPlayerManager {
+    AVPlayerManager(
+      onState: { _, _, _ in }, onReleased: { _, _ in }, onPosition: { _ in }, onMetrics: { _ in },
+      onVideoSize: { _ in }, setAudioSessionActive: { _, _ in }
+    )
+  }
+
+  private func addSources(_ manager: AVPlayerManager) throws {
+    try manager.setSources([
+      RegisteredSource(id: "a", uri: "file:///dev/null", rank: 0, kind: .auto, headers: [:]),
+      RegisteredSource(id: "b", uri: "file:///dev/null?b", rank: 1, kind: .auto, headers: [:]),
+    ])
+  }
+
+  func testIndividualUnmuteUnderMutedPolicyLeavesTheAmbientCategory() throws {
+    let session = AVAudioSession.sharedInstance()
+    defer { try? session.setCategory(.playback, mode: .moviePlayback, options: []) }
+    for handleFocus in [false, true] {
+      let manager = manager()
+      manager.initialize(config: config(muted: true, handleAudioFocus: handleFocus))
+      try addSources(manager)
+      try manager.createController(controllerId: 1, sourceId: "a", autoPlay: false, looping: false)
+      XCTAssertEqual(session.category, .ambient)
+      manager.setMuted(controllerId: 1, value: false)
+      XCTAssertEqual(session.category, .playback)
+      XCTAssertEqual(session.mode, .moviePlayback)
+      XCTAssertEqual(session.categoryOptions.contains(.mixWithOthers), !handleFocus, "focus policy is preserved")
+      manager.setVolume(controllerId: 1, value: 0)
+      XCTAssertEqual(session.category, .ambient, "a silent controller is not audible output")
+      manager.setVolume(controllerId: 1, value: 0.5)
+      XCTAssertEqual(session.category, .playback)
+      manager.setMuted(controllerId: 1, value: true)
+      XCTAssertEqual(session.category, .ambient)
+      manager.disposeAll()
+    }
+  }
+
+  func testMutingOneControllerKeepsAnotherAudibleAndReleaseRecomputes() throws {
+    let session = AVAudioSession.sharedInstance()
+    defer { try? session.setCategory(.playback, mode: .moviePlayback, options: []) }
+    let manager = manager()
+    manager.initialize(config: config(muted: false))
+    defer { manager.disposeAll() }
+    try addSources(manager)
+    try manager.createController(controllerId: 1, sourceId: "a", autoPlay: false, looping: false)
+    try manager.createController(controllerId: 2, sourceId: "b", autoPlay: false, looping: false)
+    manager.setMuted(controllerId: 2, value: true)
+    XCTAssertEqual(session.category, .playback)
+    manager.disposeController(controllerId: 1)
+    XCTAssertEqual(session.category, .ambient, "only a muted controller remains")
+    manager.applyAudioPolicy(AudioPolicyMessage(muted: false, volume: 1, handleAudioFocus: false, manageAudioSession: true))
+    XCTAssertEqual(session.category, .playback)
+  }
+
+  func testHostOwnedSessionIsNeverReconfiguredByControllerChanges() throws {
+    let session = AVAudioSession.sharedInstance()
+    try? session.setCategory(.playback, mode: .moviePlayback, options: [.duckOthers])
+    defer { try? session.setCategory(.playback, mode: .moviePlayback, options: []) }
+    let manager = manager()
+    manager.initialize(config: config(muted: true, manageAudioSession: false))
+    defer { manager.disposeAll() }
+    try addSources(manager)
+    try manager.createController(controllerId: 1, sourceId: "a", autoPlay: false, looping: false)
+    manager.setMuted(controllerId: 1, value: false)
+    manager.setMuted(controllerId: 1, value: true)
+    XCTAssertEqual(session.category, .playback)
+    XCTAssertTrue(session.categoryOptions.contains(.duckOthers))
   }
 }

@@ -176,6 +176,9 @@ struct FeedSourceMessage: Hashable {
   /// Optional stable cache identity. When set, it replaces the URI in the
   /// cache key so signed or expiring URLs still share one cache entry.
   var cacheKey: String? = nil
+  /// Canonical HTTPS origins, besides the source's own, that may receive
+  /// [headers].
+  var trustedHeaderOrigins: [String]
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -186,6 +189,7 @@ struct FeedSourceMessage: Hashable {
     let kind = pigeonVar_list[3] as! FeedMediaKindMessage
     let headers = pigeonVar_list[4] as! [String: String]
     let cacheKey: String? = nilOrValue(pigeonVar_list[5])
+    let trustedHeaderOrigins = pigeonVar_list[6] as! [String]
 
     return FeedSourceMessage(
       id: id,
@@ -193,7 +197,8 @@ struct FeedSourceMessage: Hashable {
       rank: rank,
       kind: kind,
       headers: headers,
-      cacheKey: cacheKey
+      cacheKey: cacheKey,
+      trustedHeaderOrigins: trustedHeaderOrigins
     )
   }
   func toList() -> [Any?] {
@@ -204,6 +209,7 @@ struct FeedSourceMessage: Hashable {
       kind,
       headers,
       cacheKey,
+      trustedHeaderOrigins,
     ]
   }
   static func == (lhs: FeedSourceMessage, rhs: FeedSourceMessage) -> Bool {

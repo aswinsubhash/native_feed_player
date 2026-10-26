@@ -12,7 +12,9 @@ internal data class RegisteredSource(
     val kind: FeedMediaKindMessage,
     val headers: Map<String, String>,
     /** Optional stable cache identity replacing [uri] in cache keys. */
-    val cacheKey: String? = null
+    val cacheKey: String? = null,
+    /** HTTPS origins besides the source's own that may receive [headers]. */
+    val trustedHeaderOrigins: List<String> = emptyList()
 )
 
 /** Viewport travel direction. */

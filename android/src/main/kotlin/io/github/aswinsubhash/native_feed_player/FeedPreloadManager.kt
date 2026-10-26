@@ -19,7 +19,9 @@ import kotlin.math.abs
  */
 @OptIn(UnstableApi::class)
 internal class FeedPreloadManager(
-    context: Context
+    context: Context,
+    /** False keeps preloading in memory and off the shared disk cache. */
+    private val cacheEnabled: Boolean = true
 ) {
     /** Selects memory or disk preloading by viewport distance. */
     private inner class DistanceBasedStatusControl :
@@ -45,7 +47,10 @@ internal class FeedPreloadManager(
         }
     }
 
-    private val cacheAvailable: Boolean = MediaCache.activeCache() != null
+    private val sharedCache = if (cacheEnabled) MediaCache.activeCache() else null
+    private val cacheAvailable: Boolean = sharedCache != null
+
+    val usesCache: Boolean get() = cacheAvailable
     private val builder: DefaultPreloadManager.Builder
     private val delegate: DefaultPreloadManager
     private data class Registration(val item: MediaItem, val rankingToken: Int)
@@ -87,7 +92,7 @@ internal class FeedPreloadManager(
                     .build()
             )
 
-        MediaCache.activeCache()?.let { builder.setCache(it) }
+        sharedCache?.let { builder.setCache(it) }
         delegate = builder.build()
     }
 
@@ -127,7 +132,7 @@ internal class FeedPreloadManager(
             // A malformed or unsupported source must not crash the looper
             // callback; skip it and let the caller surface the failure.
             val mediaSource = try {
-                MediaCache.createMediaSource(source)
+                MediaCache.createMediaSource(source, cacheEnabled)
             } catch (error: Throwable) {
                 failedIdentities.add(identity)
                 onSourceFailed?.invoke(source, error)

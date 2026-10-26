@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import androidx.lifecycle.ProcessLifecycleOwner
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 import java.util.concurrent.Executor
@@ -49,8 +50,7 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     private val videoSizeEvents = BufferedStreamHandler<VideoSizeEvent>()
     private val lifecycleEvents = BufferedStreamHandler<ControllerLifecycleEvent>()
 
-    /** Started-activity count used for foreground playback state. */
-    private var startedActivityCount = 0
+    private var foregroundObserver: AppForegroundObserver? = null
     private var activityCallbacks: Application.ActivityLifecycleCallbacks? = null
 
     private val textureViewPool = TextureViewPool(maxPoolSize = 8)
@@ -130,6 +130,12 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         MediaCache.retain()
 
         registerActivityCallbacks(flutterPluginBinding.applicationContext)
+        foregroundObserver?.detach()
+        foregroundObserver = AppForegroundObserver(
+            lifecycle = ProcessLifecycleOwner.get().lifecycle,
+            onForeground = { exoPlayerManager?.onAppForegrounded() },
+            onBackground = { exoPlayerManager?.onAppBackgrounded() }
+        ).also { it.attach() }
 
         NativeFeedPlayerHostApi.setUp(
             binaryMessenger = flutterPluginBinding.binaryMessenger,
@@ -138,6 +144,8 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        foregroundObserver?.detach()
+        foregroundObserver = null
         unregisterActivityCallbacks()
         releaseTextureOutputs()
         textureOutputs = null
@@ -425,20 +433,8 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         unregisterActivityCallbacks()
 
         val callbacks = object : Application.ActivityLifecycleCallbacks {
-            override fun onActivityStarted(activity: Activity) {
-                startedActivityCount += 1
-                if (startedActivityCount == 1) {
-                    exoPlayerManager?.onAppForegrounded()
-                }
-            }
-
-            override fun onActivityStopped(activity: Activity) {
-                startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
-                if (startedActivityCount == 0) {
-                    exoPlayerManager?.onAppBackgrounded()
-                }
-            }
-
+            override fun onActivityStarted(activity: Activity) = Unit
+            override fun onActivityStopped(activity: Activity) = Unit
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
             override fun onActivityResumed(activity: Activity) = Unit
             override fun onActivityPaused(activity: Activity) = Unit
@@ -459,7 +455,6 @@ class NativeFeedPlayerPlugin : FlutterPlugin, ComponentCallbacks2, NativeFeedPla
         val application = appContext?.applicationContext as? Application
         activityCallbacks?.let { application?.unregisterActivityLifecycleCallbacks(it) }
         activityCallbacks = null
-        startedActivityCount = 0
     }
 
     private fun managerOrThrow(): ExoPlayerManager {
@@ -498,5 +493,6 @@ private fun FeedSourceMessage.toRegisteredSource(): RegisteredSource = Registere
     rank = rank.toInt(),
     kind = kind,
     headers = headers,
-    cacheKey = cacheKey
+    cacheKey = cacheKey,
+    trustedHeaderOrigins = trustedHeaderOrigins
 )

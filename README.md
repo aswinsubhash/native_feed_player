@@ -158,6 +158,32 @@ FeedSource(
 )
 ```
 
+### Header origins
+
+`FeedSource.headers` are sent only to the origin (scheme, host, and port) of
+`FeedSource.uri`. Every other destination — a CDN referenced by an HLS
+playlist, a segment or key host, or a redirect target — receives **none** of
+them unless its HTTPS origin is listed in `trustedHeaderOrigins`:
+
+```dart
+FeedSource(
+  id: 'clip-2',
+  uri: 'https://api.example.com/media/two.m3u8',
+  headers: <String, String>{'Authorization': 'Bearer $token'},
+  trustedHeaderOrigins: <String>['https://cdn.example.com'],
+)
+```
+
+Entries are bare origins: no path, query, fragment, credentials, or wildcards,
+and an entry never implies its subdomains, another port, or plain HTTP. Treat
+the list as application configuration; never populate it from feed data.
+Redirects that change protocol are not followed. The policy is part of a
+source's identity, so changing it re-creates live controllers. Authenticated
+cache entries written by pre-release builds are not reused (a one-time
+re-download).
+
+### Cache API
+
 ```dart
 await player.cacheUsageBytes();
 await player.cacheStatus('clip-1');
@@ -184,9 +210,20 @@ AVFoundation resolves HLS playlists and segments internally where a
 resource-loader shim cannot reach them. HLS on iOS plays from the network with a
 tuned forward buffer instead.
 
-On iOS, cache entries are whole files rather than byte ranges, and a seek past
-the downloaded prefix waits for the sequential download to reach it. This suits
-short clips played front to back; it is a poor fit for long-form seeking.
+On iOS, progressive media streams in bounded, validated HTTP byte ranges, so
+seeking fetches the needed range directly and memory stays bounded regardless
+of file size. A file is written to disk only when the whole file fits a cache
+reservation; larger media plays and seeks normally but is never offline-ready,
+and `cacheStatus` only reports complete files. Servers that ignore `Range`
+still play, but backward seeks may re-download from the start. Responses with
+no declared length are supported only while they fit the streaming buffer
+(2 MB); larger ones fail with a typed error instead of buffering without limit.
+
+Each `FeedPlayer` session applies its own `CachePolicy`: with caching disabled
+it never reads or writes the shared store, even while another Flutter engine
+caches. The engines share one store, whose budget is set by the first engine
+that enables caching and stays in place until every caching engine has released
+it.
 
 ## Rendering
 
@@ -235,7 +272,9 @@ controller.metricsStream.listen((m) => print(m.firstFrameLatency));
 - No DRM, subtitles, or explicit track-selection APIs.
 - Android and iOS only; other platforms throw `UnsupportedPlatformError`.
 - iOS does not prebuffer media bytes before a live controller is created.
-- iOS long-form seeking is weak while a clip is still downloading.
+- iOS media larger than the cache budget streams uncached; servers that ignore
+  `Range` make backward seeks slower.
+- Credentials reach other origins only through `trustedHeaderOrigins`.
 - Physical-device performance validation is still an open release gate.
 
 Tracked in [`doc/IMPLEMENTATION_BACKLOG.md`](doc/IMPLEMENTATION_BACKLOG.md).

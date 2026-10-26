@@ -455,17 +455,21 @@ public final class NativeFeedPlayerPlugin: NSObject, FlutterPlugin, NativeFeedPl
         details: nil
       )
     }
-    return textureOutputs.attach(
+    let textureId = textureOutputs.attach(
       controllerId: controllerId,
       player: player,
       onFirstPixel: { [weak manager] in
         manager?.markTextureFirstFrame(controllerId: controllerId)
       }
     )
+    manager.setTextureAttached(true, controllerId: controllerId)
+    return textureId
   }
 
   func detachTexture(request: ControllerRequest) throws {
-    textureOutputs?.detach(controllerId: Int(request.controllerId))
+    let controllerId = Int(request.controllerId)
+    textureOutputs?.detach(controllerId: controllerId)
+    manager?.setTextureAttached(false, controllerId: controllerId)
   }
 
   func disposeAll() throws {
@@ -601,7 +605,8 @@ extension FeedSourceMessage {
       rank: Int(rank),
       kind: kind,
       headers: headers,
-      cacheKey: cacheKey
+      cacheKey: cacheKey,
+      trustedHeaderOrigins: trustedHeaderOrigins
     )
   }
 }

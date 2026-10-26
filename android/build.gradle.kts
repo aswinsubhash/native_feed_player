@@ -69,6 +69,11 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-datasource:$media3Version")
     implementation("androidx.media3:media3-database:$media3Version")
+    // OkHttp exposes every network hop, including redirects, to a source-scoped
+    // interceptor that keeps credentials on trusted origins.
+    implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
+    // Process-wide foreground state, independent of when the engine attached.
+    implementation("androidx.lifecycle:lifecycle-process:2.7.0")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.2.10")
     testImplementation("org.mockito:mockito-core:5.23.0")
@@ -78,4 +83,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.13.4")
     testImplementation("androidx.test:core:1.6.1")
+    // Matches the OkHttp version resolved through media3-datasource-okhttp.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
 }

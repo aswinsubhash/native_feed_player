@@ -36,6 +36,7 @@ class FeedSourceMessage {
     required this.kind,
     required this.headers,
     this.cacheKey,
+    required this.trustedHeaderOrigins,
   });
 
   /// Caller-owned stable identifier. Survives pagination and reordering.
@@ -50,6 +51,10 @@ class FeedSourceMessage {
   /// Optional stable cache identity. When set, it replaces the URI in the
   /// cache key so signed or expiring URLs still share one cache entry.
   final String? cacheKey;
+
+  /// Canonical HTTPS origins, besides the source's own, that may receive
+  /// [headers].
+  final List<String> trustedHeaderOrigins;
 }
 
 class CachePolicyMessage {

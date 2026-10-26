@@ -110,6 +110,12 @@ class _TestMediaServer {
   final List<int> _bytes;
   bool recoveryAvailable = false;
 
+  /// Paths under `/to-other/` redirect here: a different origin (port).
+  Uri? redirectBase;
+
+  /// Every request as (path, Authorization header).
+  final List<(String, String?)> requests = <(String, String?)>[];
+
   Uri uri([String path = 'clip.mp4']) =>
       Uri.parse('http://127.0.0.1:${_server.port}/$path');
 
@@ -128,6 +134,23 @@ class _TestMediaServer {
   }
 
   Future<void> _serve(HttpRequest request) async {
+    requests.add((
+      request.uri.path,
+      request.headers.value(HttpHeaders.authorizationHeader),
+    ));
+    final Uri? redirectBase = this.redirectBase;
+    if (redirectBase != null && request.uri.path.startsWith('/to-other/')) {
+      request.response
+        ..statusCode = HttpStatus.found
+        ..headers.set(
+          HttpHeaders.locationHeader,
+          redirectBase
+              .resolve(request.uri.path.substring('/to-other/'.length))
+              .toString(),
+        );
+      await request.response.close();
+      return;
+    }
     if (request.uri.path.endsWith('/offline.mp4') ||
         (request.uri.path.endsWith('/recovery.mp4') && !recoveryAvailable)) {
       request.response.statusCode = HttpStatus.serviceUnavailable;
@@ -351,15 +374,94 @@ void main() {
   );
 
   late _TestMediaServer mediaServer;
+  late _TestMediaServer otherOrigin;
 
   setUpAll(() async {
     mediaServer = await _TestMediaServer.start();
+    otherOrigin = await _TestMediaServer.start();
+    mediaServer.redirectBase = otherOrigin.uri('');
     _goodUriA = mediaServer.uri('a.mp4').toString();
     _goodUriB = mediaServer.uri('b.mp4').toString();
     _unavailableUri = mediaServer.uri('offline.mp4').toString();
   });
 
-  tearDownAll(() => mediaServer.close());
+  tearDownAll(() async {
+    await mediaServer.close();
+    await otherOrigin.close();
+  });
+
+  testWidgets('source headers never follow a redirect to another origin', (
+    WidgetTester tester,
+  ) async {
+    final FeedPlayer player = FeedPlayer();
+    _registerCleanup(tester, player);
+    await player.initialize(
+      config: const FeedPlayerConfig(cache: CachePolicy.disabled),
+    );
+    mediaServer.requests.clear();
+    otherOrigin.requests.clear();
+    await player.setSources(<FeedSource>[
+      FeedSource(
+        id: 'redirected',
+        uri: mediaServer.uri('to-other/redirected.mp4').toString(),
+        headers: const <String, String>{
+          'Authorization': 'Bearer integration-secret',
+        },
+      ),
+    ]);
+    final FeedController controller = await player.controllerFor('redirected');
+    await _mountOutput(tester, controller, RenderMode.platformView);
+    await controller.play();
+    await _waitFor(tester, controller.firstFrameRendered);
+
+    final List<(String, String?)> originRequests = mediaServer.requests
+        .where(((String, String?) r) => r.$1.startsWith('/to-other/'))
+        .toList();
+    expect(originRequests, isNotEmpty);
+    expect(
+      originRequests.map(((String, String?) r) => r.$2),
+      everyElement('Bearer integration-secret'),
+    );
+    expect(otherOrigin.requests, isNotEmpty);
+    expect(
+      otherOrigin.requests.map(((String, String?) r) => r.$2),
+      everyElement(isNull),
+      reason: 'credentials must not reach the redirect target origin',
+    );
+  });
+
+  testWidgets('media larger than the cache budget still plays uncached', (
+    WidgetTester tester,
+  ) async {
+    final FeedPlayer player = FeedPlayer();
+    _registerCleanup(tester, player);
+    await player.initialize(
+      config: const FeedPlayerConfig(cache: CachePolicy(maxBytes: 1024)),
+    );
+    await player.setSources(<FeedSource>[
+      FeedSource(id: 'large', uri: mediaServer.uri('large.mp4').toString()),
+    ]);
+    final FeedController controller = await player.controllerFor('large');
+    final List<Duration> positions = <Duration>[];
+    final StreamSubscription<PlaybackPosition> subscription = controller
+        .positionStream
+        .listen((PlaybackPosition p) => positions.add(p.position));
+    try {
+      await _mountOutput(tester, controller, RenderMode.platformView);
+      await _commandAndWaitForState(
+        tester,
+        controller,
+        VideoPlaybackState.playing,
+        controller.play,
+      );
+      await _waitFor(tester, controller.firstFrameRendered);
+      await _pumpFor(tester, const Duration(milliseconds: 800));
+      expect(positions.toSet().length, greaterThan(1));
+      expect((await player.cacheStatus('large')).isComplete, isFalse);
+    } finally {
+      await subscription.cancel();
+    }
+  });
 
   testWidgets('initialize and create a controller', (
     WidgetTester tester,
@@ -507,6 +609,125 @@ void main() {
       await _pumpFor(tester, const Duration(milliseconds: 600));
       expect(collector.firstFrameSamples, 1);
       await collector.closeAndEmit();
+    });
+
+    testWidgets('${mode.name} paused seek emits fresh positions', (
+      WidgetTester tester,
+    ) async {
+      final FeedPlayer player = FeedPlayer();
+      _registerCleanup(tester, player);
+      await player.initialize(
+        config: FeedPlayerConfig(
+          renderMode: mode,
+          positionUpdateInterval: const Duration(milliseconds: 50),
+        ),
+      );
+      await player.setSources(_feed(1));
+      final FeedController controller = await player.controllerFor(
+        'clip-0',
+        looping: false,
+      );
+      await _mountOutput(tester, controller, mode);
+      await _commandAndWaitForState(
+        tester,
+        controller,
+        VideoPlaybackState.playing,
+        controller.play,
+      );
+      await _waitFor(tester, controller.firstFrameRendered);
+      await _commandAndWaitForState(
+        tester,
+        controller,
+        VideoPlaybackState.paused,
+        controller.pause,
+      );
+
+      final List<Duration> positions = <Duration>[];
+      final StreamSubscription<PlaybackPosition> subscription = controller
+          .positionStream
+          .listen((PlaybackPosition update) => positions.add(update.position));
+      try {
+        // Drop the replayed latest value; only native events count.
+        await _pumpFor(tester, const Duration(milliseconds: 100));
+        positions.clear();
+        const Duration target = Duration(milliseconds: 400);
+        await controller.seekTo(target);
+        await _pumpFor(tester, const Duration(milliseconds: 800));
+        expect(positions, isNotEmpty);
+        expect(
+          (positions.last - target).inMilliseconds.abs(),
+          lessThanOrEqualTo(60),
+          reason: 'paused output reports the seek target, got $positions',
+        );
+      } finally {
+        await subscription.cancel();
+      }
+    });
+
+    testWidgets('${mode.name} looping keeps a stable playing state', (
+      WidgetTester tester,
+    ) async {
+      final _BenchmarkCollector collector = _BenchmarkCollector(
+        'loop_stability',
+        mode,
+      );
+      final FeedPlayer player = FeedPlayer();
+      _registerCleanup(tester, player, collector);
+      await player.initialize(
+        config: FeedPlayerConfig(
+          renderMode: mode,
+          positionUpdateInterval: const Duration(milliseconds: 50),
+        ),
+      );
+      await player.setSources(_feed(1));
+      final FeedController controller = await player.controllerFor('clip-0');
+      collector.trackController(controller);
+      final List<VideoPlaybackState> states = <VideoPlaybackState>[];
+      final List<Duration> positions = <Duration>[];
+      final StreamSubscription<PlaybackStatusUpdate> stateSub = controller
+          .stateStream
+          .listen((PlaybackStatusUpdate update) => states.add(update.state));
+      final StreamSubscription<PlaybackPosition> positionSub = controller
+          .positionStream
+          .listen((PlaybackPosition update) => positions.add(update.position));
+      try {
+        await _mountOutput(tester, controller, mode);
+        await _commandAndWaitForState(
+          tester,
+          controller,
+          VideoPlaybackState.playing,
+          controller.play,
+        );
+        await _waitFor(tester, controller.firstFrameRendered);
+        final int mark = states.length;
+        positions.clear();
+        // The bundled clip is one second long: this spans several loops.
+        await _pumpFor(tester, const Duration(seconds: 4));
+        final List<VideoPlaybackState> afterStart = states.sublist(mark);
+        expect(
+          afterStart.where(
+            (VideoPlaybackState s) =>
+                s == VideoPlaybackState.preparing ||
+                s == VideoPlaybackState.idle ||
+                s == VideoPlaybackState.error,
+          ),
+          isEmpty,
+          reason: 'loop iterations must not look like reloading: $afterStart',
+        );
+        int wraps = 0;
+        for (int i = 1; i < positions.length; i += 1) {
+          if (positions[i] < positions[i - 1]) {
+            wraps += 1;
+          }
+        }
+        expect(wraps, greaterThanOrEqualTo(2), reason: '$positions');
+        expect(controller.isReleased, isFalse);
+        expect(collector.firstFrameSamples, 1);
+        await collector.closeAndEmit();
+      } finally {
+        await stateSub.cancel();
+        await positionSub.cancel();
+      }
     });
 
     testWidgets('${mode.name} renders after local HTTP availability recovers', (

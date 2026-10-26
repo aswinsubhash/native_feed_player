@@ -362,15 +362,31 @@ internal class FeedSourceRegistryTest {
     }
 
     @Test
-    fun sourceHeaders_overrideRequestHeadersCaseInsensitively_forChildRequests() {
-        val merged = MediaCache.mergeRequestHeaders(
-            requestHeaders = mapOf("authorization" to "stale", "Range" to "bytes=0-10"),
-            sourceHeaders = mapOf("Authorization" to "Bearer current", "X-Tenant" to "42")
+    fun trustedOrigins_partitionAuthenticatedIdentities_butNotPublicOnes() {
+        val private = RegisteredSource(
+            id = "a", uri = "https://media.test/a.m3u8", rank = 0,
+            kind = FeedMediaKindMessage.HLS, headers = mapOf("Authorization" to "Bearer one")
         )
+        val trusted = private.copy(trustedHeaderOrigins = listOf("https://cdn.test"))
+        val equivalent = private.copy(trustedHeaderOrigins = listOf("HTTPS://CDN.test:443/"))
+        val otherPort = private.copy(trustedHeaderOrigins = listOf("https://cdn.test:8443"))
+        val public = private.copy(headers = emptyMap())
 
-        assertEquals("Bearer current", merged["authorization"])
-        assertEquals("bytes=0-10", merged["range"])
-        assertEquals("42", merged["x-tenant"])
-        assertEquals(3, merged.size)
+        assertNotEquals(private.cacheIdentity, trusted.cacheIdentity)
+        assertEquals(trusted.cacheIdentity, equivalent.cacheIdentity)
+        assertNotEquals(trusted.cacheIdentity, otherPort.cacheIdentity)
+        assertEquals(public.cacheIdentity, public.copy(trustedHeaderOrigins = listOf("https://cdn.test")).cacheIdentity)
+        assertNotEquals(private.requestIdentity, trusted.requestIdentity)
+        assertEquals(trusted.requestIdentity, equivalent.requestIdentity)
+        assertNotEquals(public.requestIdentity, public.copy(trustedHeaderOrigins = listOf("https://cdn.test")).requestIdentity)
+    }
+
+    @Test
+    fun canonicalOrigin_normalizesCaseDefaultPortsAndIpv6() {
+        assertEquals("https://cdn.test", SourceRequestPolicy.canonicalOrigin("HTTPS://CDN.Test:443/"))
+        assertEquals("https://cdn.test:8443", SourceRequestPolicy.canonicalOrigin("https://cdn.test:8443"))
+        assertEquals("http://cdn.test", SourceRequestPolicy.canonicalOrigin("http://cdn.test:80"))
+        assertEquals("https://[::1]:8443", SourceRequestPolicy.canonicalOrigin("https://[::1]:8443"))
+        assertNull(SourceRequestPolicy.canonicalOrigin("file:///tmp/a.mp4"))
     }
 }
