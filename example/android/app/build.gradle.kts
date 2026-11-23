@@ -39,3 +39,9 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    constraints {
+        implementation("junit:junit:4.13.2")
+    }
+}
