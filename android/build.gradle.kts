@@ -11,6 +11,9 @@ buildscript {
 
     dependencies {
         classpath("com.android.tools.build:gradle:9.1.0")
+        constraints {
+            add("classpath", "com.google.guava:guava:33.8.0-jre")
+        }
     }
 }
 
@@ -63,6 +66,11 @@ kotlin {
 }
 
 dependencies {
+    constraints {
+        implementation("com.google.guava:guava:33.8.0-android")
+        testImplementation("com.google.guava:guava:33.8.0-jre")
+    }
+
     // 1.11.0 brings DefaultPreloadManager, which preloads at the MediaSource
     // level instead of requiring a whole ExoPlayer per upcoming item.
     implementation("androidx.media3:media3-exoplayer:$media3Version")
