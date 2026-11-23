@@ -262,6 +262,6 @@ silent source of platform drift.
 
 ## Requirements
 
-- Flutter 3.47+, Dart 3.13+
+- Flutter 3.47.8+, Dart 3.13.7+
 - Android: minSdk 24, Media3 1.11, AGP built-in Kotlin
 - iOS: 15.0+, with CocoaPods and Swift Package Manager support

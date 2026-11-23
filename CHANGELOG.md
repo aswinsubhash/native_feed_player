@@ -4,7 +4,7 @@
 - Wait for in-flight controller disposal before returning or rebuilding a controller.
 - Bound iOS prepared items and release stale loader contexts with them.
 - Reject partial iOS cache responses, convert MIME types to UTIs, and complete open-ended requests through EOF.
-- Require Flutter 3.47, Dart 3.13, and iOS 15, with Android built-in Kotlin support.
+- Require Flutter 3.47.8, Dart 3.13.7, and iOS 15, with Android built-in Kotlin support. Earlier Flutter and Dart patches lack the TLS certificate fix in GHSA-frr6-h895-5pxp.
 - Isolate cached media by URI and canonical request headers without persisting credentials.
 - Reject custom-header HLS on iOS in favor of App Store-safe signed URLs or cookies.
 - Harden controller, texture, source, first-frame, and asynchronous cache lifecycles.
