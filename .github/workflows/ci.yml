@@ -86,7 +86,7 @@ jobs:
             android/src/main/kotlin/io/github/aswinsubhash/native_feed_player/Messages.g.kt \
             ios/native_feed_player/Sources/native_feed_player/Messages.g.swift
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: coverage
