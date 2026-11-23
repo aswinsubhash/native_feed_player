@@ -112,10 +112,6 @@ final class VideoOutputTexture: NSObject, FlutterTexture {
     notifyFrameAvailable()
   }
 
-  func installFirstPixelCallback(_ callback: @escaping () -> Void) {
-    onFirstPixel = reportedFirstPixel ? nil : callback
-  }
-
   /// Kept internal so the one-shot callback can be verified without requiring
   /// a hardware video decoder in unit tests.
   func notifyFrameAvailable() {
