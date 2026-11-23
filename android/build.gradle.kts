@@ -11,6 +11,7 @@ buildscript {
 
     dependencies {
         classpath("com.android.tools.build:gradle:9.1.0")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.21")
     }
 }
 
@@ -70,7 +71,7 @@ dependencies {
     implementation("androidx.media3:media3-datasource:$media3Version")
     implementation("androidx.media3:media3-database:$media3Version")
 
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.2.10")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.4.21")
     testImplementation("org.mockito:mockito-core:5.23.0")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.13.4")
     // Real-manager lifecycle tests run on the JVM through Robolectric.
