@@ -56,7 +56,6 @@ native_feed_player/
         ├── PlaybackErrorMapper.swift
         ├── VideoOutputTexture.swift        # FlutterTexture output
         ├── RenderViewPool.swift
-        ├── FileHandleCompat.swift
         ├── PrivacyInfo.xcprivacy
         └── Messages.g.swift                # generated
 ```

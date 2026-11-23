@@ -118,7 +118,7 @@ final class CachingResourceLoader: NSObject {
 
     func closeReadHandle() {
       if let readHandle {
-        try? readHandle.closeCompat()
+        try? readHandle.close()
       }
       readHandle = nil
     }
@@ -311,8 +311,8 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
     }
     do {
       let handle = try FileHandle(forReadingFrom: cached.url)
-      defer { try? handle.closeCompat() }
-      try handle.seekCompat(toOffset: UInt64(max(0, dataRequest.currentOffset)))
+      defer { try? handle.close() }
+      try handle.seek(toOffset: UInt64(max(0, dataRequest.currentOffset)))
       // Serve the requested range in bounded chunks on this one request:
       // respond() accumulates until finishLoading(), so chunking bounds the
       // live allocation while still satisfying the full range — finishing
@@ -330,7 +330,7 @@ extension CachingResourceLoader: AVAssetResourceLoaderDelegate {
         guard plan > 0 else {
           break
         }
-        guard let data = try handle.readCompat(upToCount: Int(plan)), !data.isEmpty else {
+        guard let data = try handle.read(upToCount: Int(plan)), !data.isEmpty else {
           break
         }
         guard !request.isCancelled else {
@@ -516,8 +516,8 @@ extension CachingResourceLoader {
       return nil
     }
     do {
-      try handle.seekCompat(toOffset: UInt64(max(0, offset)))
-      return try handle.readCompat(upToCount: length)
+      try handle.seek(toOffset: UInt64(max(0, offset)))
+      return try handle.read(upToCount: length)
     } catch {
       download.closeReadHandle()
       return nil
@@ -533,7 +533,7 @@ extension CachingResourceLoader {
     if cancelTask {
       download.task?.cancel()
     }
-    try? download.handle.closeCompat()
+    try? download.handle.close()
     servePending(download)
     download.closeReadHandle()
     // Defensive: every non-cancelled pending request must reach a terminal state.
@@ -598,8 +598,8 @@ extension CachingResourceLoader: URLSessionDataDelegate {
         return
       }
       do {
-        try download.handle.seekToEndCompat()
-        try download.handle.writeCompat(contentsOf: data)
+        _ = try download.handle.seekToEnd()
+        try download.handle.write(contentsOf: data)
         download.bytesWritten += Int64(data.count)
         self.servePending(download)
       } catch {
@@ -616,7 +616,7 @@ extension CachingResourceLoader: URLSessionDataDelegate {
       }
       download.finished = true
       download.failure = download.failure ?? error
-      try? download.handle.closeCompat()
+      try? download.handle.close()
 
       let complete = download.failure == nil
         && download.receivedSuccessfulResponse
