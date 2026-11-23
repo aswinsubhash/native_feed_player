@@ -1,7 +1,7 @@
 group = "io.github.aswinsubhash.native_feed_player"
 version = "1.0-SNAPSHOT"
 
-val media3Version = "1.11.0"
+val media3Version = "1.11.1"
 
 buildscript {
     repositories {
