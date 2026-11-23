@@ -10,7 +10,14 @@ buildscript {
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:9.1.0")
+        classpath("com.android.tools.build:gradle:9.5.2")
+        constraints {
+            add("classpath", "org.apache.commons:commons-lang3:3.22.0")
+            add("classpath", "org.bitbucket.b_c:jose4j:0.9.7")
+            add("classpath", "org.bouncycastle:bcpkix-jdk18on:1.87")
+            add("classpath", "org.bouncycastle:bcprov-jdk18on:1.87")
+            add("classpath", "org.jdom:jdom2:2.0.6.1")
+        }
     }
 }
 
